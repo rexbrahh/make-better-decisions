@@ -16,10 +16,10 @@ _SECRETS = (
     re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"),
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
     re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S),
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?!-----BEGIN )[\s\S])*?-----END [A-Z ]*PRIVATE KEY-----"),
 )
 _ASSIGNMENT = re.compile(
-    r"(?i)\b([A-Z0-9_]*(?:API_KEY|SECRET|TOKEN|PASSWORD|PASSWD)[A-Z0-9_]*)(\s*[=:]\s*)(['\"]?)[^\s'\"]{8,}")
+    r"(?i)\b([A-Z0-9_]*(?:API_KEY|SECRET|TOKEN|PASSWORD|PASSWD)[A-Z0-9_]*)(['\"]?\s*[=:]\s*)(['\"]?)[^\s'\"]{8,}")
 
 
 def redact(text: str, secrets: tuple[str, ...] = ()) -> str:
@@ -29,6 +29,17 @@ def redact(text: str, secrets: tuple[str, ...] = ()) -> str:
     for pattern in _SECRETS:
         text = pattern.sub(REDACTED, text)
     return _ASSIGNMENT.sub(lambda m: f"{m[1]}{m[2]}{m[3]}{REDACTED}", text)
+
+
+def scrub(value, secrets: tuple[str, ...] = ()):
+    """`redact` applied to every string in a JSON-shaped value."""
+    if isinstance(value, str):
+        return redact(value, secrets)
+    if isinstance(value, list):
+        return [scrub(v, secrets) for v in value]
+    if isinstance(value, dict):
+        return {k: scrub(v, secrets) for k, v in value.items()}
+    return value
 
 
 def clip(text: str, limit: int = CLIP_CHARS) -> str:

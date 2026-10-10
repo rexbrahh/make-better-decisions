@@ -25,6 +25,7 @@ RETAIN_DAYS = 14
 
 SHELL_TOOLS = frozenset({"Bash", "exec_command", "shell", "local_shell"})
 EDIT_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch"})
+READ_TOOLS = frozenset({"Read", "Grep", "Glob"})
 
 POLICY = (
     "The user decides product behaviour and anything destructive, irreversible, "

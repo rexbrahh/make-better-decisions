@@ -25,7 +25,7 @@ class RegistrationTest(StateTestCase):
         registered = commands("hooks/hooks.json")
         self.assertEqual(set(registered), {"PreToolUse", "Stop", "SubagentStop", "SessionStart"})
         matcher = json.loads((ROOT / "hooks/hooks.json").read_text())["hooks"]["PreToolUse"][0]["matcher"]
-        for tool in ("Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "AskUserQuestion", "ExitPlanMode"):
+        for tool in ("Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "Read", "Grep", "Glob", "AskUserQuestion", "ExitPlanMode"):
             self.assertIn(tool, matcher.split("|"))
         for event, cmds in registered.items():
             for command in cmds:

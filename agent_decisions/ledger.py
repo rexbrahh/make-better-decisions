@@ -23,7 +23,7 @@ def _session_file(session_id: str) -> Path:
 def append(entry: dict) -> None:
     path = _session_file(entry["session_id"])
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    data = (json.dumps(entry, sort_keys=True, ensure_ascii=False) + "\n").encode()
+    data = (json.dumps(entry, sort_keys=True) + "\n").encode()
     fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)  # parallel subagents share one session file
@@ -58,7 +58,7 @@ def write_verdict(tool_use_id: str, text: str) -> Path:
     path = state_dir() / "verdicts" / verdict_name(tool_use_id)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     temporary = path.with_suffix(".tmp")
-    temporary.write_text(text, encoding="utf-8")
+    temporary.write_text(text, encoding="utf-8", errors="backslashreplace")
     os.replace(temporary, path)
     return path
 

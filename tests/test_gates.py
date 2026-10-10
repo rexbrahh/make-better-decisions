@@ -102,7 +102,7 @@ class PlanGateTest(StateTestCase):
 
     def test_allows_after_a_backed_ts_decide(self):
         calls = (ToolCall("toolu_d", "Bash", '{"command": "ts-decide \'{}\'"}'),)
-        ctx = make_ctx(Transcript(("plan it",), calls, calls), entries=[{"gate": "decide", "tool_use_id": "toolu_d"}])
+        ctx = make_ctx(Transcript(("plan it",), calls, calls), entries=[{"gate": "decide", "tool_use_id": "toolu_d", "action": "advisory"}])
         self.assertEqual(gates.plan_gate(ctx).action, "allow")
 
     def test_a_forged_ledger_line_does_not_count(self):

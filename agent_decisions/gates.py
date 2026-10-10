@@ -60,13 +60,16 @@ def _owner_question(subject: str) -> dict:
                 "that the user's words and the evidence do not settle."}}
 
 
+_CONSULTED = frozenset({"binding", "advisory", "ask_user", "unverified"})  # refused and gather_evidence call again
+
+
 def consulted(ctx: Context) -> list[dict]:
     """Decide entries backed by a ts-decide call in this turn. A forged ledger line has no such call."""
     calls = {c.id: c for c in ctx.transcript.turn_calls if is_decide(c)}
     backed = []
     for entry in ctx.entries:
         call = calls.get(entry.get("tool_use_id"))
-        if entry.get("gate") == "decide" and call is not None and (
+        if entry.get("gate") == "decide" and entry.get("action") in _CONSULTED and call is not None and (
                 "ts-decide" in call.input or ledger.verdict_name(call.id) in call.input):
             backed.append(entry)
     return backed
@@ -228,9 +231,10 @@ def classify(command: str) -> tuple[str, str]:
 
 
 def guard(tool_input: dict) -> Outcome | None:
-    text = json.dumps(tool_input, ensure_ascii=False)
-    state = str(state_dir())
-    markers = {state, state.replace(str(Path.home()), "~", 1), ".local/state/agent-decisions"}
+    text = json.dumps(tool_input, ensure_ascii=False).lower()
+    state = str(state_dir()).lower()
+    # ponytail: a substring check; a glob such as ~/.loc*/st*/ag* still evades it
+    markers = {state, state.replace(str(Path.home()).lower(), "~", 1), ".local/state", "agent_decisions_state"}
     if any(marker in text for marker in markers):
         return Outcome("deny", "agent-decisions: tool calls may not read or write the decision ledger or verdict "
                                "files. ts-decide returns its verdict directly.", {"gate": "guard"})
@@ -285,7 +289,8 @@ def stop_gate(final: str, stop_hook_active: bool, ctx: Context, ask: Ask) -> Out
     if stop_hook_active:
         return Outcome("allow")
     turn = ctx.transcript.turn_key
-    if any(e.get("gate") == "stop" and e.get("action") == "block" and e.get("turn") == turn for e in ctx.entries):
+    if any(e.get("gate") == "stop" and e.get("action") == "block" and e.get("turn") == turn
+           and e.get("agent_id") == ctx.agent_id for e in ctx.entries):
         return Outcome("allow")  # one block per turn
     final = final.strip()[:FINAL_MESSAGE_CHARS]
     if not final:

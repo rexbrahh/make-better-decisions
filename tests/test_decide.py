@@ -101,6 +101,6 @@ class ConsultedTest(StateTestCase):
         turn = (ToolCall("toolu_a", "Bash", '{"command": "ts-decide \'{}\'"}'),
                 ToolCall("toolu_b", "Bash", '{"command": "cat /x/verdicts/toolu_b.txt"}'),
                 ToolCall("toolu_c", "Bash", '{"command": "ls"}'))
-        entries = [{"gate": "decide", "tool_use_id": i} for i in ("toolu_a", "toolu_b", "toolu_c", "toolu_forged")]
+        entries = [{"gate": "decide", "tool_use_id": i, "action": "advisory"} for i in ("toolu_a", "toolu_b", "toolu_c", "toolu_forged")]
         ctx = make_ctx(Transcript(("go",), turn, turn), entries=entries)
         self.assertEqual([e["tool_use_id"] for e in gates.consulted(ctx)], ["toolu_a", "toolu_b"])

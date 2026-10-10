@@ -38,11 +38,14 @@ def _pre_tool_use(payload: dict, host: str, post) -> dict | None:
             return _decide(payload, host, tool_input, request, post)
         if kind == "misuse":
             return _deny(gates.MISUSE)
-    if name in policy.SHELL_TOOLS or name in policy.EDIT_TOOLS:
+    if name in policy.SHELL_TOOLS or name in policy.EDIT_TOOLS or name in policy.READ_TOOLS:
         outcome = gates.guard(tool_input)
         if outcome is None:
             return None
-        _append(payload, host, None, outcome)
+        try:
+            _append(payload, host, None, outcome)
+        except OSError:
+            pass  # the denial must not depend on the ledger being writable
         return _deny(outcome.message)
     if host == "claude" and name == "AskUserQuestion":
         return _gate(payload, host, lambda ctx: gates.question_gate(tool_input, ctx, _asker(post)))
@@ -116,25 +119,32 @@ def _load_transcript(payload: dict, host: str) -> transcript.Transcript:
 
 def _context(payload: dict, host: str) -> gates.Context:
     t = _load_transcript(payload, host)
-    try:
-        secrets = (jev.load_key(),)
-    except jev.JevError:
-        secrets = ()
+    secrets = _secrets()
     session = payload.get("session_id") or "unknown"
     return gates.Context(host=host, session_id=session, agent_id=payload.get("agent_id"),
                          tool_use_id=payload["tool_use_id"], transcript=t,
                          evidence=evidence.build(t, secrets), entries=tuple(ledger.entries(session)))
 
 
+def _secrets() -> tuple[str, ...]:
+    try:
+        return (jev.load_key(),)
+    except jev.JevError:
+        return ()
+
+
 def _asker(post):
-    return lambda state, questions: jev.ask(state, questions, key=jev.load_key(), post=post)
+    def ask(state, questions):
+        key = jev.load_key()
+        return jev.ask(evidence.scrub(state, (key,)), questions, key=key, post=post)
+    return ask
 
 
 def _append(payload: dict, host: str, turn: str | None, outcome: gates.Outcome) -> None:
     ledger.append({"time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "host": host,
                    "session_id": payload.get("session_id") or "unknown", "agent_id": payload.get("agent_id"),
                    "tool_use_id": payload["tool_use_id"], "turn": turn, "action": outcome.action,
-                   **outcome.record})
+                   **evidence.scrub(outcome.record, _secrets())})
 
 
 def _deny(reason: str) -> dict:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,9 +42,19 @@ class Transcript:
         return hashlib.sha256(seed).hexdigest()[:16]
 
 
+_DECIDE_COMMAND = re.compile(r"\s*(?:(?:\S*/)?ts-decide(?![\w-])|cat\s+\S*/verdicts/)")
+
+
 def is_decide(call: ToolCall) -> bool:
     """True for a ts-decide call, as written or as rewritten to read its verdict file."""
-    return "ts-decide" in call.input or "/verdicts/" in call.input
+    try:
+        tool_input = json.loads(call.input)
+    except ValueError:
+        tool_input = call.input
+    command = tool_input.get("command", tool_input.get("cmd", "")) if isinstance(tool_input, dict) else tool_input
+    if isinstance(command, list):
+        command = str(command[-1]) if command else ""
+    return isinstance(command, str) and bool(_DECIDE_COMMAND.match(command))
 
 
 def load(path: str | Path, host: str) -> Transcript:
