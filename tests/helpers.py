@@ -116,3 +116,18 @@ class FakeJev:
                 answers[qid] = {"type": "choice", "choice": choice, "confidence": 1.0,
                                 "probabilities": {o: 1.0 if o == choice else 0.0 for o in options}}
         return json.dumps({"model": "jev-1.13.0", "answers": answers, "usage": {}}).encode()
+
+
+def make_ctx(t=None, *, entries=(), agent_id=None, host="claude", tool_use_id="toolu_now"):
+    from agent_decisions import evidence, gates
+    from agent_decisions.transcript import Transcript
+
+    t = t or Transcript(("decide the cache policy",), (), ())
+    return gates.Context(host=host, session_id="s1", agent_id=agent_id, tool_use_id=tool_use_id,
+                         transcript=t, evidence=evidence.build(t), entries=tuple(entries))
+
+
+def asker(fake):
+    from agent_decisions import jev
+
+    return lambda state, questions: jev.ask(state, questions, key="k", post=fake)
