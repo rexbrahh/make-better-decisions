@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import jev, ledger, provenance
-from .policy import BIND_AT, POLICY, REFUSAL_CAP, REFUSE_AT, state_dir
+from .policy import BIND_AT, FINAL_MESSAGE_CHARS, FOLLOW_AT, POLICY, REFUSAL_CAP, REFUSE_AT, STOP_AT, state_dir
 from .transcript import Transcript, is_decide
 
 Ask = Callable[[dict, dict], dict]
@@ -276,3 +276,56 @@ def plan_gate(ctx: Context) -> Outcome:
         return Outcome("allow")  # one denial per turn
     return Outcome("deny", "Plan not submitted: no ts-decide in this turn. Run ts-decide on the plan's main design "
                            "choice, then submit the plan.", {"gate": "plan"})
+
+
+def stop_gate(final: str, stop_hook_active: bool, ctx: Context, ask: Ask) -> Outcome:
+    if stop_hook_active:
+        return Outcome("allow")
+    turn = ctx.transcript.turn_key
+    if any(e.get("gate") == "stop" and e.get("action") == "block" and e.get("turn") == turn for e in ctx.entries):
+        return Outcome("allow")  # one block per turn
+    final = final.strip()[:FINAL_MESSAGE_CHARS]
+    if not final:
+        return Outcome("allow")
+    decided = consulted(ctx)
+    binding = next((e for e in reversed(decided) if e.get("action") == "binding"), None)
+    asked_with_tool = ctx.host == "claude" and any(c.name == "AskUserQuestion" for c in ctx.transcript.turn_calls)
+    state = {"policy": POLICY, "final_message": final, "evidence": ctx.evidence}
+    questions = {
+        "made_choice": _noul("Does `final_message` report that the agent chose between two or more approaches, "
+                             "designs, or root-cause theories?",
+                             "The agent picked one of several approaches, designs, or theories.",
+                             "No such choice, or the agent only carried out an explicit instruction from the user."),
+        "asks_user": _noul("Does `final_message` ask the user to make a decision or answer a question?",
+                           "It asks the user to decide or answer something.", "It asks the user nothing."),
+        "stated": _noul("If `final_message` asks the user something, do the user's messages in `evidence` already "
+                        "state the answer?", "The user's own words already answer it.",
+                        "The user has not answered it, or nothing is asked."),
+        "owner": _owner_question("the question that `final_message` asks the user, if any"),
+    }
+    if binding:
+        state["binding_pick"] = {"decision": binding.get("decision", ""), "pick": binding.get("pick", ""),
+                                 "description": binding.get("state", {}).get("options", {}).get(binding.get("pick"), "")}
+        questions["follows_pick"] = _noul("Does `final_message` act on or recommend `binding_pick.pick` for "
+                                          "`binding_pick.decision`?", "It follows the pick.",
+                                          "It acts on or recommends something else.")
+    try:
+        answers = ask(state, questions)
+    except jev.JevError as error:
+        return Outcome("allow", note=f"agent-decisions: stop check skipped (jev {error.reason})")
+    reasons = []
+    if not decided and answers["made_choice"]["noul"] >= STOP_AT:
+        reasons.append("You chose between approaches without ts-decide. Run ts-decide on that choice, then finish "
+                       "with its verdict.")
+    if not asked_with_tool and answers["asks_user"]["noul"] >= STOP_AT:
+        if answers["stated"]["noul"] >= BIND_AT:
+            reasons.append("Your reply asks the user something their messages already answer. Use their answer, "
+                           "quote it, and continue.")
+        elif answers["owner"]["probabilities"].get("agent", 0.0) >= BIND_AT:
+            reasons.append("Your reply asks the user to decide something that is yours to decide. Decide it "
+                           "(ts-decide for a choice between approaches), state the call, and continue.")
+    if binding and answers["follows_pick"]["noul"] < FOLLOW_AT:
+        reasons.append(f"The binding pick for {binding.get('decision', '')!r} is `{binding.get('pick', '')}`. "
+                       "Your reply does not follow it. Follow it.")
+    return Outcome("block" if reasons else "allow", "\n".join(reasons),
+                   {"gate": "stop", "state": state, "answers": answers})
