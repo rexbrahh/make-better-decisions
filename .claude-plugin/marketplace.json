@@ -1,5 +1,6 @@
 {
-  "name": "agent-decisions-local",
+  "name": "make-better-decisions",
+  "description": "Jev-assisted decisions for Claude Code agents.",
   "owner": {"name": "Rex"},
   "plugins": [{"name": "agent-decisions", "source": "./", "description": "Jev-assisted decisions for Claude Code."}]
 }
