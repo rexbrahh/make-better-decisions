@@ -1,0 +1,5 @@
+{
+  "name": "agent-decisions",
+  "version": "0.1.0",
+  "description": "Jev-assisted ask-versus-decide and approach choices, with hook-owned evidence."
+}

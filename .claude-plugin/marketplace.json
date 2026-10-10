@@ -1,0 +1,5 @@
+{
+  "name": "agent-decisions-local",
+  "owner": {"name": "Rex"},
+  "plugins": [{"name": "agent-decisions", "source": "./", "description": "Jev-assisted decisions for Claude Code."}]
+}

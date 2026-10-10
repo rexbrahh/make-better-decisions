@@ -1,0 +1,11 @@
+{
+  "hooks": {
+    "PreToolUse": [{
+      "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit|AskUserQuestion|ExitPlanMode",
+      "hooks": [{"type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/hook.py\" pre_tool_use --host claude", "timeout": 15}]
+    }],
+    "Stop": [{"hooks": [{"type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/hook.py\" stop --host claude", "timeout": 15}]}],
+    "SubagentStop": [{"hooks": [{"type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/hook.py\" subagent_stop --host claude", "timeout": 15}]}],
+    "SessionStart": [{"hooks": [{"type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/hook.py\" session_start --host claude", "timeout": 10}]}]
+  }
+}
