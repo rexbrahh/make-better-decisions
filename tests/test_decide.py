@@ -47,6 +47,14 @@ class DecideTest(StateTestCase):
                 self.assertEqual(outcome.action, "refused")
                 self.assertIn("refusal 1 of 2", outcome.message)
 
+    def test_user_owned_decision_with_only_none_fit_asks_the_user(self):
+        outcome = run(FakeJev(**{**CONFIDENT, "owner": "user", "pick": "none_fit"}))
+        self.assertEqual(outcome.action, "ask_user")
+
+    def test_user_owned_decision_with_a_missing_option_is_still_refused(self):
+        outcome = run(FakeJev(**{**CONFIDENT, "owner": "user", "missing_option": 0.6}))
+        self.assertEqual(outcome.action, "refused")
+
     def test_third_attempt_is_over_the_refusal_cap(self):
         key = gates.provenance.normalize(REQUEST["decision"])
         prior = [{"gate": "decide", "action": "refused", "decision_key": key}] * policy.REFUSAL_CAP

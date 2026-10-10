@@ -178,9 +178,12 @@ def decide(raw: str, ctx: Context, ask: Ask) -> Outcome:
                                       ("argued", answers["argued"]["noul"] >= REFUSE_AT),
                                       ("none_fit", pick == NONE_FIT)) if hit]
     over_cap = refusals >= REFUSAL_CAP
+    user_owned = answers["owner"]["probabilities"].get("user", 0.0) >= BIND_AT
+    if user_owned and reasons == ["none_fit"]:
+        reasons = []  # the user chooses; an option the agent left out is theirs to name
     if reasons and not over_cap:
         action = "refused"
-    elif answers["owner"]["probabilities"].get("user", 0.0) >= BIND_AT:
+    elif user_owned:
         action = "ask_user"
     elif answers["sufficient"]["noul"] < BIND_AT or pick == NONE_FIT:
         action = "gather_evidence"
