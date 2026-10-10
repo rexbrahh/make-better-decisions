@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
+import shlex
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 from . import jev, ledger, provenance
-from .policy import BIND_AT, POLICY, REFUSAL_CAP, REFUSE_AT
+from .policy import BIND_AT, POLICY, REFUSAL_CAP, REFUSE_AT, state_dir
 from .transcript import Transcript, is_decide
 
 Ask = Callable[[dict, dict], dict]
@@ -186,3 +190,89 @@ def decide(raw: str, ctx: Context, ask: Ask) -> Outcome:
         action = "advisory"
     message = _verdict(action, decision, answers, unverified, reasons, refusals, over_cap)
     return Outcome(action, message, {**record, "answers": answers, "pick": pick})
+
+
+MISUSE = ("ts-decide must be the whole command, not part of a pipeline, a compound command, or a redirect.\n"
+          + USAGE)
+_HEREDOC = re.compile(r"\s*(?:\S*/)?ts-decide\s*<<-?\s*(['\"]?)(\w+)\1[ \t]*\n(.*?)\n[ \t]*\2\s*", re.S)
+_PUNCTUATION = set("();<>|&")
+
+
+def command_of(tool_input: dict) -> str:
+    command = tool_input.get("command", tool_input.get("cmd", ""))
+    if isinstance(command, list):
+        argv = [str(a) for a in command]
+        return argv[2] if len(argv) == 3 and argv[1] in ("-c", "-lc") else shlex.join(argv)
+    return command if isinstance(command, str) else ""
+
+
+def classify(command: str) -> tuple[str, str]:
+    heredoc = _HEREDOC.fullmatch(command)
+    if heredoc:
+        return "decide", heredoc[3]
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:  # unbalanced quotes
+        return ("misuse", "") if "ts-decide" in command else ("other", "")
+    starts = [i for i in range(len(tokens)) if i == 0 or set(tokens[i - 1]) <= _PUNCTUATION]
+    if not any(os.path.basename(tokens[i]) == "ts-decide" for i in starts):
+        return "other", ""
+    if len(tokens) == 2 and os.path.basename(tokens[0]) == "ts-decide":
+        return "decide", tokens[1]
+    return "misuse", ""
+
+
+def guard(tool_input: dict) -> Outcome | None:
+    text = json.dumps(tool_input, ensure_ascii=False)
+    state = str(state_dir())
+    markers = {state, state.replace(str(Path.home()), "~", 1), ".local/state/agent-decisions"}
+    if any(marker in text for marker in markers):
+        return Outcome("deny", "agent-decisions: tool calls may not read or write the decision ledger or verdict "
+                               "files. ts-decide returns its verdict directly.", {"gate": "guard"})
+    return None
+
+
+def question_gate(tool_input: dict, ctx: Context, ask: Ask) -> Outcome:
+    asked = [{"question": str(q.get("question", "")),
+              "options": [str(o.get("label", "")) for o in q.get("options") or [] if isinstance(o, dict)]}
+             for q in tool_input.get("questions") or [] if isinstance(q, dict)]
+    if not asked:
+        return Outcome("allow")
+    key = hashlib.sha256(json.dumps([a["question"] for a in asked]).encode()).hexdigest()[:16]
+    if any(e.get("gate") == "question" and e.get("action") == "deny" and e.get("question_key") == key
+           for e in ctx.entries):
+        return Outcome("allow")  # one denial per question set
+    state = {"policy": POLICY, "questions": asked, "evidence": ctx.evidence}
+    questions = {}
+    for i in range(len(asked)):
+        questions[f"stated_{i}"] = _noul(
+            f"Do the user's messages in `evidence` already state the answer to `questions[{i}].question`?",
+            "The user's own words already give the answer.", "The user has not answered this.")
+        questions[f"owner_{i}"] = _owner_question(f"`questions[{i}].question`")
+    try:
+        answers = ask(state, questions)
+    except jev.JevError as error:
+        return Outcome("allow", note=f"agent-decisions: question gate skipped (jev {error.reason})")
+    problems = []
+    for i, item in enumerate(asked):
+        if answers[f"stated_{i}"]["noul"] >= BIND_AT:
+            problems.append(f"- {item['question']!r}: the user's messages already answer this. Use their answer "
+                            "and quote it.")
+        elif answers[f"owner_{i}"]["probabilities"].get("agent", 0.0) >= BIND_AT:
+            problems.append(f"- {item['question']!r}: this is your call under the policy. Decide it (ts-decide "
+                            "for a choice between approaches) and state the call.")
+    action = "deny" if problems else "allow"
+    message = "Question not sent.\n" + "\n".join(problems) if problems else ""
+    return Outcome(action, message, {"gate": "question", "question_key": key, "state": state, "answers": answers})
+
+
+def plan_gate(ctx: Context) -> Outcome:
+    if consulted(ctx):
+        return Outcome("allow")
+    turn = ctx.transcript.turn_key
+    if any(e.get("gate") == "plan" and e.get("turn") == turn for e in ctx.entries):
+        return Outcome("allow")  # one denial per turn
+    return Outcome("deny", "Plan not submitted: no ts-decide in this turn. Run ts-decide on the plan's main design "
+                           "choice, then submit the plan.", {"gate": "plan"})
