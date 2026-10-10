@@ -1,0 +1,6 @@
+{
+  "hooks": {
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "python3 -B \"$HOME/agent-decisions/probe/dump_hook.py\" pre_tool_use"}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "python3 -B \"$HOME/agent-decisions/probe/dump_hook.py\" stop"}]}]
+  }
+}

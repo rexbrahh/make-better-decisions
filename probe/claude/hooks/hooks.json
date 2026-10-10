@@ -1,0 +1,8 @@
+{
+  "hooks": {
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/../dump_hook.py\" pre_tool_use"}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/../dump_hook.py\" stop"}]}],
+    "SubagentStop": [{"hooks": [{"type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/../dump_hook.py\" subagent_stop"}]}],
+    "SessionStart": [{"hooks": [{"type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/../dump_hook.py\" session_start"}]}]
+  }
+}
