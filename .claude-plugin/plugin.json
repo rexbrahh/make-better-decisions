@@ -1,7 +1,7 @@
 {
   "name": "agent-decisions",
-  "version": "0.1.0",
-  "description": "Jev-assisted ask-versus-decide and approach choices, with hook-owned evidence.",
+  "version": "1.0.0",
+  "description": "Jev-assisted decisions and edit checks with hook-owned transcript evidence.",
   "author": {"name": "Rex"},
   "repository": "https://github.com/rexbrahh/make-better-decisions"
 }

@@ -4,6 +4,7 @@ import io
 import json
 import os
 import socket
+import time
 import urllib.error
 from unittest import mock
 
@@ -17,6 +18,24 @@ QUESTIONS = {
 
 
 class AskTest(StateTestCase):
+    def test_numeric_fields_and_choice_distribution_are_validated(self):
+        good = json.loads(FakeJev()(json.dumps({"questions": QUESTIONS}).encode(), "k", 1))
+        cases = [
+            ("ok", {"type": "noul", "noul": value}) for value in ("0.9", True, None, float("nan"))
+        ]
+        base = good["answers"]["pick"]
+        cases += [("pick", {**base, "probabilities": value}) for value in (
+            {"a": "0.9", "b": 0.1}, {"a": True, "b": 0.0}, {"a": 1.0},
+            {"a": 1.0, "b": -0.1}, {"a": 0.8, "b": 0.8}, {"a": 0.1, "b": 0.9},
+        )]
+        cases += [("pick", {**base, "confidence": value}) for value in ("0.9", True, 2.0)]
+        for qid, answer in cases:
+            with self.subTest(answer=answer):
+                raw = json.dumps({"answers": {**good["answers"], qid: answer}}).encode()
+                with self.assertRaises(jev.JevError) as caught:
+                    jev.ask({}, QUESTIONS, key="k", post=FakeJev(raw=raw))
+                self.assertEqual(caught.exception.reason, "malformed")
+
     def test_sends_model_state_questions_and_returns_answers(self):
         fake = FakeJev(ok=0.9, pick="b")
         answers = jev.ask({"x": 1}, QUESTIONS, key="k", post=fake)
@@ -55,6 +74,18 @@ class KeyTest(StateTestCase):
 
 
 class PostTest(StateTestCase):
+    def test_deadline_includes_reading_the_response_body(self):
+        class SlowResponse(io.BytesIO):
+            def read(self):
+                time.sleep(0.25)
+                return b'{}'
+
+        start = time.monotonic()
+        with mock.patch("urllib.request.urlopen", return_value=SlowResponse()), self.assertRaises(jev.JevError) as caught:
+            jev.post(b'{}', "k", 0.05)
+        self.assertEqual(caught.exception.reason, "timeout")
+        self.assertLess(time.monotonic() - start, 0.2)
+
     def _raises(self, error):
         with mock.patch("urllib.request.urlopen", side_effect=error), self.assertRaises(jev.JevError) as caught:
             jev.post(b"{}", "k", 1.0)

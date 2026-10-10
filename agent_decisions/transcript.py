@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -42,9 +42,6 @@ class Transcript:
         return hashlib.sha256(seed).hexdigest()[:16]
 
 
-_DECIDE_COMMAND = re.compile(r"\s*(?:(?:\S*/)?ts-decide(?![\w-])|cat\s+\S*/verdicts/)")
-
-
 def is_decide(call: ToolCall) -> bool:
     """True for a ts-decide call, as written or as rewritten to read its verdict file."""
     try:
@@ -53,8 +50,15 @@ def is_decide(call: ToolCall) -> bool:
         tool_input = call.input
     command = tool_input.get("command", tool_input.get("cmd", "")) if isinstance(tool_input, dict) else tool_input
     if isinstance(command, list):
-        command = str(command[-1]) if command else ""
-    return isinstance(command, str) and bool(_DECIDE_COMMAND.match(command))
+        command = command[2] if len(command) == 3 and command[1] in ("-c", "-lc") else shlex.join(command)
+    if not isinstance(command, str):
+        return False
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    return bool(tokens) and (Path(tokens[0]).name == "ts-decide" or
+                             len(tokens) == 2 and tokens[0] == "cat" and Path(tokens[1]).parent.name == "verdicts")
 
 
 def load(path: str | Path, host: str) -> Transcript:
@@ -68,7 +72,10 @@ def load(path: str | Path, host: str) -> Transcript:
                 continue  # a line still being written, or a damaged one
             if isinstance(record, dict):
                 records.append(record)
-    return parse(records)
+    parsed = parse(records)
+    if not parsed.user_messages and not parsed.tool_calls and parsed.brief is None:
+        raise OSError("no usable transcript records")
+    return parsed
 
 
 def _text(content) -> str:
@@ -85,6 +92,7 @@ class _Builder:
     def __init__(self):
         self.users: list[str] = []
         self.calls: list[tuple[str, str, str]] = []
+        self.call_ids: set[str] = set()
         self.outputs: dict[str, str] = {}
         self.turn_start = 0
         self.last_text = ""
@@ -100,6 +108,9 @@ class _Builder:
         self.turn_start = len(self.calls)
 
     def call(self, call_id: str, name: str, tool_input) -> None:
+        if call_id in self.call_ids:
+            return  # classic response items and completed events can describe the same call
+        self.call_ids.add(call_id)
         if not isinstance(tool_input, str):
             tool_input = json.dumps(tool_input, sort_keys=True, ensure_ascii=False)
         self.calls.append((call_id, name, tool_input))
@@ -146,6 +157,22 @@ def _claude(records: list[dict]) -> Transcript:
 def _codex(records: list[dict]) -> Transcript:
     b = _Builder()
     for r in records:
+        if r.get("type") == "event_msg":
+            p = r.get("payload") or {}
+            item = p.get("item") or {}
+            if p.get("type") != "item_completed":
+                continue
+            call_id = item.get("id", "")
+            if item.get("type") == "CommandExecution":
+                b.call(call_id, "Bash", {"command": item.get("command", [])})
+                b.output(call_id, item.get("aggregated_output", ""))
+            elif item.get("type") == "McpToolCall":
+                b.call(call_id, f"mcp__{item.get('server', '')}__{item.get('tool', '')}", item.get("arguments"))
+                b.output(call_id, item.get("result"))
+            elif item.get("type") == "FileChange":
+                b.call(call_id, "apply_patch", item.get("changes"))
+                b.output(call_id, f"{item.get('stdout', '')}\n{item.get('stderr', '')}")
+            continue
         if r.get("type") != "response_item":
             continue
         p = r.get("payload") or {}
@@ -159,7 +186,8 @@ def _codex(records: list[dict]) -> Transcript:
         elif kind == "function_call":
             b.call(p.get("call_id", ""), p.get("name", ""), p.get("arguments", ""))
         elif kind == "custom_tool_call":
-            b.call(p.get("call_id", ""), p.get("name", ""), p.get("input", ""))
+            if p.get("name") != "exec":
+                b.call(p.get("call_id", ""), p.get("name", ""), p.get("input", ""))
         elif kind in ("function_call_output", "custom_tool_call_output"):
             b.output(p.get("call_id", ""), p.get("output", ""))
     return b.build()

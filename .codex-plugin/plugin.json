@@ -1,0 +1,9 @@
+{
+  "name": "agent-decisions",
+  "version": "1.0.0",
+  "description": "Jev-assisted decisions and edit checks with hook-owned transcript evidence.",
+  "author": {"name": "Rex"},
+  "repository": "https://github.com/rexbrahh/make-better-decisions",
+  "skills": "./skills/",
+  "hooks": "./codex/hooks.json"
+}

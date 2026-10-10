@@ -11,8 +11,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from . import jev, ledger, provenance
-from .policy import BIND_AT, FINAL_MESSAGE_CHARS, FOLLOW_AT, POLICY, REFUSAL_CAP, REFUSE_AT, STOP_AT, state_dir
+from . import evidence, jev, ledger, provenance
+from .policy import (
+    BIND_AT, CLIP_CHARS, FINAL_MESSAGE_CHARS, FOLLOW_AT, POLICY, QUESTION_TOOLS,
+    REFUSAL_CAP, REFUSE_AT, SHELL_TOOLS, STOP_AT, state_dir)
 from .transcript import Transcript, is_decide
 
 Ask = Callable[[dict, dict], dict]
@@ -61,15 +63,23 @@ def _owner_question(subject: str) -> dict:
 
 
 _CONSULTED = frozenset({"binding", "advisory", "ask_user", "unverified"})  # refused and gather_evidence call again
+_HEADINGS = {"binding": "BINDING", "advisory": "ADVISORY", "gather_evidence": "GATHER EVIDENCE",
+             "ask_user": "ASK USER", "refused": "REFUSED"}
 
 
 def consulted(ctx: Context) -> list[dict]:
-    """Decide entries backed by a ts-decide call in this turn. A forged ledger line has no such call."""
+    """Decide entries backed by this agent's completed verdict output in the current turn."""
     calls = {c.id: c for c in ctx.transcript.turn_calls if is_decide(c)}
     backed = []
     for entry in ctx.entries:
         call = calls.get(entry.get("tool_use_id"))
-        if entry.get("gate") == "decide" and entry.get("action") in _CONSULTED and call is not None and (
+        action = entry.get("action")
+        if entry.get("agent_id") != ctx.agent_id or entry.get("gate") != "decide" \
+                or action not in _CONSULTED or call is None:
+            continue
+        expected = "ts-decide: decision unverified (" if action == "unverified" \
+            else f"ts-decide verdict: {_HEADINGS[action]}"
+        if expected in call.output and (
                 "ts-decide" in call.input or ledger.verdict_name(call.id) in call.input):
             backed.append(entry)
     return backed
@@ -125,8 +135,6 @@ def _decide_questions(options: dict[str, str]) -> dict:
     }
 
 
-_HEADINGS = {"binding": "BINDING", "advisory": "ADVISORY", "gather_evidence": "GATHER EVIDENCE",
-             "ask_user": "ASK USER", "refused": "REFUSED"}
 _NEXT = {
     "binding": "Follow pick `{pick}`. It is binding for this subagent.",
     "advisory": "Take pick `{pick}`, or override it and state in your reply the evidence that outweighs it.",
@@ -213,7 +221,7 @@ def command_of(tool_input: dict) -> str:
 
 
 def classify(command: str) -> tuple[str, str]:
-    heredoc = _HEREDOC.fullmatch(command)
+    heredoc = _HEREDOC.fullmatch(command.replace("\r\n", "\n"))
     if heredoc:
         return "decide", heredoc[3]
     try:
@@ -241,9 +249,54 @@ def guard(tool_input: dict) -> Outcome | None:
     return None
 
 
+def edit_gate(name: str, tool_input: dict, ctx: Context, ask: Ask) -> Outcome:
+    """Jev judges each edit, including shell writes, against this agent's completed decisions."""
+    decisions = [{"decision": e.get("decision", ""), "pick": e.get("pick", ""),
+                  "options": e.get("state", {}).get("options", {}), "action": e["action"]}
+                 for e in consulted(ctx) if e["action"] in ("advisory", "binding")]
+    serialized = json.dumps(tool_input, ensure_ascii=False)
+    state = {"policy": POLICY, "pending_tool": name,
+             "pending_input": tool_input if len(serialized) <= CLIP_CHARS else evidence.clip(serialized),
+             "decisions": decisions, "evidence": ctx.evidence}
+    questions = {
+        "needs_decision": _noul(
+            "If `pending_input` changes files, does it implement an engineering, design, or product choice "
+            "that the user has not specified exactly? Judge the actual change against the user's words in "
+            "`evidence`. A general request to fix or build something does not specify its implementation.",
+            "The change selects an implementation, approach, design, or product behaviour.",
+            "It only applies an exact user instruction or a routine operation such as running tests."),
+        "covered": _noul(
+            "Does the implementation choice in `pending_input` match an approach selected in `decisions`? "
+            "The hook has verified that these are completed Jev verdicts. Match the approach by meaning, "
+            "not exact source syntax or file paths. One decision can cover several edits implementing its "
+            "approach. Do not judge whether the code is correct or fully tested. A documented evidence-based "
+            "override of an advisory pick is also covered. An unrelated decision or an empty list is not.",
+            "The change implements an approach selected in a completed decision, or an evidence-based advisory override.",
+            "The change selects a different approach, or no completed decision addresses that approach."),
+    }
+    if name in SHELL_TOOLS:
+        questions["writes_files"] = _noul(
+            "Does the shell command in `pending_input` create, edit, delete, or replace file contents? "
+            "Include redirects, heredocs, scripts, patch commands, and indirect writes.",
+            "The command changes file contents.", "The command only reads data or prints output.")
+    record = {"gate": "edit", "state": state}
+    try:
+        answers = ask(state, questions)
+    except jev.JevError as error:
+        return Outcome("allow", record={**record, "error": error.reason},
+                       note=f"agent-decisions: edit check skipped (jev {error.reason}); action allowed")
+    writes = name not in SHELL_TOOLS or answers["writes_files"]["noul"] >= STOP_AT
+    covered = bool(decisions) and answers["covered"]["noul"] >= BIND_AT
+    deny = writes and answers["needs_decision"]["noul"] >= STOP_AT and not covered
+    message = ("Edit not run: this change requires a Jev decision. Run ts-decide on the choice with neutral "
+               "options and transcript facts. Read the verdict before retrying this edit.") if deny else ""
+    return Outcome("deny" if deny else "allow", message, {**record, "answers": answers})
+
+
 def question_gate(tool_input: dict, ctx: Context, ask: Ask) -> Outcome:
-    asked = [{"question": str(q.get("question", "")),
-              "options": [str(o.get("label", "")) for o in q.get("options") or [] if isinstance(o, dict)]}
+    asked = [{"question": str(q.get("question") or q.get("title") or ""),
+              "options": [str(o.get("label", "")) if isinstance(o, dict) else o
+                          for o in q.get("options") or [] if isinstance(o, (dict, str))]}
              for q in tool_input.get("questions") or [] if isinstance(q, dict)]
     if not asked:
         return Outcome("allow")
@@ -297,7 +350,7 @@ def stop_gate(final: str, stop_hook_active: bool, ctx: Context, ask: Ask) -> Out
         return Outcome("allow")
     decided = consulted(ctx)
     binding = next((e for e in reversed(decided) if e.get("action") == "binding"), None)
-    asked_with_tool = ctx.host == "claude" and any(c.name == "AskUserQuestion" for c in ctx.transcript.turn_calls)
+    asked_with_tool = any(c.name in QUESTION_TOOLS for c in ctx.transcript.turn_calls)
     state = {"policy": POLICY, "final_message": final, "evidence": ctx.evidence}
     questions = {
         "made_choice": _noul("Does `final_message` report that the agent chose between two or more approaches, "

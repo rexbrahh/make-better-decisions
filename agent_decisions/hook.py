@@ -19,7 +19,13 @@ def handle(event: str, payload: dict, host: str, *, post=jev.post) -> dict | Non
     payload = {**payload, "tool_use_id": payload.get("tool_use_id") or f"local-{uuid.uuid4().hex}"}
     if event == "session_start":
         ledger.prune()
-        return None
+        root = Path(__file__).resolve().parent.parent
+        return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext":
+            "Use the deciding skill before choosing an approach or asking the user to decide. "
+            "Jev checks each edit and shell write before execution. "
+            f"Run {shlex.quote(str(root / 'bin' / 'ts-decide'))} as a separate shell call. "
+            f"Read {root / 'skills' / 'deciding' / 'SKILL.md'} for the request format. "
+            "Read the verdict before executing a dependent call."}}
     if event == "pre_tool_use":
         return _pre_tool_use(payload, host, post)
     if event in ("stop", "subagent_stop"):
@@ -40,14 +46,15 @@ def _pre_tool_use(payload: dict, host: str, post) -> dict | None:
             return _deny(gates.MISUSE)
     if name in policy.SHELL_TOOLS or name in policy.EDIT_TOOLS or name in policy.READ_TOOLS:
         outcome = gates.guard(tool_input)
-        if outcome is None:
-            return None
-        try:
-            _append(payload, host, None, outcome)
-        except OSError:
-            pass  # the denial must not depend on the ledger being writable
-        return _deny(outcome.message)
-    if host == "claude" and name == "AskUserQuestion":
+        if outcome is not None:
+            try:
+                _append(payload, host, None, outcome)
+            except OSError:
+                pass  # the denial must not depend on the ledger being writable
+            return _deny(outcome.message)
+    if name in policy.SHELL_TOOLS or name in policy.EDIT_TOOLS:
+        return _gate(payload, host, lambda ctx: gates.edit_gate(name, tool_input, ctx, _asker(post)))
+    if name in policy.QUESTION_TOOLS:
         return _gate(payload, host, lambda ctx: gates.question_gate(tool_input, ctx, _asker(post)))
     if host == "claude" and name == "ExitPlanMode":
         return _gate(payload, host, gates.plan_gate)
@@ -67,13 +74,18 @@ def _decide(payload: dict, host: str, tool_input: dict, request: str, post) -> d
         outcome = gates.decide(request, ctx, _asker(post))
     if outcome.record is not None:
         _append(payload, host, turn, outcome)
-    if host == "codex" or outcome.action == "invalid":
+    outcome = replace(outcome, message=evidence.redact(outcome.message, _secrets()))
+    if outcome.action == "invalid":
         return _deny(outcome.message)
     path = ledger.write_verdict(payload["tool_use_id"], outcome.message)
+    updated = dict(tool_input)
+    for key in ("command", "cmd"):
+        if key in updated:
+            updated[key] = f"cat {shlex.quote(str(path))}"
     return {"hookSpecificOutput": {
         "hookEventName": "PreToolUse", "permissionDecision": "allow",
         "permissionDecisionReason": "ts-decide verdict",
-        "updatedInput": {**tool_input, "command": f"cat {shlex.quote(str(path))}"}}}
+        "updatedInput": updated}}
 
 
 def _gate(payload: dict, host: str, run) -> dict | None:
@@ -136,7 +148,7 @@ def _secrets() -> tuple[str, ...]:
 def _asker(post):
     def ask(state, questions):
         key = jev.load_key()
-        return jev.ask(evidence.scrub(state, (key,)), questions, key=key, post=post)
+        return jev.ask(evidence.scrub(state, (key,)), evidence.scrub(questions, (key,)), key=key, post=post)
     return ask
 
 

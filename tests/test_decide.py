@@ -98,8 +98,8 @@ class DecideTest(StateTestCase):
 
 class ConsultedTest(StateTestCase):
     def test_only_ledger_entries_backed_by_a_ts_decide_call_this_turn_count(self):
-        turn = (ToolCall("toolu_a", "Bash", '{"command": "ts-decide \'{}\'"}'),
-                ToolCall("toolu_b", "Bash", '{"command": "cat /x/verdicts/toolu_b.txt"}'),
+        turn = (ToolCall("toolu_a", "Bash", '{"command": "ts-decide \'{}\'"}', "ts-decide verdict: ADVISORY"),
+                ToolCall("toolu_b", "Bash", '{"command": "cat /x/verdicts/toolu_b.txt"}', "ts-decide verdict: ADVISORY"),
                 ToolCall("toolu_c", "Bash", '{"command": "ls"}'))
         entries = [{"gate": "decide", "tool_use_id": i, "action": "advisory"} for i in ("toolu_a", "toolu_b", "toolu_c", "toolu_forged")]
         ctx = make_ctx(Transcript(("go",), turn, turn), entries=entries)

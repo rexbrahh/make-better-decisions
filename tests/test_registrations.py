@@ -17,7 +17,7 @@ def commands(path):
 
 class RegistrationTest(StateTestCase):
     def run_registered(self, command):
-        command = command.replace("${CLAUDE_PLUGIN_ROOT}", str(ROOT)).replace("$HOME/agent-decisions", str(ROOT))
+        command = command.replace("${CLAUDE_PLUGIN_ROOT}", str(ROOT)).replace("${PLUGIN_ROOT}", str(ROOT))
         return subprocess.run(["sh", "-c", command], input="{}", capture_output=True, text=True, timeout=30,
                               env={**os.environ, "AGENT_DECISIONS_OFF": "1"})
 
@@ -35,7 +35,7 @@ class RegistrationTest(StateTestCase):
 
     def test_codex_registrations_run(self):
         registered = commands("codex/hooks.json")
-        self.assertEqual(set(registered), {"PreToolUse", "Stop"})
+        self.assertEqual(set(registered), {"PreToolUse", "Stop", "SubagentStop", "SessionStart"})
         for command in (c for cmds in registered.values() for c in cmds):
             with self.subTest(command=command):
                 self.assertIn("--host codex", command)
@@ -47,3 +47,12 @@ class RegistrationTest(StateTestCase):
         self.assertEqual(plugin["name"], "agent-decisions")
         self.assertEqual(market["plugins"][0]["name"], "agent-decisions")
         self.assertTrue((ROOT / "skills/deciding/SKILL.md").read_text().startswith("---\nname: deciding\n"))
+
+    def test_codex_manifest_selects_only_codex_hooks(self):
+        plugin = json.loads((ROOT / ".codex-plugin/plugin.json").read_text())
+        self.assertEqual(plugin["name"], "agent-decisions")
+        self.assertEqual(plugin["hooks"], "./codex/hooks.json")
+        self.assertEqual(plugin["version"], json.loads((ROOT / ".claude-plugin/plugin.json").read_text())["version"])
+        for cmds in commands(plugin["hooks"]).values():
+            for command in cmds:
+                self.assertIn("${PLUGIN_ROOT}", command)

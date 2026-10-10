@@ -1,5 +1,10 @@
 # agent-decisions Implementation Plan
 
+Historical implementation recipe, approved on 2026-10-10. The unchecked steps
+below describe the original sequence. They do not report current completion.
+The same session later approved judging each edit with Jev and classifying
+shell writes. See `docs/spec.md`, `docs/probes.md`, and `README.md` for v1.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Hooks and a skill that make Claude Code (main agent and subagents) and Codex (CLI and desktop) consult TypeSafe's Jev model for ask-versus-decide and approach choices, with evidence the agent cannot forge.

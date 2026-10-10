@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from agent_decisions import hook, jev, ledger, policy
-from tests.helpers import FakeJev, StateTestCase, human, tool_result, tool_use, write_jsonl
+from tests.helpers import FakeJev, StateTestCase, codex_user, human, tool_result, tool_use, write_jsonl
 
 ROOT = Path(__file__).resolve().parent.parent
 REQUEST = {"decision": "Which cache?", "options": [{"id": "lru", "description": "LRU"},
@@ -43,12 +43,16 @@ class HookTest(StateTestCase):
         self.assertEqual(entry["host"], "claude")
         self.assertIsNotNone(entry["turn"])
 
-    def test_codex_ts_decide_returns_the_verdict_as_the_deny_reason(self):
+    def test_codex_ts_decide_is_rewritten_to_read_its_verdict(self):
         payload = {**self.payload(""), "tool_name": "exec_command",
-                   "tool_input": {"cmd": f"ts-decide {shlex.quote(json.dumps(REQUEST))}"}}
+                   "tool_input": {"cmd": f"ts-decide {shlex.quote(json.dumps(REQUEST))}"},
+                   "transcript_path": str(write_jsonl(self.dir, "codex.jsonl", [codex_user("Which cache?")]))}
         out = hook.handle("pre_tool_use", payload, "codex", post=FakeJev(**CONFIDENT))
-        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
-        self.assertIn("ts-decide verdict", out["hookSpecificOutput"]["permissionDecisionReason"])
+        specific = out["hookSpecificOutput"]
+        self.assertEqual(specific["permissionDecision"], "allow")
+        command = specific["updatedInput"]["cmd"]
+        self.assertTrue(command.startswith("cat "), command)
+        self.assertIn("ts-decide verdict", Path(shlex.split(command)[1]).read_text())
 
     def test_misuse_and_invalid_requests_are_denied_with_usage(self):
         for command in ("ts-decide '{}' | cat", "ts-decide 'not json'"):
@@ -104,7 +108,9 @@ class HookTest(StateTestCase):
         ledger.write_verdict("old", "v")
         old = 0
         os.utime(policy.state_dir() / "verdicts" / "old.txt", (old, old))
-        self.assertIsNone(hook.handle("session_start", {"session_id": "s1"}, "claude"))
+        out = hook.handle("session_start", {"session_id": "s1"}, "claude")
+        self.assertEqual(out["hookSpecificOutput"]["hookEventName"], "SessionStart")
+        self.assertIn(str(ROOT / "bin/ts-decide"), out["hookSpecificOutput"]["additionalContext"])
         self.assertFalse((policy.state_dir() / "verdicts" / "old.txt").exists())
 
 

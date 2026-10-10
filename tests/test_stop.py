@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from agent_decisions import gates, jev
 from agent_decisions.transcript import ToolCall, Transcript
 from tests.helpers import FakeJev, StateTestCase, asker, make_ctx
 
-DECIDE = ToolCall("toolu_d", "Bash", '{"command": "ts-decide \'{}\'"}')
+DECIDE = ToolCall("toolu_d", "Bash", '{"command": "ts-decide \'{}\'"}', "ts-decide verdict: ADVISORY")
 BINDING = {"gate": "decide", "tool_use_id": "toolu_d", "action": "binding", "decision": "Which cache?",
            "pick": "lfu", "state": {"options": {"lru": "LRU", "lfu": "LFU"}}}
 
@@ -45,7 +47,7 @@ class StopGateTest(StateTestCase):
         self.assertEqual(outcome.action, "allow")
 
     def test_binding_pick_not_followed_blocks_and_restates_the_pick(self):
-        ctx = ctx_with([DECIDE], [BINDING])
+        ctx = ctx_with([replace(DECIDE, output="ts-decide verdict: BINDING")], [BINDING])
         fake = FakeJev(follows_pick=0.4)
         outcome = gates.stop_gate("Done: implemented LRU.", False, ctx, asker(fake))
         self.assertEqual(outcome.action, "block")

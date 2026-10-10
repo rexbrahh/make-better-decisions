@@ -1,6 +1,8 @@
 {
   "hooks": {
-    "PreToolUse": [{"hooks": [{"type": "command", "command": "python3 -B \"$HOME/agent-decisions/hooks/hook.py\" pre_tool_use --host codex", "timeout": 15}]}],
-    "Stop": [{"hooks": [{"type": "command", "command": "python3 -B \"$HOME/agent-decisions/hooks/hook.py\" stop --host codex", "timeout": 15}]}]
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "python3 -B \"${PLUGIN_ROOT}/hooks/hook.py\" pre_tool_use --host codex", "timeout": 15}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "python3 -B \"${PLUGIN_ROOT}/hooks/hook.py\" stop --host codex", "timeout": 15}]}],
+    "SubagentStop": [{"hooks": [{"type": "command", "command": "python3 -B \"${PLUGIN_ROOT}/hooks/hook.py\" subagent_stop --host codex", "timeout": 15}]}],
+    "SessionStart": [{"hooks": [{"type": "command", "command": "python3 -B \"${PLUGIN_ROOT}/hooks/hook.py\" session_start --host codex", "timeout": 10}]}]
   }
 }

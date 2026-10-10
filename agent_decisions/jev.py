@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import socket
 import urllib.error
 import urllib.request
+from concurrent.futures import Future, TimeoutError as FutureTimeout
+from threading import Thread
 
 from . import policy
 
@@ -30,6 +33,23 @@ def load_key() -> str:
 
 
 def post(body: bytes, key: str, timeout: float) -> bytes:
+    result = Future()
+
+    def send() -> None:
+        try:
+            result.set_result(_post(body, key, timeout))
+        except Exception as error:
+            result.set_exception(error)
+
+    # urllib's socket timeout restarts on each read. Bound the complete exchange.
+    Thread(target=send, daemon=True).start()
+    try:
+        return result.result(timeout=timeout)
+    except FutureTimeout:
+        raise JevError("timeout") from None
+
+
+def _post(body: bytes, key: str, timeout: float) -> bytes:
     request = urllib.request.Request(
         policy.URL, data=body,
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
@@ -62,7 +82,20 @@ def _check(answer: dict, question: dict) -> None:
     if answer["type"] != question["type"]:
         raise ValueError("answer type")
     if question["type"] == "noul":
-        if not 0.0 <= float(answer["noul"]) <= 1.0:
-            raise ValueError("noul range")
-    elif answer["choice"] not in question["criteria"] or not isinstance(answer["probabilities"], dict):
+        _probability(answer["noul"])
+        return
+    probabilities = answer["probabilities"]
+    if answer["choice"] not in question["criteria"] or not isinstance(probabilities, dict) \
+            or probabilities.keys() != question["criteria"].keys():
         raise ValueError("choice")
+    _probability(answer["confidence"])
+    for value in probabilities.values():
+        _probability(value)
+    if not math.isclose(sum(probabilities.values()), 1.0, abs_tol=0.01) \
+            or probabilities[answer["choice"]] != max(probabilities.values()):
+        raise ValueError("choice distribution")
+
+
+def _probability(value) -> None:
+    if type(value) not in (int, float) or not math.isfinite(value) or not 0.0 <= value <= 1.0:
+        raise ValueError("probability")

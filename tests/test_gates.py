@@ -23,6 +23,12 @@ class ClassifyTest(StateTestCase):
                 self.assertEqual(kind, "decide")
                 self.assertEqual(json.loads(request), REQUEST)
 
+    def test_crlf_heredoc_is_accepted(self):
+        raw = json.dumps(REQUEST)
+        kind, request = gates.classify(f"ts-decide <<'EOF'\r\n{raw}\r\nEOF\r\n")
+        self.assertEqual(kind, "decide")
+        self.assertEqual(json.loads(request), REQUEST)
+
     def test_ts_decide_inside_a_larger_command_is_misuse(self):
         for command in ("ts-decide '{}' && rm -rf x", "ts-decide '{}'; ls", "ts-decide '{}' | tee out",
                         "ts-decide '{}' > out", "cd /x && ts-decide '{}'", "(ts-decide '{}')",
@@ -64,6 +70,14 @@ ASKED = {"questions": [{"question": "Which database for the job queue?", "header
 
 
 class QuestionGateTest(StateTestCase):
+    def test_codex_question_shape_preserves_prompt_and_string_options(self):
+        fake = FakeJev(stated_0=0.95, owner_0="user")
+        outcome = gates.question_gate({"questions": [{"title": "Which database?", "options": ["Postgres", "SQLite"]}]},
+                                      make_ctx(host="codex"), asker(fake))
+        self.assertEqual(outcome.action, "deny")
+        self.assertEqual(fake.requests[0]["state"]["questions"],
+                         [{"question": "Which database?", "options": ["Postgres", "SQLite"]}])
+
     def test_denies_when_the_user_already_stated_the_answer(self):
         outcome = gates.question_gate(ASKED, make_ctx(), asker(FakeJev(stated_0=0.9, owner_0="user")))
         self.assertEqual(outcome.action, "deny")
@@ -101,7 +115,7 @@ class PlanGateTest(StateTestCase):
         self.assertEqual(gates.plan_gate(again).action, "allow")
 
     def test_allows_after_a_backed_ts_decide(self):
-        calls = (ToolCall("toolu_d", "Bash", '{"command": "ts-decide \'{}\'"}'),)
+        calls = (ToolCall("toolu_d", "Bash", '{"command": "ts-decide \'{}\'"}', "ts-decide verdict: ADVISORY"),)
         ctx = make_ctx(Transcript(("plan it",), calls, calls), entries=[{"gate": "decide", "tool_use_id": "toolu_d", "action": "advisory"}])
         self.assertEqual(gates.plan_gate(ctx).action, "allow")
 

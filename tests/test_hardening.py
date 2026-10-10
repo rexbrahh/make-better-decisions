@@ -47,6 +47,21 @@ class LedgerEncodingTest(StateTestCase):
 
 
 class RedactionTest(StateTestCase):
+    def test_option_descriptions_are_redacted_in_questions_and_verdict(self):
+        path = write_jsonl(self.dir, "s1.jsonl", [human("Choose a config reader.")])
+        request = {"decision": "Which config reader?", "options": [
+            {"id": "a", "description": f"Use token {SECRET}"}, {"id": "b", "description": "Use environment"}],
+            "facts": [f"export TOKEN {SECRET}"]}
+        fake = FakeJev(pick="b", sufficient=0.9, owner="agent")
+        out = hook.handle("pre_tool_use", {"session_id": "s1", "transcript_path": str(path),
+                          "tool_name": "Bash", "tool_use_id": "redact1",
+                          "tool_input": {"command": f"ts-decide {shlex.quote(json.dumps(request))}"}},
+                          "claude", post=fake)
+        self.assertNotIn(SECRET, json.dumps(fake.requests))
+        command = out["hookSpecificOutput"]["updatedInput"]["command"]
+        from pathlib import Path
+        self.assertNotIn(SECRET, Path(shlex.split(command)[1]).read_text())
+
     def test_json_style_secret_is_redacted(self):
         self.assertNotIn("abcdefghijkl1234", evidence.redact('{"api_key": "abcdefghijkl1234"}'))
 
@@ -77,9 +92,12 @@ class ConsultedTest(StateTestCase):
         self.assertFalse(is_decide(ToolCall("a", "Bash", '{"command": "grep -rn foo src  # ts-decide"}')))
 
     def test_only_a_real_verdict_counts_as_consulted(self):
-        call = ToolCall("toolu_d", "Bash", '{"command": "ts-decide \'{}\'"}')
-        ctx = lambda action: make_ctx(Transcript(("fix",), (call,), (call,)),
-                                      entries=[{"gate": "decide", "tool_use_id": "toolu_d", "action": action}])
+        def ctx(action):
+            output = "ts-decide: decision unverified (jev timeout)" if action == "unverified" \
+                else "ts-decide verdict: " + action.upper().replace("_", " ")
+            call = ToolCall("toolu_d", "Bash", '{"command": "ts-decide \'{}\'"}', output)
+            return make_ctx(Transcript(("fix",), (call,), (call,)),
+                            entries=[{"gate": "decide", "tool_use_id": "toolu_d", "action": action}])
         for action, counts in (("refused", False), ("gather_evidence", False), ("unverified", True),
                                ("advisory", True), ("binding", True), ("ask_user", True)):
             with self.subTest(action=action):

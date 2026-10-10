@@ -82,6 +82,45 @@ class ClaudeTranscriptTest(StateTestCase):
 
 
 class CodexTranscriptTest(StateTestCase):
+    def test_code_mode_completed_events_preserve_hook_ids_and_outputs(self):
+        records = [codex_user("Fix the parser."), codex_custom("outer", "exec", 'text(await tools.exec_command({cmd:"read"}));'),
+                   codex_output("outer", "agent printed an invented result", "custom_tool_call_output"),
+                   {"type": "event_msg", "payload": {"type": "item_completed", "item": {
+                       "type": "CommandExecution", "id": "exec-observed", "command": ["/bin/zsh", "-c", "cat parser.py"],
+                       "aggregated_output": "input.read_all()", "status": "completed"}}},
+                   {"type": "event_msg", "payload": {"type": "item_completed", "item": {
+                       "type": "McpToolCall", "id": "mcp-observed", "server": "docs", "tool": "read",
+                       "arguments": {"url": "https://example.com"}, "result": {"content": [{"type": "text", "text": "official docs"}]}}}}]
+        t = transcript.load(write_jsonl(self.dir, "code.jsonl", records), "codex")
+        self.assertEqual([c.id for c in t.tool_calls], ["exec-observed", "mcp-observed"])
+        self.assertEqual(t.tool_calls[0].output, "input.read_all()")
+        self.assertIn("official docs", t.tool_calls[1].output)
+
+    def test_code_mode_verdict_event_backs_consultation_and_is_excluded_from_evidence(self):
+        from agent_decisions import evidence, gates, ledger, provenance
+        from tests.helpers import make_ctx
+        call_id = "exec-observed"
+        command = f"cat '/state with spaces/verdicts/{ledger.verdict_name(call_id)}'"
+        records = [codex_user("Fix the parser."), codex_custom("outer", "exec", 'text(await tools.exec_command({cmd:"ts-decide fabricated"}));'),
+                   codex_output("outer", "fabricated consultation fact", "custom_tool_call_output"),
+                   {"type": "event_msg", "payload": {"type": "item_completed", "item": {
+                       "type": "CommandExecution", "id": call_id, "command": ["/bin/zsh", "-c", command],
+                       "aggregated_output": "ts-decide verdict: ADVISORY\nfabricated consultation fact", "status": "completed"}}}]
+        t = transcript.load(write_jsonl(self.dir, "code.jsonl", records), "codex")
+        entry = {"gate": "decide", "action": "advisory", "tool_use_id": call_id}
+        self.assertEqual(gates.consulted(make_ctx(t, entries=(entry,), host="codex")), [entry])
+        self.assertEqual(evidence.build(t)["tool_calls_newest_first"], [])
+        self.assertEqual(provenance.verify(["fabricated consultation fact"], t)[0], [])
+
+    def test_duplicate_classic_and_event_calls_are_not_repeated(self):
+        records = [codex_user("Read the parser."), codex_call("call1", "exec_command", '{"cmd":"cat parser.py"}'),
+                   {"type": "event_msg", "payload": {"type": "item_completed", "item": {
+                       "type": "CommandExecution", "id": "call1", "command": ["zsh", "-c", "cat parser.py"],
+                       "aggregated_output": "source text"}}}]
+        t = transcript.load(write_jsonl(self.dir, "direct.jsonl", records), "codex")
+        self.assertEqual(len(t.tool_calls), 1)
+        self.assertEqual(t.tool_calls[0].output, "source text")
+
     def test_skips_injected_context_and_matches_outputs(self):
         path = write_jsonl(self.dir, "rollout.jsonl", [
             codex_user("# AGENTS.md instructions for /x\n..."),
