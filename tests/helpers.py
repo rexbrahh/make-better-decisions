@@ -1,0 +1,118 @@
+"""Transcript record builders that copy real record shapes (observed 2026-10-10), and a fake Jev."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import tempfile
+import unittest
+from pathlib import Path
+
+
+def human(text):
+    return {"type": "user", "message": {"role": "user", "content": text}, "origin": {"kind": "human"}}
+
+
+def peer(text):
+    return {"type": "user", "message": {"role": "user", "content": text}, "origin": {"kind": "peer"}}
+
+
+def sidechain_user(text):
+    return {"type": "user", "isSidechain": True, "agentId": "a1", "message": {"role": "user", "content": text}}
+
+
+def tool_use(call_id, name, tool_input):
+    return {"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": call_id, "name": name, "input": tool_input}]}}
+
+
+def tool_result(call_id, content):
+    return {"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": call_id, "content": content}]}}
+
+
+def assistant_text(text):
+    return {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}
+
+
+def codex_user(text):
+    return {"type": "response_item", "payload": {
+        "type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}}
+
+
+def codex_assistant(text):
+    return {"type": "response_item", "payload": {
+        "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}}
+
+
+def codex_call(call_id, name, arguments):
+    return {"type": "response_item", "payload": {
+        "type": "function_call", "id": f"fc_{call_id}", "name": name, "arguments": arguments, "call_id": call_id}}
+
+
+def codex_custom(call_id, name, tool_input):
+    return {"type": "response_item", "payload": {
+        "type": "custom_tool_call", "id": f"ctc_{call_id}", "status": "completed",
+        "call_id": call_id, "name": name, "input": tool_input}}
+
+
+def codex_output(call_id, output, kind="function_call_output"):
+    return {"type": "response_item", "payload": {"type": kind, "call_id": call_id, "output": output}}
+
+
+def write_jsonl(directory, name, records, tail=""):
+    path = Path(directory) / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(r) + "\n" for r in records) + tail)
+    return path
+
+
+class StateTestCase(unittest.TestCase):
+    """Gives each test its own temporary directory and agent-decisions state directory."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        self._saved = {k: os.environ.get(k) for k in ("AGENT_DECISIONS_STATE", "TYPESAFE_API_KEY", "AGENT_DECISIONS_OFF")}
+        os.environ["AGENT_DECISIONS_STATE"] = str(self.dir / "state")
+        os.environ["TYPESAFE_API_KEY"] = "test-key-0123456789abcdef"
+        os.environ.pop("AGENT_DECISIONS_OFF", None)
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        for key, value in self._saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+class FakeJev:
+    """Stands in for the HTTP transport. A noul answers its override or 0.0;
+    a choice answers its override or its first criteria key, with probability 1."""
+
+    def __init__(self, raises=None, raw=None, **answers):
+        self.answers = answers
+        self.raises = raises
+        self.raw = raw
+        self.requests = []
+
+    def __call__(self, body, key, timeout):
+        request = json.loads(body)
+        self.requests.append(request)
+        if self.raises is not None:
+            raise self.raises
+        if self.raw is not None:
+            return self.raw
+        answers = {}
+        for qid, question in request["questions"].items():
+            want = self.answers.get(qid)
+            if question["type"] == "noul":
+                answers[qid] = {"type": "noul", "noul": 0.0 if want is None else want}
+            else:
+                options = list(question["criteria"])
+                choice = options[0] if want is None else want
+                answers[qid] = {"type": "choice", "choice": choice, "confidence": 1.0,
+                                "probabilities": {o: 1.0 if o == choice else 0.0 for o in options}}
+        return json.dumps({"model": "jev-1.13.0", "answers": answers, "usage": {}}).encode()
