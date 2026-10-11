@@ -80,10 +80,10 @@ def transcript_roots(host: str, home: Optional[Path] = None) -> List[str]:
 
 def authority_code_root(install_root: Any) -> Optional[str]:
     root = Path(canonical_path(install_root))
-    if (root / ".git").exists():
-        return None
     if root.parent.name == "agent-decisions" and root.parent.parent.parent.name == "cache":
         return str(root.parent)  # running chats can still invoke earlier cached versions
+    if (root / ".git").exists():
+        return None
     return str(root)
 
 
@@ -586,7 +586,7 @@ def _call_json_rpc(command: List[str], request: Mapping[str, Any], timeout_s: fl
     try:
         if initialize:
             send_and_wait({"id": str(uuid.uuid4()), "method": "initialize",
-                           "params": {"clientInfo": {"name": "agent-decisions-install", "version": "1.0.2"},
+                           "params": {"clientInfo": {"name": "agent-decisions-install", "version": "1.0.3"},
                                       "capabilities": {}}})
         return send_and_wait(request)
     finally:

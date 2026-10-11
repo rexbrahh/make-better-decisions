@@ -257,10 +257,10 @@ def _protected_paths_from_spec(spec: dict, recipe: dict | None = None) -> list[s
 
 def _authority_code_root() -> Path | None:
     root = Path(__file__).resolve(strict=False).parent.parent
-    if (root / ".git").exists():
-        return None
     if root.parent.name == "agent-decisions" and root.parent.parent.parent.name == "cache":
         return root.parent
+    if (root / ".git").exists():
+        return None
     return root
 
 

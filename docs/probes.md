@@ -77,8 +77,8 @@ with EPERM. The final suite ran through the approved escalated test command.
 Linux bubblewrap behavior, manual Codex desktop execution, and live Codex
 subagent identity have not been verified.
 
-Global installation and native runtime evidence are recorded locally in
-`probe/out/v1.0.1-verification.json` after activation.
+The v1.0.1 activation was interrupted by deletion of a cached entrypoint.
+Its global verification did not complete. The v1.0.3 record supersedes it.
 
 ## v1.0.2 repair checks (2026-10-11)
 
@@ -91,3 +91,13 @@ Earlier repair samples exposed three cases. Missing platform context incorrectly
 The new checks cover missing entrypoints, missing imports, missing Python, partial startup output, healthy denials, automatic hook feedback, recent diagnostics, aged recipes, and Python startup injection. They also cover active version namespaces and replacement of a managed profile symlink.
 
 The global result and native runtime evidence are recorded in `probe/out/v1.0.2-verification.json` after activation. Claude model acceptance requires an authenticated Claude session.
+
+## Native cache repair (v1.0.3)
+
+The native Codex cache contains Git metadata. The installer must recognize the installed namespace before applying its development-checkout exemption. A regression covers this case.
+
+The v1.0.2 native CLI session verified consultation, the full verdict receipt, covered editing, and Stop through the user's normal wrapper. The configured default profile denied private directory access and installed-cache file creation. No credential contents were read.
+
+The initial native test failures came from test-only CLI overrides. Codex 0.162.1 treats quoted dotted-key segments literally. A partial override for a runtime-only HTTP server also lacks its required transport. Corrected fixture overrides passed.
+
+Inactive-hook reports from older chats are fallback evidence. They do not establish active Jev enforcement. Restart the hosts after an update. Final package identity and activation evidence are recorded in `probe/out/v1.0.3-verification.json`.

@@ -39,6 +39,14 @@ class InstallPlanningTest(StateTestCase):
         self.assertEqual(value["filesystem"].get(str(namespace.resolve())), "read")
         self.assertNotIn(str(namespace.parent.resolve()), value["filesystem"])
 
+    def test_installed_git_checkout_is_still_authority_code(self):
+        namespace = self.dir / ".codex/plugins/cache/market/agent-decisions"
+        root = namespace / "1.0.3"
+        root.mkdir(parents=True)
+        root.joinpath(".git").mkdir()
+        self.assertEqual(install.authority_code_root(root), str(namespace.resolve()))
+
+
     def test_codex_wraps_only_stdio_servers_and_preserves_fields_in_recipe_and_config(self):
         root = self.dir / "installed"
         root.mkdir()

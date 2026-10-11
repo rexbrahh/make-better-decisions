@@ -1,4 +1,4 @@
-# agent-decisions v1.0.2 behavior spec
+# agent-decisions v1.0.3 behavior spec
 
 Date: 2026-10-11. Owner: Rex. Status: current code behavior.
 

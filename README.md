@@ -1,4 +1,4 @@
-# make-better-decisions v1.0.2
+# make-better-decisions v1.0.3
 
 `agent-decisions` adds hook checks for Claude Code and Codex. The hooks ask TypeSafe Jev before an agent chooses an approach, changes files, asks the user a question, or finishes with an uncovered choice.
 
