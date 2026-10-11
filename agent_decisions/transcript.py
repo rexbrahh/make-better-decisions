@@ -14,6 +14,8 @@ _CODEX_INJECTED = (
     "<environment_context>",
     "<user_instructions>",
     "The following is the Codex agent history",
+    "<codex_delegation>",
+    "<subagent_notification>",
 )
 # Claude Code echoes shell and slash-command output as origin-less user records.
 _CLAUDE_ECHOES = ("<bash-stdout>", "<bash-stderr>", "<local-command-stdout>", "<local-command-stderr>")
@@ -34,6 +36,7 @@ class Transcript:
     turn_calls: tuple[ToolCall, ...]  # calls after the latest user (or parent) message
     last_assistant_text: str = ""
     brief: str | None = None  # a subagent's task, written by its parent agent
+    user_keys: tuple[str, ...] = ()  # host record identities, including timestamps when present
 
     @property
     def turn_key(self) -> str:
@@ -43,7 +46,7 @@ class Transcript:
 
 
 def is_decide(call: ToolCall) -> bool:
-    """True for a ts-decide call, as written or as rewritten to read its verdict file."""
+    """True for a ts-decide call or the hook's literal verdict transport."""
     try:
         tool_input = json.loads(call.input)
     except ValueError:
@@ -58,6 +61,8 @@ def is_decide(call: ToolCall) -> bool:
     except ValueError:
         return False
     return bool(tokens) and (Path(tokens[0]).name == "ts-decide" or
+                             len(tokens) == 3 and tokens[0] == "printf" and tokens[1] == "%s\\n"
+                             and tokens[2].startswith(("ts-decide verdict:", "ts-decide: decision unverified (")) or
                              len(tokens) == 2 and tokens[0] == "cat" and Path(tokens[1]).parent.name == "verdicts")
 
 
@@ -91,6 +96,8 @@ def _text(content) -> str:
 class _Builder:
     def __init__(self):
         self.users: list[str] = []
+        self.user_keys: list[str] = []
+        self.user_occurrences: dict[str, int] = {}
         self.calls: list[tuple[str, str, str]] = []
         self.call_ids: set[str] = set()
         self.outputs: dict[str, str] = {}
@@ -98,8 +105,12 @@ class _Builder:
         self.last_text = ""
         self.brief: str | None = None
 
-    def user(self, text: str) -> None:
+    def user(self, text: str, record: dict) -> None:
         self.users.append(text)
+        key = hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()
+        count = self.user_occurrences.get(key, 0) + 1
+        self.user_occurrences[key] = count
+        self.user_keys.append(f"{key}:{count}")
         self.turn_start = len(self.calls)
 
     def parent(self, text: str) -> None:
@@ -122,7 +133,8 @@ class _Builder:
 
     def build(self) -> Transcript:
         calls = tuple(ToolCall(i, n, inp, self.outputs.get(i, "")) for i, n, inp in self.calls)
-        return Transcript(tuple(self.users), calls, calls[self.turn_start:], self.last_text, self.brief)
+        return Transcript(tuple(self.users), calls, calls[self.turn_start:], self.last_text,
+                          self.brief, tuple(self.user_keys))
 
 
 def _claude(records: list[dict]) -> Transcript:
@@ -148,9 +160,9 @@ def _claude(records: list[dict]) -> Transcript:
             if r.get("isSidechain"):
                 b.parent(text)
             elif (r.get("origin") or {}).get("kind") == "human":
-                b.user(text)
+                b.user(text, r)
             elif r.get("origin") is None and not text.startswith(_CLAUDE_ECHOES):
-                b.user(text)  # a headless `claude -p` prompt carries no origin
+                b.user(text, r)  # a headless `claude -p` prompt carries no origin
     return b.build()
 
 
@@ -179,8 +191,9 @@ def _codex(records: list[dict]) -> Transcript:
         kind = p.get("type")
         if kind == "message":
             text = _text(p.get("content"))
-            if p.get("role") == "user" and text and not text.lstrip().startswith(_CODEX_INJECTED):
-                b.user(text)
+            if p.get("role") == "user" and text and not text.lstrip().startswith(_CODEX_INJECTED) \
+                    and (p.get("origin") or {}).get("kind", "human") == "human":
+                b.user(text, r)
             elif p.get("role") == "assistant" and text:
                 b.last_text = text
         elif kind == "function_call":

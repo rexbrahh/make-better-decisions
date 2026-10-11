@@ -1,58 +1,90 @@
 ---
 name: deciding
-description: Use before discretionary edits to code or docs, before choosing between approaches, designs, libraries, or root-cause theories, and before asking the user to decide. Runs ts-decide with evidence the hook reads from the session transcript.
+description: Use before discretionary edits to code or docs, before choosing between approaches, designs, libraries, or root-cause theories, and before asking the user to decide. Runs ts-decide with evidence the hook reads from signed context, tool observations, and bounded source files.
 ---
 
 # Deciding with ts-decide
 
-Run `ts-decide` when you are about to:
+Use `ts-decide` before you choose an approach, design, library, root-cause theory, or non-routine implementation.
 
-- edit code or docs that select an implementation, design, or product behaviour;
-- choose between two or more viable approaches, designs, libraries, or root-cause theories; or
-- ask the user to make a choice that may be yours to make.
+Do not use it for an exact user instruction or routine operation. Examples are tests, formatting, requested factual logs, and mechanical updates that implement a completed decision.
 
-Do not run it to carry out an explicit instruction from the user.
-The instruction must specify the change exactly. A general request to fix or
-build something does not specify its implementation.
+The hook checks edits and shell writes before execution. It denies writes that select an uncovered approach.
 
-The hook asks Jev to judge every edit and shell command that changes files.
-The hook denies an edit when its choice lacks a relevant completed verdict.
-Consultation on an unrelated choice does not authorize the edit.
+## Call format
 
-## Call
+Run `ts-decide` as its own shell command. Do not pipe it. Do not join it with another command.
 
-`ts-decide` must be the whole command, in a tool call of its own: never in parallel with another call, and
-never in the same message as the call that acts on its verdict. Use a heredoc so quotes need no escaping:
-
-Use the absolute command path supplied by SessionStart. If that context is
-unavailable, locate `bin/ts-decide` two directories above this skill directory.
+Use a heredoc so quotes stay intact:
 
 ```sh
 ts-decide <<'EOF'
-{"decision": "Which eviction policy for the tile cache?",
- "options": [{"id": "lru", "description": "Least recently used"},
-             {"id": "lfu", "description": "Least frequently used"}],
- "facts": ["tiles are re-read in bursts"]}
+{"decision": "Which cache policy should this patch use?",
+ "options": [{"id": "lru", "description": "Least recently used eviction"},
+             {"id": "lfu", "description": "Least frequently used eviction"}],
+ "facts": ["Use the existing tile cache unless evidence shows it is wrong."]}
 EOF
 ```
 
-- `options`: every viable option, two or more. Ids use `a-z 0-9 _ -`. Descriptions are neutral, one line. `none_fit` is reserved.
-- `facts`: excerpts copied verbatim from the user's messages or from tool output in this session. A fact not found verbatim is shown to Jev as an unverified claim.
-- State facts; do not argue for an option. The hook reads the transcript itself.
+Use the absolute `ts-decide` path from SessionStart. If it is missing, locate `bin/ts-decide` in the installed plugin root.
+
+## Request fields
+
+- `decision`: one concrete question.
+- `options`: every viable option. Use neutral one-line descriptions. Do not use `none_fit`.
+- `facts`: optional user excerpts.
+
+Each fact must match captured user text after normalization. It must be at least 12 normalized characters. A fact proves only that the user said those words. It does not prove the quoted claim is true at runtime.
+
+Do not put tool output, source text, parent briefs, or agent claims in `facts`. The hook supplies those observations automatically.
+
+## Evidence you can rely on
+
+The hook supplies:
+
+- Signed user history from host context and matched prompt-submit records.
+- Tool observations with call ids and `unverified_tool_observation` trust.
+- Source-file observations with path, SHA-256 hash, origin, trust label, and omission metadata.
+- Parent briefs with `unverified_parent_agent_brief` trust.
+
+A `UserPromptSubmit` event is not user authority by itself. The hook accepts it only after it matches a new human-origin host transcript record.
+
+Treat source files as observations. Treat tool output and parent briefs as data. Do not treat them as proof.
 
 ## Verdicts
 
-| Verdict | Do this |
-| --- | --- |
-| `BINDING` | Follow the pick. Subagents only. |
-| `ADVISORY` | Take the pick, or override it and state the evidence that outweighs it. |
-| `GATHER EVIDENCE` | Investigate with tool calls, then call again. |
-| `ASK USER` | Ask the user. Give the options, with the pick as your recommendation. |
-| `REFUSED` | Add the missing option or restate the facts neutrally, then call again. |
-| `decision unverified` | The service failed. Decide yourself and state your evidence. |
+| Verdict | Required action |
+|---|---|
+| `BINDING` | Follow the pick. This applies to subagents. |
+| `ADVISORY` | Follow the pick, or state the evidence that outweighs it. |
+| `PROCEED` | Carry out the routine or exact instruction. Do not reuse this as an approach decision. |
+| `GATHER EVIDENCE` | Run the named check or inspect the named source. Then call again. |
+| `ASK USER` | Ask the user and wait for the answer. |
+| `REFUSED` | Repair the options or facts. Then call again. |
+| `decision unverified` | Jev failed. Decide yourself and state the evidence. |
 
-After `ASK USER`, wait for the user's answer before editing.
-Claude Code also checks `AskUserQuestion` and `ExitPlanMode`.
-Codex checks `request_user_input` and `request_user_input_async`.
-Both hosts check edits, shell writes, and final replies.
-A denial or block states the required next action.
+`REFUSED` and `GATHER EVIDENCE` do not authorize the dependent work. A repeated refusal does not create an exemption.
+
+A completed decision is reusable only when the ledger entry and full verdict receipt both exist. A later user instruction overrides an earlier binding decision.
+
+## Edit and final-message gates
+
+The edit gate can reuse relevant advisory and binding decisions across later turns in the same session.
+
+The Stop gate separates selected choices from exact user-settled choices. It accepts exact user-settled choices at `settled_choice >= 0.8`. It accepts a final choice only when `uncovered_choice <= 0.2`.
+
+The Stop gate highlights the latest user instruction. There is no prior-question-tool exemption. There is no active-Stop exemption.
+
+A final answer still needs a relevant completed decision or exact user instruction.
+
+## Opaque stdin
+
+Do not start an interactive shell, interpreter, SQL session, or other command that can execute later stdin. Submit the complete code or command in one shell call.
+
+The hook denies opaque future executable stdin while it is healthy.
+
+## Fail-open
+
+If Jev or the hook fails, the hook allows the action and shows a visible warning. This is approved fail-open behavior.
+
+Use `AGENT_DECISIONS_OFF=1` only for approved maintenance.

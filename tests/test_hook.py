@@ -29,30 +29,33 @@ class HookTest(StateTestCase):
         return {"session_id": "s1", "transcript_path": str(self.transcript), "tool_name": "Bash",
                 "tool_use_id": "toolu_d", "tool_input": {"command": command, "description": "decide"}, **extra}
 
-    def test_claude_ts_decide_is_rewritten_to_read_its_verdict(self):
+    def verdict_output(self, out, key="command"):
+        command = out["hookSpecificOutput"]["updatedInput"][key]
+        return subprocess.run(["/bin/sh", "-c", command], cwd=self.dir,
+                              capture_output=True, text=True, check=True).stdout
+
+    def test_claude_ts_decide_returns_literal_verdict_stdout(self):
         out = hook.handle("pre_tool_use", self.payload(f"ts-decide {shlex.quote(json.dumps(REQUEST))}"),
                           "claude", post=FakeJev(**CONFIDENT))
         specific = out["hookSpecificOutput"]
         self.assertEqual(specific["permissionDecision"], "allow")
         self.assertEqual(specific["updatedInput"]["description"], "decide")
-        path = shlex.split(specific["updatedInput"]["command"])[1]
-        self.assertEqual(Path(path).name, ledger.verdict_name("toolu_d"))
-        self.assertIn("ts-decide verdict: ADVISORY", Path(path).read_text())
-        [entry] = ledger.entries("s1")
+        output = self.verdict_output(out)
+        self.assertIn("ts-decide verdict: ADVISORY", output)
+        [entry] = [e for e in ledger.entries("s1") if e["gate"] == "decide"]
         self.assertEqual((entry["gate"], entry["action"], entry["tool_use_id"]), ("decide", "advisory", "toolu_d"))
         self.assertEqual(entry["host"], "claude")
         self.assertIsNotNone(entry["turn"])
+        self.assertEqual(output, entry["verdict"] + "\n")
 
-    def test_codex_ts_decide_is_rewritten_to_read_its_verdict(self):
+    def test_codex_ts_decide_returns_literal_verdict_stdout(self):
         payload = {**self.payload(""), "tool_name": "exec_command",
                    "tool_input": {"cmd": f"ts-decide {shlex.quote(json.dumps(REQUEST))}"},
                    "transcript_path": str(write_jsonl(self.dir, "codex.jsonl", [codex_user("Which cache?")]))}
         out = hook.handle("pre_tool_use", payload, "codex", post=FakeJev(**CONFIDENT))
         specific = out["hookSpecificOutput"]
         self.assertEqual(specific["permissionDecision"], "allow")
-        command = specific["updatedInput"]["cmd"]
-        self.assertTrue(command.startswith("cat "), command)
-        self.assertIn("ts-decide verdict", Path(shlex.split(command)[1]).read_text())
+        self.assertIn("ts-decide verdict", self.verdict_output(out, "cmd"))
 
     def test_misuse_and_invalid_requests_are_denied_with_usage(self):
         for command in ("ts-decide '{}' | cat", "ts-decide 'not json'"):
@@ -69,9 +72,9 @@ class HookTest(StateTestCase):
         for payload, fake, reason in cases:
             with self.subTest(reason=reason):
                 out = hook.handle("pre_tool_use", payload, "claude", post=fake)
-                path = shlex.split(out["hookSpecificOutput"]["updatedInput"]["command"])[1]
-                self.assertIn("decision unverified", Path(path).read_text())
-                self.assertIn(reason, Path(path).read_text())
+                output = self.verdict_output(out)
+                self.assertIn("decision unverified", output)
+                self.assertIn(reason, output)
 
     def test_guard_denies_and_records(self):
         out = hook.handle("pre_tool_use", self.payload(f"cat {policy.state_dir()}/sessions/s1.jsonl"),
@@ -89,7 +92,7 @@ class HookTest(StateTestCase):
                    "last_assistant_message": "I chose LRU over LFU."}
         out = hook.handle("stop", payload, "claude", post=FakeJev(made_choice=0.9))
         self.assertEqual(out["decision"], "block")
-        self.assertIn("without ts-decide", out["reason"])
+        self.assertIn("without a relevant ts-decide", out["reason"])
         out = hook.handle("stop", {**payload, "transcript_path": str(self.dir / "gone.jsonl")}, "claude", post=FakeJev())
         self.assertIn("systemMessage", out)
 
@@ -99,7 +102,7 @@ class HookTest(StateTestCase):
         fake = FakeJev(**CONFIDENT)
         out = hook.handle("pre_tool_use", self.payload(f"ts-decide {shlex.quote(json.dumps(REQUEST))}",
                                                        agent_id="a1"), "claude", post=fake)
-        self.assertIn("BINDING", Path(shlex.split(out["hookSpecificOutput"]["updatedInput"]["command"])[1]).read_text())
+        self.assertIn("BINDING", self.verdict_output(out))
         evidence = fake.requests[0]["state"]["evidence"]
         self.assertEqual(evidence["brief"], "brief: pick a cache")
         self.assertEqual(evidence["user_messages"], ["speed up the tile cache"])

@@ -123,8 +123,12 @@ def make_ctx(t=None, *, entries=(), agent_id=None, host="claude", tool_use_id="t
     from agent_decisions.transcript import Transcript
 
     t = t or Transcript(("decide the cache policy",), (), ())
+    calls = {call.id: call for call in t.tool_calls}
+    records = [{"host": host, "verdict": calls[e["tool_use_id"]].output,
+                **e} if e.get("gate") == "decide" and e.get("tool_use_id") in calls
+               else {"host": host, **e} for e in entries]
     return gates.Context(host=host, session_id="s1", agent_id=agent_id, tool_use_id=tool_use_id,
-                         transcript=t, evidence=evidence.build(t), entries=tuple(entries))
+                         transcript=t, evidence=evidence.build(t), entries=tuple(records))
 
 
 def asker(fake):

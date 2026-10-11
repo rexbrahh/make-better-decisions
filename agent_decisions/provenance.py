@@ -1,9 +1,9 @@
-"""Check that each agent fact is a verbatim excerpt of something the agent did not write."""
+"""Verify user quotations. Command output and parent briefs can contain agent-authored claims."""
 
 from __future__ import annotations
 
 from .policy import MIN_FACT_CHARS
-from .transcript import Transcript, is_decide
+from .transcript import Transcript
 
 
 def normalize(text: str) -> str:
@@ -11,9 +11,7 @@ def normalize(text: str) -> str:
 
 
 def verify(facts: list[str], t: Transcript) -> tuple[list[str], list[str]]:
-    sources = [*t.user_messages, *([t.brief] if t.brief else [])]
-    sources += [c.output for c in t.tool_calls if not is_decide(c)]
-    corpus = "\0".join(normalize(s) for s in sources)
+    corpus = "\0".join(normalize(s) for s in t.user_messages)
     verified: list[str] = []
     unverified: list[str] = []
     for fact in facts:

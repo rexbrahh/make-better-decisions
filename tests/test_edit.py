@@ -92,7 +92,7 @@ class EditHookTest(StateTestCase):
                 out = hook.handle("pre_tool_use", self.payload(name, value, host), host,
                                   post=FakeJev(needs_decision=0.95))
                 self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
-        self.assertEqual(len(ledger.entries("s1")), 4)
+        self.assertEqual(len([e for e in ledger.entries("s1") if e["gate"] == "edit"]), 4)
 
     def test_guard_takes_precedence_without_jev(self):
         fake = FakeJev()

@@ -14,7 +14,7 @@ from tests.helpers import FakeJev, StateTestCase, asker, human, make_ctx, tool_r
 SECRET = "sk-abcdefghijklmnopqrstuvwx"
 REQUEST = {"decision": "Which cache?", "options": [{"id": "lru", "description": "LRU"},
                                                    {"id": "lfu", "description": "LFU"}],
-           "facts": [f"export TOKEN {SECRET}"]}
+           "facts": []}
 
 
 class GuardTest(StateTestCase):
@@ -51,7 +51,7 @@ class RedactionTest(StateTestCase):
         path = write_jsonl(self.dir, "s1.jsonl", [human("Choose a config reader.")])
         request = {"decision": "Which config reader?", "options": [
             {"id": "a", "description": f"Use token {SECRET}"}, {"id": "b", "description": "Use environment"}],
-            "facts": [f"export TOKEN {SECRET}"]}
+            "facts": []}
         fake = FakeJev(pick="b", sufficient=0.9, owner="agent")
         out = hook.handle("pre_tool_use", {"session_id": "s1", "transcript_path": str(path),
                           "tool_name": "Bash", "tool_use_id": "redact1",
@@ -59,8 +59,7 @@ class RedactionTest(StateTestCase):
                           "claude", post=fake)
         self.assertNotIn(SECRET, json.dumps(fake.requests))
         command = out["hookSpecificOutput"]["updatedInput"]["command"]
-        from pathlib import Path
-        self.assertNotIn(SECRET, Path(shlex.split(command)[1]).read_text())
+        self.assertNotIn(SECRET, shlex.split(command)[2])
 
     def test_json_style_secret_is_redacted(self):
         self.assertNotIn("abcdefghijkl1234", evidence.redact('{"api_key": "abcdefghijkl1234"}'))

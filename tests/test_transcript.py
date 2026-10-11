@@ -108,7 +108,7 @@ class CodexTranscriptTest(StateTestCase):
                        "aggregated_output": "ts-decide verdict: ADVISORY\nfabricated consultation fact", "status": "completed"}}}]
         t = transcript.load(write_jsonl(self.dir, "code.jsonl", records), "codex")
         entry = {"gate": "decide", "action": "advisory", "tool_use_id": call_id}
-        self.assertEqual(gates.consulted(make_ctx(t, entries=(entry,), host="codex")), [entry])
+        self.assertEqual([e["tool_use_id"] for e in gates.consulted(make_ctx(t, entries=(entry,), host="codex"))], [entry["tool_use_id"]])
         self.assertEqual(evidence.build(t)["tool_calls_newest_first"], [])
         self.assertEqual(provenance.verify(["fabricated consultation fact"], t)[0], [])
 

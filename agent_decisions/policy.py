@@ -13,7 +13,8 @@ KEY_FILE = Path.home() / ".config" / "sops-nix" / "secrets" / "typesafe_api_key"
 USER_MESSAGES = 5
 EVIDENCE_CHARS = 80_000  # 20k tokens at about 4 characters per token
 CLIP_CHARS = 16_000  # 4k tokens; a longer text keeps its head and tail
-FINAL_MESSAGE_CHARS = 4_000
+FINAL_MESSAGE_CHARS = 16_000
+REQUEST_CHARS = 16_000
 MIN_FACT_CHARS = 12  # shorter facts match almost anything
 
 REFUSE_AT = 0.6
@@ -31,7 +32,8 @@ QUESTION_TOOLS = frozenset({"AskUserQuestion", "request_user_input", "request_us
 POLICY = (
     "The user decides product behaviour and anything destructive, irreversible, "
     "external, or paid. The agent decides engineering details and anything that "
-    "the user's words or the evidence already settle."
+    "the user's words or the evidence already settle. A later specific user instruction "
+    "supersedes any earlier Jev verdict, including a binding pick. User instructions take precedence."
 )
 
 

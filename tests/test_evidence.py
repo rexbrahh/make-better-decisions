@@ -17,11 +17,15 @@ class EvidenceTest(unittest.TestCase):
         users = [f"ask {i}" for i in range(7)]
         calls = [ToolCall(f"t{i}", "Bash", f"cmd {i}", "y" * 15_000) for i in range(20)]
         ev = evidence.build(_transcript(users, calls))
-        self.assertEqual(ev["user_messages"], users[-policy.USER_MESSAGES:])
+        for message in users[-policy.USER_MESSAGES:]:
+            self.assertIn(message, ev["user_messages"])
+        self.assertIn(users[0], ev["user_messages"])
         kept = ev["tool_calls_newest_first"]
         self.assertGreater(len(kept), 0)
         self.assertLess(len(kept), 20)
         self.assertEqual(kept[0]["input"], "cmd 19")
+        self.assertEqual(kept[0]["id"], "t19")
+        self.assertEqual(kept[0]["trust"], "unverified_tool_observation")
         self.assertLessEqual(len(json.dumps(ev)), policy.EVIDENCE_CHARS)
 
     def test_leaves_out_ts_decide_calls(self):
@@ -41,6 +45,29 @@ class EvidenceTest(unittest.TestCase):
     def test_brief_is_labelled(self):
         ev = evidence.build(_transcript([], [], brief="find the leak"))
         self.assertEqual(ev["brief"], "find the leak")
+        self.assertEqual(ev["brief_trust"], "unverified_parent_agent_brief")
+
+    def test_original_constraint_survives_newer_chatter(self):
+        constraint = "Preserve atomic writes in every implementation."
+        users = (constraint, *(f"Progress update {i}" for i in range(40)))
+        ev = evidence.build(_transcript(users))
+        self.assertIn(constraint, ev["user_messages"])
+        self.assertEqual(ev["metadata"]["user_messages_total"], 41)
+        self.assertEqual(ev["metadata"]["user_messages_omitted"], 0)
+
+    def test_more_than_twenty_short_constraints_are_preserved_when_budget_fits(self):
+        users = tuple(f"Constraint {i}: must preserve behaviour {i}." for i in range(35))
+        ev = evidence.build(_transcript(users))
+        self.assertEqual(ev["user_messages"], list(users))
+        self.assertEqual(ev["metadata"]["user_messages_omitted"], 0)
+
+    def test_query_relevance_beats_newer_irrelevant_tool_spam(self):
+        relevant = ToolCall("old", "Read", "agent_decisions/evidence.py", "atomic writes are preserved")
+        spam = [ToolCall(f"spam{i}", "Bash", f"cmd {i}", "noise" * 8_000) for i in range(20)]
+        ev = evidence.build(_transcript(["Investigate atomic writes."], [relevant, *spam]), query="atomic writes")
+        ids = [item["id"] for item in ev["tool_calls_newest_first"]]
+        self.assertIn("old", ids)
+        self.assertLessEqual(len(json.dumps(ev)), policy.EVIDENCE_CHARS)
 
     def test_redacts_secrets(self):
         samples = [

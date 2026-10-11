@@ -44,3 +44,38 @@ The Codex runtime probe used the CLI. The app-server probe checked discovery
 through the desktop protocol. No manual desktop GUI execution was performed.
 Codex subagent identity and transcript paths still need a live subagent probe.
 The 16 API cases do not establish a general catch rate or decision quality.
+
+## v1.0.1 hardening checks (2026-10-11)
+
+The hardening suite uses synthetic files and host records. It does not change
+production repositories. The live API checks send synthetic decision context.
+
+| Check | Observed result | Scope |
+| --- | --- | --- |
+| Offline suite plus macOS isolation | 217 tests passed | User history, quotes, source races, signatures, receipts, cache scope, retries, MCP writes, large inputs, stdin programs, and installer failures |
+| Live workflow replay | 32 labelled workflow cases, with results in the local verification artifact | Journal updates, source choices, mechanical tests, large edits, plans, binding choices, user overrides, and questions |
+| Live adversarial replay | 16 of 16 labelled cases passed in the final run | Missing options, loaded descriptions, fabricated facts, unconsulted writes, and unrelated verdicts |
+| Claude auth status | Signed out | A fresh Claude model-driven session cannot run until the user signs in |
+
+One earlier API run returned a malformed reply. The plugin visibly failed
+open, as approved. That result was counted as a failed sample. The subsequent
+full run passed. These samples do not establish a general catch rate.
+
+The expanded tests exposed and corrected legitimate-work stalls and bypasses:
+
+- Requested journal updates no longer require an approach choice.
+- The complete large tool input is checked as field paths and values.
+- Matching decisions remain usable across later turns. Later exact user
+  instructions take precedence over binding picks.
+- Stop detects an additional choice beside covered choices. A prior question
+  tool, Stop retry, or active Stop flag does not exempt a new question or choice.
+- Plan checks use the pending plan text. Cached gates require the same host.
+
+The macOS isolation tests require a process outside an existing restrictive
+sandbox. Inside the managed outer sandbox, macOS rejects nested sandbox_apply
+with EPERM. The final suite ran through the approved escalated test command.
+Linux bubblewrap behavior, manual Codex desktop execution, and live Codex
+subagent identity have not been verified.
+
+Global installation and native runtime evidence are recorded locally in
+`probe/out/v1.0.1-verification.json` after activation.

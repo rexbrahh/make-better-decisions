@@ -70,6 +70,12 @@ ASKED = {"questions": [{"question": "Which database for the job queue?", "header
 
 
 class QuestionGateTest(StateTestCase):
+    def test_oversized_question_is_rejected_before_the_api(self):
+        fake = FakeJev()
+        outcome = gates.question_gate({"questions": [{"title": "x" * 250_000}]}, make_ctx(), asker(fake))
+        self.assertEqual(outcome.action, "deny")
+        self.assertEqual(fake.requests, [])
+
     def test_codex_question_shape_preserves_prompt_and_string_options(self):
         fake = FakeJev(stated_0=0.95, owner_0="user")
         outcome = gates.question_gate({"questions": [{"title": "Which database?", "options": ["Postgres", "SQLite"]}]},
@@ -93,11 +99,11 @@ class QuestionGateTest(StateTestCase):
         self.assertEqual(outcome.action, "allow")
         self.assertEqual(outcome.record["gate"], "question")
 
-    def test_one_denial_per_question_set(self):
+    def test_identical_denial_is_cached_and_still_denied(self):
         first = gates.question_gate(ASKED, make_ctx(), asker(FakeJev(stated_0=0.9)))
         fake = FakeJev(stated_0=0.9)
         second = gates.question_gate(ASKED, make_ctx(entries=[{**first.record, "action": "deny"}]), asker(fake))
-        self.assertEqual(second.action, "allow")
+        self.assertEqual(second.action, "deny")
         self.assertEqual(fake.requests, [])
 
     def test_jev_failure_allows_with_a_note(self):
@@ -107,12 +113,12 @@ class QuestionGateTest(StateTestCase):
 
 
 class PlanGateTest(StateTestCase):
-    def test_denies_once_per_turn_without_ts_decide(self):
+    def test_every_retry_needs_a_completed_consultation(self):
         ctx = make_ctx()
         first = gates.plan_gate(ctx)
         self.assertEqual(first.action, "deny")
         again = make_ctx(entries=[{**first.record, "action": "deny", "turn": ctx.transcript.turn_key}])
-        self.assertEqual(gates.plan_gate(again).action, "allow")
+        self.assertEqual(gates.plan_gate(again).action, "deny")
 
     def test_allows_after_a_backed_ts_decide(self):
         calls = (ToolCall("toolu_d", "Bash", '{"command": "ts-decide \'{}\'"}', "ts-decide verdict: ADVISORY"),)

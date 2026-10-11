@@ -10,7 +10,7 @@ REQUEST = {
     "decision": "Which eviction policy for the tile cache?",
     "options": [{"id": "lru", "description": "Least recently used"},
                 {"id": "lfu", "description": "Least frequently used"}],
-    "facts": ["tiles are re-read in bursts", "the user said cost does not matter"],
+    "facts": ["decide the cache policy"],
 }
 CONFIDENT = dict(pick="lfu", sufficient=0.9, missing_option=0.1, argued=0.1, owner="agent")
 
@@ -22,6 +22,15 @@ def run(fake, request=REQUEST, **ctx):
 
 
 class DecideTest(StateTestCase):
+    def test_authorized_routine_work_does_not_wait_for_design_sufficiency(self):
+        result = run(FakeJev(**{**CONFIDENT, "sufficient": .56, "exact_operation": .95}))
+        self.assertEqual(result.action, "routine")
+        self.assertIn("PROCEED", result.message)
+
+    def test_routine_label_cannot_authorize_unsupported_claims(self):
+        result = run(FakeJev(**{**CONFIDENT, "sufficient": .56, "exact_operation": .95, "unsupported": .95}))
+        self.assertEqual(result.action, "gather_evidence")
+
     def test_main_agent_gets_an_advisory_verdict(self):
         outcome = run(FakeJev(**CONFIDENT))
         self.assertEqual(outcome.action, "advisory")
@@ -45,7 +54,7 @@ class DecideTest(StateTestCase):
             with self.subTest(override):
                 outcome = run(FakeJev(**{**CONFIDENT, **override}))
                 self.assertEqual(outcome.action, "refused")
-                self.assertIn("refusal 1 of 2", outcome.message)
+                self.assertIn("attempt 1", outcome.message)
 
     def test_user_owned_decision_with_only_none_fit_asks_the_user(self):
         outcome = run(FakeJev(**{**CONFIDENT, "owner": "user", "pick": "none_fit"}))
@@ -55,23 +64,23 @@ class DecideTest(StateTestCase):
         outcome = run(FakeJev(**{**CONFIDENT, "owner": "user", "missing_option": 0.6}))
         self.assertEqual(outcome.action, "refused")
 
-    def test_third_attempt_is_over_the_refusal_cap(self):
+    def test_third_attempt_still_requires_repair(self):
         key = gates.provenance.normalize(REQUEST["decision"])
         prior = [{"gate": "decide", "action": "refused", "decision_key": key}] * policy.REFUSAL_CAP
         outcome = run(FakeJev(**{**CONFIDENT, "argued": 0.9}), entries=prior)
-        self.assertEqual(outcome.action, "advisory")
-        self.assertIn("OVER REFUSAL CAP", outcome.message)
+        self.assertEqual(outcome.action, "refused")
+        self.assertIn("REQUEST STILL NEEDS REPAIR", outcome.message)
 
-    def test_state_carries_verified_and_unverified_facts_and_policy(self):
+    def test_state_carries_verified_user_facts_and_policy(self):
         fake = FakeJev(**CONFIDENT)
         run(fake)
         state = fake.requests[0]["state"]
-        self.assertEqual(state["facts"], ["tiles are re-read in bursts"])
-        self.assertEqual(state["unverified_claims"], ["the user said cost does not matter"])
+        self.assertEqual(state["facts"], REQUEST["facts"])
+        self.assertEqual(state["unverified_claims"], [])
         self.assertEqual(state["policy"], policy.POLICY)
         self.assertIn("tool_calls_newest_first", state["evidence"])
         self.assertIn("none_fit", fake.requests[0]["questions"]["pick"]["criteria"])
-        self.assertIn("the user said cost does not matter", run(FakeJev(**CONFIDENT)).message)
+        self.assertIn("decide the cache policy", state["facts"])
 
     def test_invalid_requests_are_rejected_without_a_jev_call(self):
         bad = ["not json", "[]", json.dumps({**REQUEST, "decision": " "}),

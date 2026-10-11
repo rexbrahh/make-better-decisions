@@ -23,10 +23,9 @@ class RegistrationTest(StateTestCase):
 
     def test_claude_registrations_cover_every_gate_and_run(self):
         registered = commands("hooks/hooks.json")
-        self.assertEqual(set(registered), {"PreToolUse", "Stop", "SubagentStop", "SessionStart"})
-        matcher = json.loads((ROOT / "hooks/hooks.json").read_text())["hooks"]["PreToolUse"][0]["matcher"]
-        for tool in ("Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "Read", "Grep", "Glob", "AskUserQuestion", "ExitPlanMode"):
-            self.assertIn(tool, matcher.split("|"))
+        self.assertEqual(set(registered), {"PreToolUse", "Stop", "SubagentStop", "SessionStart", "UserPromptSubmit"})
+        group = json.loads((ROOT / "hooks/hooks.json").read_text())["hooks"]["PreToolUse"][0]
+        self.assertNotIn("matcher", group)  # includes mcp__filesystem__write_file and other future tools
         for event, cmds in registered.items():
             for command in cmds:
                 with self.subTest(event=event):
@@ -35,7 +34,7 @@ class RegistrationTest(StateTestCase):
 
     def test_codex_registrations_run(self):
         registered = commands("codex/hooks.json")
-        self.assertEqual(set(registered), {"PreToolUse", "Stop", "SubagentStop", "SessionStart"})
+        self.assertEqual(set(registered), {"PreToolUse", "Stop", "SubagentStop", "SessionStart", "UserPromptSubmit"})
         for command in (c for cmds in registered.values() for c in cmds):
             with self.subTest(command=command):
                 self.assertIn("--host codex", command)

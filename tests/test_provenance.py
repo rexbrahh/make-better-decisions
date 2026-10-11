@@ -12,12 +12,12 @@ def _transcript(users=(), calls=(), brief=None):
 
 
 class ProvenanceTest(unittest.TestCase):
-    def test_verifies_quotes_from_user_messages_and_tool_output(self):
+    def test_verifies_user_quotes_but_not_arbitrary_tool_output(self):
         t = _transcript(["Keep memory   under 2 GB please"],
                         [ToolCall("t1", "Bash", "free", "Tiles are re-read in BURSTS during panning")])
         verified, unverified = provenance.verify(["keep memory under 2 gb", "tiles are re-read in bursts"], t)
-        self.assertEqual(verified, ["keep memory under 2 gb", "tiles are re-read in bursts"])
-        self.assertEqual(unverified, [])
+        self.assertEqual(verified, ["keep memory under 2 gb"])
+        self.assertEqual(unverified, ["tiles are re-read in bursts"])
 
     def test_fabricated_quote_is_unverified(self):
         t = _transcript(["reduce memory use"], [ToolCall("t1", "Bash", "pytest", "3 failed, 37 passed")])
@@ -37,6 +37,6 @@ class ProvenanceTest(unittest.TestCase):
         t = _transcript(["go"], [ToolCall("t1", "Write", "the cache must use LFU eviction", "File created")])
         self.assertEqual(provenance.verify(["the cache must use LFU eviction"], t)[0], [])
 
-    def test_subagent_brief_is_a_source(self):
+    def test_subagent_brief_is_not_a_user_source(self):
         t = _transcript([], [], brief="The parent says the bug reproduces only on arm64")
-        self.assertEqual(provenance.verify(["reproduces only on arm64"], t)[0], ["reproduces only on arm64"])
+        self.assertEqual(provenance.verify(["reproduces only on arm64"], t)[0], [])

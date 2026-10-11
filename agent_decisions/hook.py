@@ -19,6 +19,12 @@ def handle(event: str, payload: dict, host: str, *, post=jev.post) -> dict | Non
     payload = {**payload, "tool_use_id": payload.get("tool_use_id") or f"local-{uuid.uuid4().hex}"}
     if event == "session_start":
         ledger.prune()
+        if not payload.get("agent_id") and payload.get("transcript_path"):
+            try:
+                t = _load_transcript(payload, host)
+                _saved_users(payload, host, t, ledger.entries(payload.get("session_id") or "unknown"))
+            except OSError:
+                pass  # an empty startup transcript is normal
         root = Path(__file__).resolve().parent.parent
         return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext":
             "Use the deciding skill before choosing an approach or asking the user to decide. "
@@ -26,6 +32,11 @@ def handle(event: str, payload: dict, host: str, *, post=jev.post) -> dict | Non
             f"Run {shlex.quote(str(root / 'bin' / 'ts-decide'))} as a separate shell call. "
             f"Read {root / 'skills' / 'deciding' / 'SKILL.md'} for the request format. "
             "Read the verdict before executing a dependent call."}}
+    if event == "user_prompt_submit":
+        prompt = payload.get("prompt")
+        if isinstance(prompt, str) and prompt and not payload.get("agent_id"):
+            _append(payload, host, None, gates.Outcome("observed", record={"gate": "user_prompt", "prompt": prompt}))
+        return None
     if event == "pre_tool_use":
         return _pre_tool_use(payload, host, post)
     if event in ("stop", "subagent_stop"):
@@ -44,21 +55,22 @@ def _pre_tool_use(payload: dict, host: str, post) -> dict | None:
             return _decide(payload, host, tool_input, request, post)
         if kind == "misuse":
             return _deny(gates.MISUSE)
-    if name in policy.SHELL_TOOLS or name in policy.EDIT_TOOLS or name in policy.READ_TOOLS:
-        outcome = gates.guard(tool_input)
-        if outcome is not None:
-            try:
-                _append(payload, host, None, outcome)
-            except OSError:
-                pass  # the denial must not depend on the ledger being writable
-            return _deny(outcome.message)
-    if name in policy.SHELL_TOOLS or name in policy.EDIT_TOOLS:
-        return _gate(payload, host, lambda ctx: gates.edit_gate(name, tool_input, ctx, _asker(post)))
+    outcome = gates.guard(tool_input, payload.get("cwd"))
+    if outcome is not None:
+        try:
+            _append(payload, host, None, outcome)
+        except OSError:
+            pass  # the denial must not depend on the ledger being writable
+        return _deny(outcome.message)
     if name in policy.QUESTION_TOOLS:
         return _gate(payload, host, lambda ctx: gates.question_gate(tool_input, ctx, _asker(post)))
     if host == "claude" and name == "ExitPlanMode":
-        return _gate(payload, host, gates.plan_gate)
-    return None
+        plan = tool_input.get("plan")
+        return _gate(payload, host, lambda ctx: gates.plan_gate(
+            ctx, _asker(post), plan=plan if isinstance(plan, str) else None))
+    if name in policy.READ_TOOLS:
+        return None
+    return _gate(payload, host, lambda ctx: gates.edit_gate(name, tool_input, ctx, _asker(post)))
 
 
 def _decide(payload: dict, host: str, tool_input: dict, request: str, post) -> dict:
@@ -71,17 +83,20 @@ def _decide(payload: dict, host: str, tool_input: dict, request: str, post) -> d
                                 {"gate": "decide"})
     else:
         turn = ctx.transcript.turn_key
+        if any(c.id == ctx.tool_use_id and c.output for c in ctx.transcript.tool_calls) or any(
+                e.get("gate") == "decide" and e.get("tool_use_id") == ctx.tool_use_id for e in ctx.entries):
+            return _deny("ts-decide: this tool call has already completed. Run a new, separate ts-decide call.")
         outcome = gates.decide(request, ctx, _asker(post))
-    if outcome.record is not None:
-        _append(payload, host, turn, outcome)
     outcome = replace(outcome, message=evidence.redact(outcome.message, _secrets()))
+    if outcome.record is not None:
+        outcome = replace(outcome, record={**outcome.record, "verdict": outcome.message})
+        _append(payload, host, turn, outcome)
     if outcome.action == "invalid":
         return _deny(outcome.message)
-    path = ledger.write_verdict(payload["tool_use_id"], outcome.message)
     updated = dict(tool_input)
     for key in ("command", "cmd"):
         if key in updated:
-            updated[key] = f"cat {shlex.quote(str(path))}"
+            updated[key] = "printf '%s\\n' " + shlex.quote(outcome.message)
     return {"hookSpecificOutput": {
         "hookEventName": "PreToolUse", "permissionDecision": "allow",
         "permissionDecisionReason": "ts-decide verdict",
@@ -126,16 +141,58 @@ def _load_transcript(payload: dict, host: str) -> transcript.Transcript:
     if not own_path or own_path == main_path:
         return transcript.load(main_path, host)
     own = transcript.load(own_path, host)
-    return replace(own, user_messages=transcript.load(main_path, host).user_messages)
+    main = transcript.load(main_path, host)
+    return replace(own, user_messages=main.user_messages, user_keys=main.user_keys)
 
 
 def _context(payload: dict, host: str) -> gates.Context:
     t = _load_transcript(payload, host)
     secrets = _secrets()
     session = payload.get("session_id") or "unknown"
+    entries = ledger.entries(session)
+    t = replace(t, user_messages=_saved_users(payload, host, t, entries))
+    bundle = evidence.build(t, secrets,
+        query=json.dumps(payload.get("tool_input") or payload.get("last_assistant_message") or ""),
+        cwd=payload.get("cwd") or os.getcwd())
+    bundle["metadata"]["user_history_source"] = "signed_host_context"
+    evidence._trim_to_budget(bundle)
     return gates.Context(host=host, session_id=session, agent_id=payload.get("agent_id"),
                          tool_use_id=payload["tool_use_id"], transcript=t,
-                         evidence=evidence.build(t, secrets), entries=tuple(ledger.entries(session)))
+                         evidence=bundle, entries=tuple(entries))
+
+
+def _save_users(payload: dict, host: str, messages: tuple[str, ...], keys: tuple[str, ...]) -> None:
+    _append(payload, host, None, gates.Outcome("captured", record={
+        "gate": "user_context", "messages": list(messages), "seen_user_keys": list(keys)}))
+
+
+def _saved_users(payload: dict, host: str, t: transcript.Transcript, entries: list[dict]) -> tuple[str, ...]:
+    raw_users = tuple(evidence.redact(message, _secrets()) for message in t.user_messages)
+    raw_keys = t.user_keys or tuple(f"{i}:{message}" for i, message in enumerate(raw_users))
+    scope = payload.get("agent_id")
+    eligible_scopes = (None,) if scope is None else (None, scope)
+    saved = next(((i, e) for i, e in reversed(list(enumerate(entries)))
+                  if e.get("host") == host and e.get("gate") == "user_context"
+                  and e.get("agent_id") in eligible_scopes), None)
+    if saved is None:
+        _save_users(payload, host, raw_users, raw_keys)
+        return raw_users  # initial history comes from the host's protected transcript
+    index, record = saved
+    users = list(record["messages"])
+    seen = list(record.get("seen_user_keys", ()))
+    new_users = [(key, message) for key, message in zip(raw_keys, raw_users) if key not in seen]
+    for observed in entries[index + 1:]:
+        if observed.get("host") != host or observed.get("gate") != "user_prompt":
+            continue
+        prompt = observed.get("prompt")
+        matched = next(((key, message) for key, message in new_users if message == prompt), None)
+        if matched is not None:
+            users.append(prompt)
+            seen.append(matched[0])
+            new_users.remove(matched)
+    if tuple(users) != tuple(record["messages"]):
+        _save_users(payload, host, tuple(users), tuple(seen))
+    return tuple(users)
 
 
 def _secrets() -> tuple[str, ...]:
@@ -170,7 +227,7 @@ def _note(text: str) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="agent-decisions hook")
-    parser.add_argument("event", choices=("pre_tool_use", "stop", "subagent_stop", "session_start"))
+    parser.add_argument("event", choices=("pre_tool_use", "stop", "subagent_stop", "session_start", "user_prompt_submit"))
     parser.add_argument("--host", required=True, choices=("claude", "codex"))
     args = parser.parse_args(argv)
     if os.environ.get("AGENT_DECISIONS_OFF") == "1":
