@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 import unittest
 
 from agent_decisions import evidence, policy
@@ -13,6 +14,16 @@ def _transcript(users=(), calls=(), brief=None):
 
 
 class EvidenceTest(unittest.TestCase):
+    def test_large_discarded_tool_outputs_do_not_dominate_context_building(self):
+        log = "unrelated historical output " * 80_000
+        calls = [ToolCall(f"old{i}", "Bash", "read unrelated log", log) for i in range(30)]
+        calls.append(ToolCall("latest-check", "Bash", "run request tests", "request tests passed"))
+        started = time.monotonic()
+        bundle = evidence.build(_transcript(["Verify the request interface."], calls), query="request interface")
+        elapsed = time.monotonic() - started
+        self.assertIn("latest-check", [item["id"] for item in bundle["tool_calls_newest_first"]])
+        self.assertLess(elapsed, 1.5)
+
     def test_recent_diagnostic_survives_older_broad_observations(self):
         query = "launcher startup capture stream denial JSON hook"
         old = [ToolCall(f"old{i}", "Read", query, query + "x" * 1_500) for i in range(80)]

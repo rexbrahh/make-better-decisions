@@ -13,6 +13,12 @@ REQUEST = {"decision": "Bob's café: which cache?", "options": [
 
 
 class ClassifyTest(StateTestCase):
+    def test_python_heredoc_can_mention_the_consultation_command_as_data(self):
+        body = "print('the user\\'s ts-decide history')\n"
+        compile(body, "diagnostic", "exec")
+        command = "python3 - <<'PY'\n" + body + "PY\n"
+        self.assertEqual(gates.classify(command), ("other", ""))
+
     def test_whole_command_forms_carry_the_request_intact(self):
         raw = json.dumps(REQUEST, ensure_ascii=False)
         quoted = f"ts-decide {shlex.quote(raw)}"
@@ -32,7 +38,8 @@ class ClassifyTest(StateTestCase):
     def test_ts_decide_inside_a_larger_command_is_misuse(self):
         for command in ("ts-decide '{}' && rm -rf x", "ts-decide '{}'; ls", "ts-decide '{}' | tee out",
                         "ts-decide '{}' > out", "cd /x && ts-decide '{}'", "(ts-decide '{}')",
-                        "ts-decide '{}'\nls", "ts-decide '{}' extra", "ts-decide \"$(cat req.json)\" | cat"):
+                        "ts-decide '{}'\nls", "ts-decide '{}' extra", "ts-decide \"$(cat req.json)\" | cat",
+                        "ts-decide '{}' 'unterminated"):
             with self.subTest(command=command):
                 self.assertEqual(gates.classify(command)[0], "misuse")
 

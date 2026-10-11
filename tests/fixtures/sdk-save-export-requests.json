@@ -1,0 +1,53 @@
+[
+  {
+    "call_id": "call_523e31ba0c9e424ca9d3315e0d2801fa",
+    "timestamp": "2026-10-11T18:41:19.720Z",
+    "request": {
+      "decision": "Which internal API should implement S5 b.2 save/export extraction, preserving existing handler behavior and leaving b.3 shell cut-over for its own step?",
+      "options": [
+        {
+          "id": "per_request",
+          "description": "Use nine named functions in request_save_export.h/.cc with RequestSink and OutputLeaseRef, as the recovered J380 design and existing request_open functions specify."
+        },
+        {
+          "id": "variant_dispatch",
+          "description": "Introduce nine request structs and one variant dispatcher while preserving the same worker validation and submission behavior."
+        }
+      ]
+    }
+  },
+  {
+    "call_id": "call_d494a4dc11814a33bc5d64f2bd016faa",
+    "timestamp": "2026-10-11T18:41:43.493Z",
+    "request": {
+      "decision": "For internal S5 b.2 request drivers, choose the API representation. Implementation inspected: libisf/src/request_open.h and request_open.cc (nine named drivers), libisf/src/request_driver.h (RequestSink and PumpSubmission), app/enginelink/engine_worker_edit_ops.cpp:23-353,886-927 and engine_controller.cpp:1248-1324 (nine save/export/preview/repair handlers). Existing request_open target passed on the builder; evidence .local/sdk-continuation/evidence/request-open-20261011T183548Z/summary.md. J380 design specifies internal extraction with unchanged validation, wire bytes and publication order.",
+      "options": [
+        {
+          "id": "per_request",
+          "description": "Nine named internal functions plus OutputLeaseRef and the existing RequestSink seam, preserving each current handler's parameter list and body order."
+        },
+        {
+          "id": "variant_dispatch",
+          "description": "Nine new request structs and a single variant dispatcher, preserving the same validation and submission behavior."
+        }
+      ]
+    }
+  },
+  {
+    "call_id": "call_037f222d333c4cf3928fdd05b5c22942",
+    "timestamp": "2026-10-11T18:43:52.143Z",
+    "request": {
+      "decision": "How should the nine save/export handlers be represented inside libIsf? Existing helpers are libisf/src/request_driver.h and libisf/src/request_open.h. Existing engine requests are each a named worker function. Required behavior is fixed by tests/app/engine_controller_preview_latency_probe_save_export_classic_tests.h and tests/app/engine_controller_preview_latency_probe_save_export_field_mesh_tests.h. The b.1 baseline/restored runs pass and three deliberate byte/order/refusal defects fail in .local/sdk-continuation/evidence/s5b1-build-retry.log. Fresh existing driver-pattern test passes in .local/sdk-continuation/evidence/request-open-20261011T183548Z/summary.md. All options keep this internal and preserve existing behavior.",
+      "options": [
+        {
+          "id": "named_functions",
+          "description": "One named function per existing handler, using RequestSink and carrying the output lease in OutputLeaseRef."
+        },
+        {
+          "id": "variant",
+          "description": "One dispatcher over a variant of nine new request structs, using RequestSink and carrying the output lease in OutputLeaseRef."
+        }
+      ]
+    }
+  }
+]

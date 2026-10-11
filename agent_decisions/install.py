@@ -586,7 +586,7 @@ def _call_json_rpc(command: List[str], request: Mapping[str, Any], timeout_s: fl
     try:
         if initialize:
             send_and_wait({"id": str(uuid.uuid4()), "method": "initialize",
-                           "params": {"clientInfo": {"name": "agent-decisions-install", "version": "1.0.3"},
+                           "params": {"clientInfo": {"name": "agent-decisions-install", "version": "1.0.4"},
                                       "capabilities": {}}})
         return send_and_wait(request)
     finally:

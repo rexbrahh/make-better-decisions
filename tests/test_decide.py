@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from agent_decisions import gates, jev, policy
 from agent_decisions.transcript import ToolCall, Transcript
@@ -22,6 +23,44 @@ def run(fake, request=REQUEST, **ctx):
 
 
 class DecideTest(StateTestCase):
+    def test_observed_sdk_interface_pattern_supplies_a_selection_basis(self):
+        request = json.loads((Path(__file__).parent / "fixtures" /
+                              "sdk-save-export-requests.json").read_text())[-1]["request"]
+        t = Transcript(("Continue implementing the SDK and preserve existing behavior.",), (), ())
+        fake = FakeJev(pick="named_functions", sufficient=.52, unsupported=.57,
+                       omitted_requirement=.38, missing_option=.26, argued=.16,
+                       pattern_present=.87, follows_pattern_named_functions=.78)
+        outcome = gates.decide(json.dumps(request), make_ctx(t), asker(fake))
+        self.assertEqual(outcome.action, "advisory")
+
+    def test_medium_pattern_match_is_not_binding_for_a_worker(self):
+        result = run(FakeJev(**{**CONFIDENT, "sufficient": .52, "pattern_present": .87,
+                               "follows_pattern_lfu": .78}), agent_id="worker")
+        self.assertEqual(result.action, "gather_evidence")
+
+    def test_medium_pattern_match_does_not_settle_uncertain_user_ownership(self):
+        def ask(state, questions):
+            answers = asker(FakeJev(**{**CONFIDENT, "sufficient": .52, "pattern_present": .87,
+                                      "follows_pattern_lfu": .78}))(state, questions)
+            answers["owner"]["probabilities"] = {"agent": .55, "user": .45}
+            answers["owner"]["confidence"] = .1
+            return answers
+
+        t = Transcript(("decide the cache policy",), (), ())
+        self.assertEqual(gates.decide(json.dumps(REQUEST), make_ctx(t), ask).action, "gather_evidence")
+
+    def test_existing_pattern_cannot_ground_a_pick_that_does_not_follow_it(self):
+        result = run(FakeJev(**{**CONFIDENT, "sufficient": .52, "pattern_present": .95,
+                               "follows_pattern_lfu": .1}))
+        self.assertEqual(result.action, "gather_evidence")
+
+    def test_pattern_reuse_does_not_authorize_missing_required_facts_or_constraints(self):
+        for missing in ("unsupported", "omitted_requirement"):
+            with self.subTest(missing=missing):
+                result = run(FakeJev(**{**CONFIDENT, "sufficient": .52, "pattern_present": .95,
+                                       "follows_pattern_lfu": .96, missing: .95}))
+                self.assertEqual(result.action, "gather_evidence")
+
     def test_existing_helper_omission_is_composed_from_independent_conditions(self):
         result = run(FakeJev(**{**CONFIDENT, "missing_option": .58,
                                "helper_present": .93, "helper_in_options": .1}))

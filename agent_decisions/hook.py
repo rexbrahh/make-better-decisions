@@ -142,7 +142,8 @@ def _load_transcript(payload: dict, host: str) -> transcript.Transcript:
         return transcript.load(main_path, host)
     own = transcript.load(own_path, host)
     main = transcript.load(main_path, host)
-    return replace(own, user_messages=main.user_messages, user_keys=main.user_keys)
+    return replace(own, user_messages=main.user_messages, user_keys=main.user_keys,
+                   question_reply_keys=main.question_reply_keys)
 
 
 def _context(payload: dict, host: str) -> gates.Context:
@@ -183,15 +184,16 @@ def _saved_users(payload: dict, host: str, t: transcript.Transcript, entries: li
              if host != "codex" or not transcript.is_codex_hook_feedback(message)]
     seen = list(record.get("seen_user_keys", ()))
     new_users = [(key, message) for key, message in zip(raw_keys, raw_users) if key not in seen]
-    for observed in entries[index + 1:]:
-        if observed.get("host") != host or observed.get("gate") != "user_prompt":
+    prompts = [entry.get("prompt") for entry in entries[index + 1:]
+               if entry.get("host") == host and entry.get("gate") == "user_prompt"]
+    reply_keys = set(t.question_reply_keys) if host == "codex" and set(seen).intersection(raw_keys) else set()
+    for key, message in new_users:
+        if message in prompts:
+            prompts.remove(message)
+        elif key not in reply_keys:
             continue
-        prompt = observed.get("prompt")
-        matched = next(((key, message) for key, message in new_users if message == prompt), None)
-        if matched is not None:
-            users.append(prompt)
-            seen.append(matched[0])
-            new_users.remove(matched)
+        users.append(message)
+        seen.append(key)
     if tuple(users) != tuple(record["messages"]):
         _save_users(payload, host, tuple(users), tuple(seen))
     return tuple(users)

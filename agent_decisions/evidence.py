@@ -10,7 +10,7 @@ import shlex
 from pathlib import Path
 
 from .policy import CLIP_CHARS, EVIDENCE_CHARS, USER_MESSAGES, state_dir
-from .transcript import Transcript, is_decide
+from .transcript import ToolCall, Transcript, is_decide
 
 REDACTED = "[REDACTED]"
 _SECRETS = (
@@ -43,6 +43,8 @@ _SOURCE_CHARS = CLIP_CHARS
 _MAX_SOURCE_BYTES = 1_000_000
 _MAX_SOURCE_FILES = 8
 _MAX_SOURCE_CANDIDATE_PROBES = 16
+_CONTEXT_METADATA_CHARS = 256  # counts and hook.py's signed-history label
+_MAX_SOURCE_QUERY_TERMS = 16
 
 
 def redact(text: str, secrets: tuple[str, ...] = ()) -> str:
@@ -72,6 +74,33 @@ def clip(text: str, limit: int = CLIP_CHARS) -> str:
     return f"{text[:half]}\n[... {len(text) - 2 * half} characters cut ...]\n{text[-half:]}"
 
 
+def _clip_source(text: str, query: str) -> str:
+    existing = clip(text, _SOURCE_CHARS)
+    if len(text) <= _SOURCE_CHARS:
+        return existing
+    terms = sorted(_terms(clip(query)), key=lambda term: (-len(term), term))[:_MAX_SOURCE_QUERY_TERMS]
+    for term in terms:
+        pattern = r"\b" + re.escape(term) + r"\b"
+        match = re.search(pattern, text, re.I)
+        if match is None:
+            continue
+        if re.search(pattern, existing, re.I):
+            return existing
+        edge = _SOURCE_CHARS // 4
+        width = _SOURCE_CHARS - 2 * edge
+        start = min(max(match.start() - width // 2, edge), len(text) - edge - width)
+        spans = ((0, edge), (start, start + width), (len(text) - edge, len(text)))
+        parts = []
+        end = 0
+        for left, right in spans:
+            if left > end:
+                parts.append(f"\n[... {left - end} characters cut ...]\n")
+            parts.append(text[left:right])
+            end = right
+        return "".join(parts)
+    return existing
+
+
 def build(t: Transcript, secrets: tuple[str, ...] = (), *, query: str = "", cwd=None) -> dict:
     def clean(text: str) -> str:
         return clip(redact(text, secrets))
@@ -96,52 +125,77 @@ def build(t: Transcript, secrets: tuple[str, ...] = (), *, query: str = "", cwd=
 
     selected_users = _select_user_messages(t.user_messages, query, clean)
     chosen_users: dict[int, str] = {}
-    for _idx, text in selected_users:
-        trial = {**chosen_users, _idx: text}
+
+    def include_user(idx: int, text: str) -> None:
+        trial = {**chosen_users, idx: text}
         trial_messages = [trial[idx] for idx in sorted(trial)]
-        if _fits({**bundle, "user_messages": trial_messages}):
-            chosen_users = trial
+        if _fits({**bundle, "user_messages": trial_messages}, reserved_chars=_CONTEXT_METADATA_CHARS):
+            chosen_users[idx] = text
             bundle["user_messages"] = trial_messages
-    metadata["user_messages_included"] = len(bundle["user_messages"])
-    metadata["user_messages_omitted"] = max(0, len(t.user_messages) - len(bundle["user_messages"]))
+
+    # Keep the original constraint and current instruction ahead of optional history.
+    for idx, text in sorted(selected_users):
+        if idx in (0, len(t.user_messages) - 1):
+            include_user(idx, text)
 
     if t.brief is not None:
         brief = clean(t.brief)
         trial = {**bundle, "brief": brief, "brief_trust": "unverified_parent_agent_brief"}
-        if _fits(trial):
+        if _fits(trial, reserved_chars=_CONTEXT_METADATA_CHARS):
             bundle.update({"brief": brief, "brief_trust": "unverified_parent_agent_brief"})
         else:
             metadata["brief_omitted"] = 1
 
-    selected_calls = _select_tool_calls(usable_calls, query, clean)
+    selected_calls = _select_tool_calls(usable_calls, query)
     chosen_calls: dict[int, dict] = {}
 
-    def include_call(idx: int, item: dict) -> None:
+    def include_call(idx: int, call: ToolCall) -> None:
+        projected = {"id": call.id, "tool": call.name, "input": clip(call.input),
+                     "output": clip(call.output), "trust": "unverified_tool_observation"}
+        projected_calls = [*bundle["tool_calls_newest_first"], projected]
+        if not _fits({**bundle, "tool_calls_newest_first": projected_calls},
+                     reserved_chars=_CONTEXT_METADATA_CHARS):
+            return
+        # Redact complete retained texts before clipping, so boundary fragments cannot expose secrets.
+        item = {**projected, "input": clean(call.input), "output": clean(call.output)}
         trial = {**chosen_calls, idx: item}
         trial_calls = [trial[index] for index in sorted(trial, reverse=True)]
-        if _fits({**bundle, "tool_calls_newest_first": trial_calls}):
+        if _fits({**bundle, "tool_calls_newest_first": trial_calls}, reserved_chars=_CONTEXT_METADATA_CHARS):
             chosen_calls.update({idx: item})
             bundle["tool_calls_newest_first"] = trial_calls
 
-    # Retain recent checks before source reads can consume the entire budget.
-    recent_calls = sorted(selected_calls, key=lambda item: item[0], reverse=True)[:2]
-    for idx, item in recent_calls:
-        include_call(idx, item)
-
-    source_items, source_omitted, source_too_large = _source_files(t, query, cwd, secrets)
+    source_items, source_omitted, source_too_large, scan_limited = _source_files(t, query, cwd, secrets)
     metadata["source_files_candidates"] = len(source_items) + source_omitted + source_too_large
     if source_items or cwd is not None:
         bundle["source_files"] = []
-    for item in source_items:
+
+    def include_source(item: dict) -> None:
+        nonlocal source_omitted
         trial_items = [*bundle.get("source_files", []), item]
-        if _fits({**bundle, "source_files": trial_items}):
+        if _fits({**bundle, "source_files": trial_items}, reserved_chars=_CONTEXT_METADATA_CHARS):
             bundle["source_files"] = trial_items
         else:
             source_omitted += 1
+
+    # Source discovery ranks the requested helper first. Older history must not displace it.
+    for item in source_items[:1]:
+        include_source(item)
+    recent_calls = sorted(selected_calls, key=lambda item: item[0], reverse=True)[:2]
+    for idx, item in recent_calls:
+        include_call(idx, item)
+    for item in source_items[1:]:
+        include_source(item)
     metadata["source_files_included"] = len(bundle.get("source_files", []))
     metadata["source_files_omitted"] = source_omitted
     metadata["source_files_too_large"] = source_too_large
+    metadata["source_files_omitted_is_lower_bound"] = scan_limited
     metadata["source_files_truncated"] = sum(1 for item in bundle.get("source_files", []) if item.get("truncated"))
+
+    for idx, text in selected_users:
+        if idx not in chosen_users:
+            include_user(idx, text)
+    metadata["user_messages_included"] = len(bundle["user_messages"])
+    metadata["user_messages_omitted"] = max(0, len(t.user_messages) - len(bundle["user_messages"]))
 
     for _idx, item in selected_calls:
         if _idx not in chosen_calls:
@@ -152,8 +206,8 @@ def build(t: Transcript, secrets: tuple[str, ...] = (), *, query: str = "", cwd=
     return bundle
 
 
-def _fits(bundle: dict) -> bool:
-    return len(json.dumps(bundle, sort_keys=True)) <= EVIDENCE_CHARS
+def _fits(bundle: dict, *, reserved_chars: int = 0) -> bool:
+    return len(json.dumps(bundle, sort_keys=True)) + reserved_chars <= EVIDENCE_CHARS
 
 
 def _trim_to_budget(bundle: dict) -> None:
@@ -212,55 +266,54 @@ def _select_user_messages(messages: tuple[str, ...], query: str, clean) -> list[
     return [(idx, text) for _group, _overlap, _constraint, _recent, idx, text in ranked]
 
 
-def _select_tool_calls(calls: list, query: str, clean) -> list[tuple[int, dict]]:
+def _select_tool_calls(calls: list[ToolCall], query: str) -> list[tuple[int, ToolCall]]:
     query_terms = _terms(query or "")
     ranked = []
     for idx, call in enumerate(calls):
-        searchable = f"{call.name}\n{call.input}\n{call.output}"
+        searchable = f"{call.name}\n{clip(call.input)}\n{clip(call.output)}"
         score = _text_score(searchable, query_terms)
         if not query_terms:
             score += idx
-        item = {
-            "id": call.id,
-            "tool": call.name,
-            "input": clean(call.input),
-            "output": clean(call.output),
-            "trust": "unverified_tool_observation",
-        }
-        ranked.append((score, idx, item))
+        ranked.append((score, idx, call))
     ranked.sort(key=lambda row: (-row[0], -row[1]))
-    return [(idx, item) for _score, idx, item in ranked]
+    return [(idx, call) for _score, idx, call in ranked]
 
 
-def _source_files(t: Transcript, query: str, cwd, secrets: tuple[str, ...]) -> tuple[list[dict], int, int]:
+def _source_files(t: Transcript, query: str, cwd, secrets: tuple[str, ...]) -> tuple[list[dict], int, int, bool]:
     if cwd is None:
-        return [], 0, 0
+        return [], 0, 0, False
     try:
         root = Path(cwd).resolve(strict=True)
     except OSError:
-        return [], 0, 0
+        return [], 0, 0, False
 
     candidates: dict[str, Path] = {}
-    for name in _RULE_FILES:
-        path = root / name
-        if path.is_file():
-            candidates[name] = path
-    ranked_candidates, omitted = _ranked_path_candidates(t, query)
+    requested = set(_path_candidates((query,)))
+    requested_paths: set[str] = set()
+    ranked_candidates, omitted, scan_limited = _ranked_path_candidates(t, query)
     for raw in ranked_candidates:
         path = _resolve_source(root, raw)
         if path is not None:
             rel = path.relative_to(root).as_posix()
             candidates.setdefault(rel, path)
+            if raw in requested:
+                requested_paths.add(rel)
         else:
             omitted += 1
+    prioritized = {rel: path for rel, path in candidates.items() if rel in requested_paths}
+    for name in _RULE_FILES:
+        path = root / name
+        if path.is_file():
+            prioritized.setdefault(name, path)
+    prioritized.update(candidates)
 
     items: list[dict] = []
     too_large = 0
-    for rel, path in candidates.items():
+    for rel, path in prioritized.items():
         if len(items) >= _MAX_SOURCE_FILES:
             omitted += 1
             continue
-        item, reason = _read_source(root, rel, path, secrets)
+        item, reason = _read_source(root, rel, path, secrets, query=query)
         if item is None:
             if reason == "too_large":
                 too_large += 1
@@ -268,40 +321,41 @@ def _source_files(t: Transcript, query: str, cwd, secrets: tuple[str, ...]) -> t
                 omitted += 1
         else:
             items.append(item)
-    return items, omitted, too_large
+    return items, omitted, too_large, scan_limited
 
 
-def _ranked_path_candidates(t: Transcript, query: str) -> tuple[list[str], int]:
+def _ranked_path_candidates(t: Transcript, query: str) -> tuple[list[str], int, bool]:
     turn_ids = {call.id for call in t.turn_calls}
-    current = [call for call in t.tool_calls if call.id in turn_ids]
-    older = [call for call in t.tool_calls if call.id not in turn_ids]
+    terms = _terms(query)
+    calls = [(index, call) for index, call in enumerate(t.tool_calls) if not is_decide(call)]
+    calls.sort(key=lambda item: (_text_score(clip(item[1].input), terms), item[0]), reverse=True)
+    current = [call for _index, call in calls if call.id in turn_ids]
+    older = [call for _index, call in calls if call.id not in turn_ids]
     buckets = [
         (0, [query]),
         (1, [call.input for call in current]),
-        (2, t.user_messages),
+        (2, reversed(t.user_messages)),
         (3, [call.input for call in older]),
         (4, [call.output for call in current]),
         (5, [call.output for call in older]),
     ]
-    ranked: list[tuple[int, int, str]] = []
+    ranked: list[str] = []
     seen: set[str] = set()
-    order = 0
-    for priority, texts in buckets:
+    for _priority, texts in buckets:
         for raw in _path_candidates(texts):
             if raw in seen:
                 continue
+            if len(ranked) == _MAX_SOURCE_CANDIDATE_PROBES:
+                return ranked, 1, True
             seen.add(raw)
-            ranked.append((priority, order, raw))
-            order += 1
-    ranked.sort()
-    selected = [raw for _priority, _order, raw in ranked[:_MAX_SOURCE_CANDIDATE_PROBES]]
-    return selected, max(0, len(ranked) - len(selected))
+            ranked.append(raw)
+    return ranked, 0, False
 
 
-def _path_candidates(texts) -> list[str]:
-    found: list[str] = []
+def _path_candidates(texts):
     seen: set[str] = set()
     for text in texts:
+        text = clip(text)
         try:
             structured = json.loads(text)
         except (ValueError, TypeError):
@@ -310,7 +364,7 @@ def _path_candidates(texts) -> list[str]:
             cleaned = _clean_path_candidate(value)
             if "\n" not in cleaned and len(cleaned) <= 1_024 and _looks_path_like(cleaned) and cleaned not in seen:
                 seen.add(cleaned)
-                found.append(cleaned)
+                yield cleaned
         for part in _string_values(text):
             try:
                 quoted_tokens = shlex.split(part)
@@ -320,18 +374,17 @@ def _path_candidates(texts) -> list[str]:
                 cleaned = _clean_path_candidate(token)
                 if " " in cleaned and "\n" not in cleaned and _looks_path_like(cleaned) and cleaned not in seen:
                     seen.add(cleaned)
-                    found.append(cleaned)
+                    yield cleaned
             for candidate in _PATH_TOKEN.findall(part):
                 cleaned = _clean_path_candidate(candidate)
                 if cleaned and cleaned not in seen:
                     seen.add(cleaned)
-                    found.append(cleaned)
+                    yield cleaned
             for token in re.split(r"\s+", part):
                 cleaned = _clean_path_candidate(token)
                 if cleaned and cleaned not in seen and _looks_path_like(cleaned):
                     seen.add(cleaned)
-                    found.append(cleaned)
-    return found
+                    yield cleaned
 
 
 def _string_values(text):
@@ -357,7 +410,7 @@ def _walk_strings(value):
 
 
 def _clean_path_candidate(raw: str) -> str:
-    value = raw.strip().strip("\"'`“”‘’()[]{}<>,;")
+    value = raw.strip().strip("\"'`“”‘’()[]{}<>,;").rstrip(".")
     value = re.sub(r":\d+(?::\d+)?$", "", value)
     if "://" in value or not value or value in (".", ".."):
         return ""
@@ -450,7 +503,7 @@ def _same_source_observation(first, second) -> bool:
     )
 
 
-def _read_source(root: Path, rel: str, path: Path, secrets: tuple[str, ...]):
+def _read_source(root: Path, rel: str, path: Path, secrets: tuple[str, ...], *, query: str = ""):
     try:
         initial = path.stat()
     except OSError:
@@ -493,7 +546,7 @@ def _read_source(root: Path, rel: str, path: Path, secrets: tuple[str, ...]):
         return None, "binary"
     text = data.decode("utf-8", errors="replace")
     truncated = len(text) > _SOURCE_CHARS
-    text = clip(redact(text, secrets), _SOURCE_CHARS)
+    text = _clip_source(redact(text, secrets), query)
     return {
         "path": rel,
         "sha256": hashlib.sha256(data).hexdigest(),

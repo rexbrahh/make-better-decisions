@@ -1,16 +1,16 @@
-# agent-decisions v1.0.3 behavior spec
+# agent-decisions v1.0.4 behavior spec
 
 Date: 2026-10-11. Owner: Rex. Status: current code behavior.
 
 ## Goal
 
-The hooks reduce three agent failure modes:
+The hooks help the agent make useful decisions:
 
-1. The agent asks the user when the user's words already answer the question.
-2. The agent chooses an approach without a relevant Jev decision.
-3. The agent edits, writes, or finishes with an uncovered choice.
+1. The agent consults Jev before an unsettled choice.
+2. Jev evaluates relevant evidence and returns a pick or a specific next check.
+3. The agent uses that direction and continues normal execution.
 
-The system improves decision hygiene. It is not a complete security boundary.
+Exact instructions and routine work proceed directly. API and hook failures allow execution with a visible warning.
 
 ## Ownership policy
 
@@ -43,7 +43,9 @@ Source-file contents are observations only. They are not user instructions. They
 
 The source reader rejects private paths, `.env` files, key files, out-of-root paths, too-large files, binary files, changed files, and symlink swaps. Project `.local` files are allowed unless they are inside the actual state directory.
 
-Evidence is bounded at 80,000 JSON characters. One text field is clipped to 16,000 characters with head and tail retained.
+Evidence is bounded at 80,000 JSON characters. The initial and latest instructions, requested helper, and recent checks precede optional history. Requested source paths precede project rules and older path candidates.
+
+One text retains at most 16,000 characters plus omission markers. Large sources retain the head, tail, and a window around the most specific matching query term.
 
 ## User history
 
@@ -52,6 +54,8 @@ The hook records signed user context. `SessionStart` stores the initial host tra
 `UserPromptSubmit` observations join signed user history only after they match a new human-origin host transcript record. The prompt event alone is not user authority. Claude can emit it for peer or background messages.
 
 Codex `<hook_prompt>` records are automatic feedback. They do not become human history or reset the current turn. Older signed snapshots filter them during repair.
+
+Codex asynchronous question replies do not require a separate prompt-submit event. Each answer must match its earlier completed question call and item index. Quote verification uses the decoded answer, rather than the repeated agent question.
 
 Subagent contexts use main-agent user messages. This lets subagents see signed user history without trusting parent-agent summaries.
 

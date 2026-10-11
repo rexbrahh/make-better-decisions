@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .policy import MIN_FACT_CHARS
-from .transcript import Transcript
+from .transcript import Transcript, question_reply_words
 
 
 def normalize(text: str) -> str:
@@ -11,7 +11,8 @@ def normalize(text: str) -> str:
 
 
 def verify(facts: list[str], t: Transcript) -> tuple[list[str], list[str]]:
-    corpus = "\0".join(normalize(s) for s in t.user_messages)
+    corpus = "\0".join(normalize(words) for message in t.user_messages
+                       for words in (question_reply_words(message) or (message,)))
     verified: list[str] = []
     unverified: list[str] = []
     for fact in facts:

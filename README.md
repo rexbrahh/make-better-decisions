@@ -1,6 +1,8 @@
-# make-better-decisions v1.0.3
+# make-better-decisions v1.0.4
 
 `agent-decisions` adds hook checks for Claude Code and Codex. The hooks ask TypeSafe Jev before an agent chooses an approach, changes files, asks the user a question, or finishes with an uncovered choice.
+
+The goal is useful consultation: the agent supplies a real choice, Jev evaluates current evidence, and the agent uses the direction to continue. Exact instructions and routine operations do not need invented choices. API failures produce a visible warning and allow execution to continue.
 
 The hook builds the evidence. The agent cannot choose the source set by itself.
 
@@ -94,11 +96,17 @@ The hook supplies these evidence groups:
 
 `UserPromptSubmit` is not user authority by itself. The hook adds it to signed user history only after it matches a new human-origin host transcript record. This matters because Claude can emit prompt-submit events for peer or background messages.
 
+Codex question replies can arrive during a running turn without `UserPromptSubmit`. The hook captures those host records after matching every reply to its earlier completed question call, question text, and item index. It preserves the saved history when the host transcript is replaced. Quote verification decodes the answers, including quotes and line breaks. The agent's repeated question text is not a user quotation.
+
 Source-file contents are observations. They are not proof that statements inside those files are true.
 
-The bundle reserves space for the two newest tool observations before source reads. Older relevant observations use the remaining space.
+The bundle keeps the initial and latest user instructions, the requested helper, and the two newest tool observations before optional history. Older observations use the remaining space.
+
+Source discovery prioritizes requested paths, then project rule files, then other observed paths. It stops at 16 candidate probes and bounds each scanned text. Large sources retain the head, tail, and a window around the most specific matching query term. If discovery stops early, `source_files_omitted_is_lower_bound` marks the omission count as a lower bound.
 
 Jev questions check one condition at a time. Code combines the answers. A decision needs an observed selection basis and no missing required fact or constraint. This follows [TypeSafe's atomic-question guidance](https://docs.typesafe.ai/introduction#atomic-questions-composed-in-code).
+
+An observed interface or data-flow pattern can provide a selection basis when the chosen option follows it. Pattern presence requires 0.8. A main-agent advisory uses the existing 0.5 follow threshold only when agent ownership is at least 0.8; worker bindings retain the 0.8 follow threshold. Missing facts, constraints, options, and user ownership still gate the result.
 
 A completed decision must have both records:
 
@@ -160,6 +168,16 @@ These hooks are not a universal proof boundary. They do not protect against a sa
 Codex GUI and Codex subagent identity boundaries are not verified.
 
 ## Tests
+
+Release verification uses the observed peer workflows. A successful consultation must give useful direction, and ordinary execution must continue.
+
+| Check | Pass condition |
+|---|---|
+| Honest consultation | A native peer makes a real API call before an unsettled choice and reports the actual verdict. |
+| SDK answer and direction | The exact host question reply is accepted. The save/export choice gets a usable verdict. |
+| E2E evidence follow-up | The requested helper reaches Jev. Reading it resolves the request or produces a different justified next step. |
+| Routine work | Reads, diagnostics, tests, and exact instructions proceed without unnecessary consultation. |
+| API failure | The existing timeout check emits a warning and allows normal execution within the configured deadline. |
 
 Run unit tests with:
 

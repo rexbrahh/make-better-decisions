@@ -8,6 +8,8 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
+from .policy import QUESTION_TOOLS
+
 # Codex records its own context as user messages; these prefixes mark them.
 _CODEX_INJECTED = (
     "# AGENTS.md instructions",
@@ -42,12 +44,61 @@ class Transcript:
     last_assistant_text: str = ""
     brief: str | None = None  # a subagent's task, written by its parent agent
     user_keys: tuple[str, ...] = ()  # host record identities, including timestamps when present
+    question_reply_keys: tuple[str, ...] = ()  # host replies matched to earlier completed questions
 
     @property
     def turn_key(self) -> str:
         latest = self.user_messages[-1] if self.user_messages else (self.brief or "")
         seed = f"{len(self.user_messages)}\0{latest}".encode()
         return hashlib.sha256(seed).hexdigest()[:16]
+
+
+def _question_reply_items(text: str) -> list[dict]:
+    prefix, suffix = "<send_user_message_question_reply>", "</send_user_message_question_reply>"
+    text = text.strip()
+    if not text.startswith(prefix) or not text.endswith(suffix):
+        return []
+    try:
+        replies = json.loads(text[len(prefix):-len(suffix)])
+    except ValueError:
+        return []
+    if not isinstance(replies, list) or not replies:
+        return []
+    if not all(isinstance(reply, dict) and all(isinstance(reply.get(key), str)
+                                             for key in ("questionItemId", "question", "answer"))
+               for reply in replies):
+        return []
+    return replies
+
+
+def question_reply_words(text: str) -> tuple[str, ...]:
+    """Only decoded answers are human words; the envelope also repeats the agent's question."""
+    return tuple(reply["answer"] for reply in _question_reply_items(text))
+
+
+def _codex_question_reply(text: str, calls: tuple[ToolCall, ...]) -> bool:
+    replies = _question_reply_items(text)
+    if not replies:
+        return False
+    questions = {call.id: call for call in calls if call.name in QUESTION_TOOLS and call.output}
+    for reply in replies:
+        try:
+            identity = json.loads(reply["questionItemId"])
+            if not isinstance(identity, list) or len(identity) != 3:
+                return False
+            name, call_id, index = identity
+            if not isinstance(call_id, str) or type(index) is not int or index < 0:
+                return False
+            call = questions.get(call_id)
+            if call is None or name != call.name:
+                return False
+            request = json.loads(call.input)
+            question = request["questions"][index]
+            if reply["question"] != question.get("title", question.get("question")):
+                return False
+        except (ValueError, TypeError, KeyError, IndexError, AttributeError):
+            return False
+    return True
 
 
 def is_decide(call: ToolCall) -> bool:
@@ -61,11 +112,17 @@ def is_decide(call: ToolCall) -> bool:
         command = command[2] if len(command) == 3 and command[1] in ("-c", "-lc") else shlex.join(command)
     if not isinstance(command, str):
         return False
+    lexer = shlex.shlex(command, posix=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
     try:
-        tokens = shlex.split(command)
+        first = next(lexer, None)
+        if first is None or (Path(first).name != "ts-decide" and first not in ("printf", "cat")):
+            return False  # ordinary commands do not need their script bodies tokenized
+        tokens = [first, *lexer]
     except ValueError:
         return False
-    return bool(tokens) and (Path(tokens[0]).name == "ts-decide" or
+    return (Path(first).name == "ts-decide" or
                              len(tokens) == 3 and tokens[0] == "printf" and tokens[1] == "%s\\n"
                              and tokens[2].startswith(("ts-decide verdict:", "ts-decide: decision unverified (")) or
                              len(tokens) == 2 and tokens[0] == "cat" and Path(tokens[1]).parent.name == "verdicts")
@@ -102,6 +159,7 @@ class _Builder:
     def __init__(self):
         self.users: list[str] = []
         self.user_keys: list[str] = []
+        self.question_reply_keys: list[str] = []
         self.user_occurrences: dict[str, int] = {}
         self.calls: list[tuple[str, str, str]] = []
         self.call_ids: set[str] = set()
@@ -110,12 +168,15 @@ class _Builder:
         self.last_text = ""
         self.brief: str | None = None
 
-    def user(self, text: str, record: dict) -> None:
+    def user(self, text: str, record: dict, *, question_reply: bool = False) -> None:
         self.users.append(text)
         key = hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()
         count = self.user_occurrences.get(key, 0) + 1
         self.user_occurrences[key] = count
-        self.user_keys.append(f"{key}:{count}")
+        identity = f"{key}:{count}"
+        self.user_keys.append(identity)
+        if question_reply:
+            self.question_reply_keys.append(identity)
         self.turn_start = len(self.calls)
 
     def parent(self, text: str) -> None:
@@ -139,7 +200,7 @@ class _Builder:
     def build(self) -> Transcript:
         calls = tuple(ToolCall(i, n, inp, self.outputs.get(i, "")) for i, n, inp in self.calls)
         return Transcript(tuple(self.users), calls, calls[self.turn_start:], self.last_text,
-                          self.brief, tuple(self.user_keys))
+                          self.brief, tuple(self.user_keys), tuple(self.question_reply_keys))
 
 
 def _claude(records: list[dict]) -> Transcript:
@@ -199,7 +260,12 @@ def _codex(records: list[dict]) -> Transcript:
             if p.get("role") == "user" and text and not text.lstrip().startswith(_CODEX_INJECTED) \
                     and not is_codex_hook_feedback(text) \
                     and (p.get("origin") or {}).get("kind", "human") == "human":
-                b.user(text, r)
+                questions = tuple(ToolCall(i, n, inp, b.outputs.get(i, "")) for i, n, inp in b.calls
+                                  if n in QUESTION_TOOLS)
+                matched_reply = _codex_question_reply(text, questions)
+                if text.lstrip().startswith("<send_user_message_question_reply") and not matched_reply:
+                    continue
+                b.user(text, r, question_reply=matched_reply)
             elif p.get("role") == "assistant" and text:
                 b.last_text = text
         elif kind == "function_call":

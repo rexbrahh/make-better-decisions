@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from unittest import mock
 
 from agent_decisions import transcript
 from agent_decisions.transcript import ToolCall, Transcript
@@ -79,6 +80,47 @@ class ClaudeTranscriptTest(StateTestCase):
         self.assertTrue(transcript.is_decide(ToolCall("a", "Bash", '{"command": "ts-decide \'{}\'"}')))
         self.assertTrue(transcript.is_decide(ToolCall("b", "Bash", '{"command": "cat /s/verdicts/b.txt"}')))
         self.assertFalse(transcript.is_decide(ToolCall("c", "Bash", '{"command": "ls"}')))
+
+
+class DecideCommandTest(StateTestCase):
+    def test_observed_codex_heredoc_does_not_scan_the_script_body(self):
+        # The 520 MB E2E transcript records long scripts as CommandExecution events.
+        command = "python3 - <<'PY'\n" + "print('local diagnostic')\n" * 2_000 + "PY\n"
+        record = {"type": "event_msg", "payload": {"type": "item_completed", "item": {
+            "type": "CommandExecution", "id": "exec-heredoc", "command": ["/bin/zsh", "-c", command],
+            "aggregated_output": "diagnostic complete", "status": "completed"}}}
+        parsed = transcript.load(write_jsonl(self.dir, "heredoc.jsonl", [record]), "codex")
+        lexers = []
+        lexer_factory = transcript.shlex.shlex
+
+        def track_lexer(*args, **kwargs):
+            lexer = lexer_factory(*args, **kwargs)
+            lexers.append(lexer)
+            return lexer
+
+        with mock.patch.object(transcript.shlex, "shlex", side_effect=track_lexer):
+            self.assertFalse(transcript.is_decide(parsed.tool_calls[0]))
+        self.assertEqual(len(lexers), 1)
+        self.assertLessEqual(lexers[0].instream.tell(), len("python3 "))
+
+    def test_candidates_keep_full_validation_and_exact_transport_matching(self):
+        cases = [
+            ("'/plugin with spaces/bin/ts-decide' <<'EOF'\n{}\nEOF", True),
+            ("/plugin/bin/ts-decide 'unterminated", False),
+            ("printf '%s\\n' 'ts-decide verdict: ADVISORY'", True),
+            ("printf '%s\\n' 'ts-decide: decision unverified (timeout)'", True),
+            ("printf '%s\\n' 'ts-decide verdict: ADVISORY' extra", False),
+            ("cat '/state with spaces/verdicts/receipt.txt'", True),
+            ("cat /state/verdicts/receipt.txt extra", False),
+            ("cat /state/verdicts/receipt.txt 'unterminated", False),
+            ("python3 - <<'PY'\nprint('ts-decide verdict: ADVISORY')\nPY", False),
+            ("grep source.py # ts-decide", False),
+            ("", False),
+        ]
+        for command, expected in cases:
+            with self.subTest(command=command):
+                call = ToolCall("call", "exec_command", json.dumps({"cmd": command}))
+                self.assertEqual(transcript.is_decide(call), expected)
 
 
 class CodexTranscriptTest(StateTestCase):

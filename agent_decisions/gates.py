@@ -133,6 +133,10 @@ def _decide_questions(options: dict[str, str]) -> dict:
             "the options for `decision`?",
             "A user requirement or observed behavior gives a reason to select an option.",
             "The context gives no observed basis for selecting an option."),
+        "pattern_present": _noul(
+            "Does current source in `evidence` show an interface or data-flow pattern applicable to `decision`?",
+            "Observed implementation shows an existing pattern for this kind of operation.",
+            "No applicable implementation pattern was observed. A proposal or an assertion about a design is not an implementation."),
         "unsupported": _noul(
             "Does selecting an option depend on an implementation fact absent from `evidence`? "
             "`facts` contains verified user quotations. `evidence.source_files` contains files read by the "
@@ -176,6 +180,11 @@ def _decide_questions(options: dict[str, str]) -> dict:
         "owner": _owner_question("`decision`"),
     }
     for option_id, description in options.items():
+        questions[f"follows_pattern_{option_id}"] = _noul(
+            f"Assume current source shows a pattern applicable to `decision`: does this operation follow "
+            f"that observed pattern? {json.dumps(description)}",
+            "It uses the observed interface or data-flow organization.",
+            "It introduces a different organization. General desirability does not establish that it follows the pattern.")
         questions[f"specified_{option_id}"] = _noul(
             f"Do the captured user instructions prescribe this operation for `decision`: {json.dumps(description)}?",
             "A user instruction directly prescribes this operation. Equivalent behavior counts when wording differs.",
@@ -211,6 +220,9 @@ def _verdict(action: str, decision: str, answers: dict, unverified: list[str], r
     if unverified:
         lines.append("unverified claims (not verified as the user's words): "
                      + "; ".join(json.dumps(f, ensure_ascii=False) for f in unverified))
+    if "pattern_present" in answers:
+        lines.append(f"observed_pattern {answers['pattern_present']['noul']:.2f}  "
+                     f"pick_follows_pattern {answers.get(f'follows_pattern_{pick}', {}).get('noul', 0.0):.2f}")
     lines.append("next: " + _NEXT[action].format(pick=pick, reasons=", ".join(reasons), n=refusals + 1,
                                                  cap=REFUSAL_CAP))
     if action == "gather_evidence":
@@ -251,6 +263,12 @@ def decide(raw: str, ctx: Context, ask: Ask) -> Outcome:
     prescribed = {option_id for option_id in options if answers[f"specified_{option_id}"]["noul"] >= BIND_AT}
     answers["exact_operation"] = {"type": "noul", "noul":
         answers.get(f"specified_{pick}", {}).get("noul", 0.0)}
+    pattern_follow_at = BIND_AT
+    if ctx.agent_id is None and answers["owner"]["probabilities"].get("agent", 0.0) >= BIND_AT:
+        pattern_follow_at = FOLLOW_AT  # advisory reuse leaves the engineering judgment with the main agent
+    pattern_basis = answers["pattern_present"]["noul"] >= BIND_AT \
+        and answers.get(f"follows_pattern_{pick}", {}).get("noul", 0.0) >= pattern_follow_at
+    has_basis = answers["sufficient"]["noul"] >= BIND_AT or pattern_basis
     reasons = [name for name, hit in (("missing_option", answers["missing_option"]["noul"] >= REFUSE_AT),
                                       ("missing_existing_helper", not prescribed
                                        and answers["helper_present"]["noul"] >= BIND_AT
@@ -262,7 +280,7 @@ def decide(raw: str, ctx: Context, ask: Ask) -> Outcome:
     user_owned = answers["owner"]["probabilities"].get("user", 0.0) >= BIND_AT
     if user_owned and reasons == ["none_fit"]:
         reasons = []  # the user chooses; an option the agent left out is theirs to name
-    elif reasons == ["none_fit"] and (answers["sufficient"]["noul"] < BIND_AT
+    elif reasons == ["none_fit"] and (not has_basis
             or max(answers["unsupported"]["noul"], answers["omitted_requirement"]["noul"]) >= STOP_AT):
         reasons = []  # missing context needs an observation, not another list of options
     if reasons:
@@ -272,7 +290,7 @@ def decide(raw: str, ctx: Context, ask: Ask) -> Outcome:
         action = "routine"
     elif user_owned:
         action = "ask_user"
-    elif answers["sufficient"]["noul"] < BIND_AT \
+    elif not has_basis \
             or max(answers["unsupported"]["noul"], answers["omitted_requirement"]["noul"]) >= STOP_AT \
             or pick == NONE_FIT:
         action = "gather_evidence"
@@ -302,16 +320,19 @@ def classify(command: str) -> tuple[str, str]:
     heredoc = _HEREDOC.fullmatch(command.replace("\r\n", "\n"))
     if heredoc:
         return "decide", heredoc[3]
+    tokens = []
+    quote_error = False
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
-        tokens = list(lexer)
+        for token in lexer:
+            tokens.append(token)
     except ValueError:  # unbalanced quotes
-        return ("misuse", "") if "ts-decide" in command else ("other", "")
+        quote_error = True  # interpreter data can use quoting that is not shell syntax
     starts = [i for i in range(len(tokens)) if i == 0 or set(tokens[i - 1]) <= _PUNCTUATION]
     if not any(os.path.basename(tokens[i]) == "ts-decide" for i in starts):
         return "other", ""
-    if len(tokens) == 2 and os.path.basename(tokens[0]) == "ts-decide":
+    if not quote_error and len(tokens) == 2 and os.path.basename(tokens[0]) == "ts-decide":
         return "decide", tokens[1]
     return "misuse", ""
 

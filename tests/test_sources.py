@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
+from pathlib import Path
 from unittest import mock
 
 from agent_decisions import evidence, policy
@@ -11,6 +13,108 @@ from tests.helpers import StateTestCase
 
 
 class SourceObservationTest(StateTestCase):
+    def test_e2e_helper_in_the_middle_keeps_head_tail_hash_and_redaction(self):
+        symbol = "NumericalPolicyResolutionInputJson"
+        secret = "sk-" + "q" * 40
+        text = "HEAD\n" + "x" * 8_995 + secret + "x" * (13_029 - 9_000 - len(secret))
+        text += f"\nvoid {symbol}() {{ serialize_inputs(); }}\n" + "y" * 32_000 + "\nTAIL"
+        path = self.dir / "protocol_adapter.cc"
+        path.write_text(text)
+
+        bundle = evidence.build(Transcript(("Inspect the serialization helper.",), (), ()),
+                                secrets=(secret,), query=f"Inspect {symbol} in protocol_adapter.cc.", cwd=self.dir)
+
+        item = bundle["source_files"][0]
+        self.assertIn(symbol, item["text"])
+        self.assertTrue(item["text"].startswith("HEAD\n"))
+        self.assertTrue(item["text"].endswith("\nTAIL"))
+        self.assertNotIn(secret, item["text"])
+        self.assertNotIn("q" * 20, item["text"])
+        self.assertEqual(item["sha256"], hashlib.sha256(text.encode()).hexdigest())
+        self.assertTrue(item["truncated"])
+        self.assertLessEqual(len(item["text"]), policy.CLIP_CHARS + 100)
+
+    def test_project_rules_precede_optional_old_paths_after_requested_helper(self):
+        (self.dir / "AGENTS.md").write_text("Preserve all compatibility constraints.\n")
+        (self.dir / "helper.cc").write_text("void SerializationHelper();\n")
+        calls = []
+        for index in range(8):
+            name = f"old_{index}.cc"
+            (self.dir / name).write_text("void OlderHelper();\n")
+            calls.append(ToolCall(str(index), "Read", json.dumps({"file_path": name})))
+        bundle = evidence.build(Transcript(("Inspect the requested helper.",), tuple(calls), ()),
+                                query="Inspect helper.cc.", cwd=self.dir)
+        paths = [item["path"] for item in bundle["source_files"]]
+        self.assertEqual(paths[:2], ["helper.cc", "AGENTS.md"])
+        self.assertEqual(len(paths), evidence._MAX_SOURCE_FILES)
+
+    def test_e2e_helper_and_recent_check_survive_large_user_history(self):
+        # The native E2E follow-up supplied this worktree path, but retained no observations.
+        relative = ".worktrees/workflow-v1-review-corpus-20261010/app/editing/protocol_adapter.cc"
+        helper = self.dir / relative
+        helper.parent.mkdir(parents=True)
+        helper.write_text("void NumericalPolicyResolutionInputJson();\n" + "// helper detail\n" * 3_000)
+        original = "Preserve portable coverage and the existing adapter interface."
+        latest = "Read the implementation helper before choosing the coverage repair."
+        older = tuple("Constraint: preserve the adapter behavior. " + "x" * 8_000 for _ in range(100))
+        check = ToolCall("helper-read", "Bash", f"read {relative}", "serialization digest check\n" + "y" * 8_000)
+        t = Transcript((original, *older, latest), (check,), (check,))
+
+        bundle = evidence.build(t, query=f"NumericalPolicyResolutionInputJson helper: {relative}.", cwd=self.dir)
+        bundle["metadata"]["user_history_source"] = "signed_host_context"
+        evidence._trim_to_budget(bundle)
+
+        self.assertEqual(bundle["user_messages"][0], original)
+        self.assertEqual(bundle["user_messages"][-1], latest)
+        self.assertIn(relative, [item["path"] for item in bundle["source_files"]])
+        self.assertIn("helper-read", [item["id"] for item in bundle["tool_calls_newest_first"]])
+        self.assertGreater(bundle["metadata"]["user_messages_omitted"], 0)
+        self.assertLessEqual(len(json.dumps(bundle)), policy.EVIDENCE_CHARS)
+
+    def test_sdk_request_path_followed_by_sentence_period_is_read(self):
+        request = json.loads((Path(__file__).parent / "fixtures" /
+                              "sdk-save-export-requests.json").read_text())[-1]["request"]
+        helper = self.dir / "libisf" / "src" / "request_open.h"
+        helper.parent.mkdir(parents=True)
+        helper.write_text("void RequestOpen(RequestSink& sink);\n")
+        bundle = evidence.build(Transcript(("Continue SDK extraction.",), (), ()),
+                                query=request["decision"], cwd=self.dir)
+        self.assertIn("libisf/src/request_open.h", [item["path"] for item in bundle["source_files"]])
+
+    def test_source_discovery_does_not_parse_large_history_after_requested_paths_fill_probe_budget(self):
+        names = [f"source_{i}.cc" for i in range(16)]
+        for name in names:
+            (self.dir / name).write_text("void Request() {}\n")
+        old = ToolCall("old-sdk-log", "Bash", "cat old.cc", "unrelated " * 200_000)
+        t = Transcript(("Inspect the requested sources.",), (old,), (old,))
+        started = time.monotonic()
+        sources = evidence._source_files(t, " ".join(names), self.dir, ())
+        elapsed = time.monotonic() - started
+        self.assertEqual([item["path"] for item in sources[0]], names[:8])
+        self.assertLess(elapsed, 1.0)
+
+    def test_sdk_helper_read_survives_older_current_turn_path_noise(self):
+        helper = self.dir / "libisf" / "src" / "request_open.cc"
+        helper.parent.mkdir(parents=True)
+        helper.write_text("void RequestOpen(RequestSink& sink) { sink.EnsureStarted(); }\n")
+        calls = [ToolCall(f"old{i}", "Bash", f"cat missing_{i}.cc", "unrelated source") for i in range(30)]
+        calls.append(ToolCall("sdk-helper", "Bash", "cat libisf/src/request_open.cc", helper.read_text()))
+        bundle = evidence.build(Transcript(("Continue SDK extraction.",), tuple(calls), tuple(calls)),
+                                query="Which API should implement S5 save/export extraction?", cwd=self.dir)
+        self.assertIn("libisf/src/request_open.cc", [item["path"] for item in bundle["source_files"]])
+
+    def test_explicit_sdk_helper_keeps_space_ahead_of_large_project_rule_files(self):
+        (self.dir / "AGENTS.md").write_text("Project rules.\n" + "a" * 16_000)
+        (self.dir / "CLAUDE.md").write_text("Additional project rules.\n" + "b" * 12_000)
+        helper = self.dir / "request_driver.h"
+        helper.write_text("class RequestSink {};\n" + "c" * 5_000)
+        calls = (ToolCall("read", "Bash", "read baseline", "d" * 16_000),
+                 ToolCall("check", "Bash", "run request tests", "e" * 16_000))
+        t = Transcript(("Preserve SDK compatibility. " + "f" * 16_000,), calls, calls)
+        bundle = evidence.build(t, query="Reuse request_driver.h for the request interface?", cwd=self.dir)
+        self.assertIn("request_driver.h", [item["path"] for item in bundle["source_files"]])
+        self.assertLessEqual(len(json.dumps(bundle)), policy.EVIDENCE_CHARS)
+
     def test_json_and_shell_quoted_paths_with_spaces_are_read(self):
         folder = self.dir / "project with spaces"
         folder.mkdir()
