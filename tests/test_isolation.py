@@ -29,6 +29,42 @@ def _run(argv: list[str], *, env: dict[str, str] | None = None, stdin: str = "")
 
 
 class IsolationRuntimeTest(StateTestCase):
+    def test_stdio_confinement_blocks_profile_symlink_replacement(self):
+        target = self.dir / "managed-cli.toml"
+        target.write_text("fixture config")
+        profile = self.dir / "cli.config.toml"
+        profile.symlink_to(target)
+        argv = isolation._wrap_argv(_python_command(
+            "import pathlib,sys; pathlib.Path(sys.argv[1]).unlink()") + [str(profile)],
+            policy.state_dir(), protect_code=True, read_only=False, protected_paths=[str(profile)])
+        result = _run(argv)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(profile.is_symlink())
+        self.assertEqual(target.read_text(), "fixture config")
+
+    def test_stdio_bootstrap_ignores_pythonpath_before_reading_signed_recipe(self):
+        poison = self.dir / "pythonpath"
+        poison.mkdir()
+        marker = self.dir / "bootstrap-leak"
+        poison.joinpath("sitecustomize.py").write_text(
+            "import os, pathlib\n"
+            "try:\n"
+            "    pathlib.Path(os.environ['AGENT_DECISIONS_STATE']).joinpath('key').read_bytes()\n"
+            "except OSError:\n"
+            "    pass\n"
+            "else:\n"
+            "    pathlib.Path(os.environ['AD_BOOTSTRAP_MARKER']).write_text('private state read')\n")
+        self._write_installation({"host": "codex", "state_root": str(policy.state_dir()),
+                                  "servers": {"echo": {"command": "/bin/cat", "args": []}},
+                                  "claude_matchers": []})
+        # The sentinel is test-only. It is never a real credential or real signing key.
+        policy.state_dir().joinpath("key").write_bytes(b"test-only-private-state")
+        result = _run([str(ISOLATE), "--server", "echo", "--host", "codex"],
+                      env=self._env(PYTHONPATH=str(poison), AD_BOOTSTRAP_MARKER=str(marker)), stdin="protocol")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "protocol")
+        self.assertFalse(marker.exists(), "Python startup code read private state before isolation")
+
     def _write_installation(self, spec: dict) -> None:
         ledger.append({"session_id": "installation", "gate": "installation", "action": "configured",
                        "time": "2026-10-11T00:00:00Z", "spec": spec})

@@ -1,6 +1,6 @@
 # Current acceptance plan
 
-Date: 2026-10-11. Scope: v1.0.1 documentation and acceptance.
+Date: 2026-10-11. Scope: v1.0.2 documentation and acceptance.
 
 The old implementation recipe was replaced by this short plan. Git history keeps the original recipe.
 

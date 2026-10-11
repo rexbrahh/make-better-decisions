@@ -1,4 +1,4 @@
-# agent-decisions v1.0.1 behavior spec
+# agent-decisions v1.0.2 behavior spec
 
 Date: 2026-10-11. Owner: Rex. Status: current code behavior.
 
@@ -51,6 +51,8 @@ The hook records signed user context. `SessionStart` stores the initial host tra
 
 `UserPromptSubmit` observations join signed user history only after they match a new human-origin host transcript record. The prompt event alone is not user authority. Claude can emit it for peer or background messages.
 
+Codex `<hook_prompt>` records are automatic feedback. They do not become human history or reset the current turn. Older signed snapshots filter them during repair.
+
 Subagent contexts use main-agent user messages. This lets subagents see signed user history without trusting parent-agent summaries.
 
 ## Decisions
@@ -76,6 +78,8 @@ Verdicts:
 A completed reusable decision needs both a signed ledger entry and the full verdict receipt in the transcript tool output. A matching tool id alone is not enough.
 
 The edit, plan, and stop gates can reuse relevant advisory and binding decisions across turns in the same session. Later user instructions override earlier binding decisions.
+
+Decision questions use separate conditions for observed selection grounds, unsupported implementation facts, missing constraints, omitted named alternatives, exact user instructions, and routine work. Code combines these answers. A no-fit answer caused by missing context requests evidence. It does not demand a new option list.
 
 ## Gates
 
@@ -126,6 +130,8 @@ The system fails open by design. Jev errors, timeouts, malformed replies, missin
 
 The hook shows a visible warning. `ts-decide` reports `decision unverified`.
 
+The registered shell launcher handles failures before the Python handler starts. Successful JSON denials remain binding. Failed startup output is replaced with one warning JSON object.
+
 ## Ledger
 
 The ledger path is:
@@ -136,7 +142,7 @@ The ledger path is:
 
 `AGENT_DECISIONS_STATE` overrides the root.
 
-The ledger stores full states, answers, actions, signed user context, installation recipes, and verdict text. SessionStart prunes entries older than 14 days.
+The ledger stores full states, answers, actions, signed user context, installation recipes, and verdict text. SessionStart prunes session records older than 14 days. It retains signed installation recipes.
 
 The guard denies tool calls that name the state directory.
 

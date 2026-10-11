@@ -170,6 +170,8 @@ def prune(now: float | None = None) -> None:
         if not directory.is_dir():
             continue
         for path in directory.iterdir():
+            if sub == "sessions" and path.name == "installation.jsonl":
+                continue  # installed launchers need their signed recipes until reconfiguration
             try:
                 if path.stat().st_mtime < cutoff:
                     path.unlink()

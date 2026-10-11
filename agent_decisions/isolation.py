@@ -229,6 +229,8 @@ def _protected_write_paths(protect_code: bool, extra_paths) -> list[Path]:
         home / ".codex" / "config.toml",
     ):
         paths.append(_absolute_path(raw))
+    for path in (home / ".codex").glob("*.config.toml"):
+        paths.extend((path.absolute(), _absolute_path(path)))
     if protect_code:
         root = _authority_code_root()
         if root is not None:
@@ -236,6 +238,7 @@ def _protected_write_paths(protect_code: bool, extra_paths) -> list[Path]:
     for path in extra_paths or ():
         if not isinstance(path, str) or path == "":
             raise ConfigurationError("protected_paths must contain strings")
+        paths.append(Path(path).expanduser().absolute())
         paths.append(_absolute_path(path))
     return _dedupe_paths(paths)
 
@@ -256,6 +259,8 @@ def _authority_code_root() -> Path | None:
     root = Path(__file__).resolve(strict=False).parent.parent
     if (root / ".git").exists():
         return None
+    if root.parent.name == "agent-decisions" and root.parent.parent.parent.name == "cache":
+        return root.parent
     return root
 
 

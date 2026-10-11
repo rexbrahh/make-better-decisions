@@ -57,7 +57,8 @@ def isolate_path(install_root: Any) -> str:
 def host_config_paths(host: str, home: Optional[Path] = None) -> List[str]:
     base = Path.home() if home is None else home
     if host == "codex":
-        return [canonical_path(base / ".codex" / "config.toml")]
+        return [canonical_path(base / ".codex" / "config.toml"),
+                *[str(path.absolute()) for path in sorted((base / ".codex").glob("*.config.toml"))]]
     if host == "claude":
         return [
             canonical_path(base / ".claude" / "settings.json"),
@@ -81,6 +82,8 @@ def authority_code_root(install_root: Any) -> Optional[str]:
     root = Path(canonical_path(install_root))
     if (root / ".git").exists():
         return None
+    if root.parent.name == "agent-decisions" and root.parent.parent.parent.name == "cache":
+        return str(root.parent)  # running chats can still invoke earlier cached versions
     return str(root)
 
 
@@ -103,7 +106,8 @@ def protected_path_reasons(host: str, state_root: Any, install_root: Any,
     for path in transcript_roots(host, home):
         reasons[path] = "host_transcripts_deny_write"
     for path in host_config_paths(host, home):
-        reasons[path] = "host_authority_config_deny_write"
+        for protected in _dedupe([path]):
+            reasons[protected] = "host_authority_config_deny_write"
     return reasons
 
 
@@ -582,7 +586,7 @@ def _call_json_rpc(command: List[str], request: Mapping[str, Any], timeout_s: fl
     try:
         if initialize:
             send_and_wait({"id": str(uuid.uuid4()), "method": "initialize",
-                           "params": {"clientInfo": {"name": "agent-decisions-install", "version": "1.0.1"},
+                           "params": {"clientInfo": {"name": "agent-decisions-install", "version": "1.0.2"},
                                       "capabilities": {}}})
         return send_and_wait(request)
     finally:
@@ -1034,10 +1038,10 @@ def _dedupe(paths: Iterable[str]) -> List[str]:
     seen = set()
     out: List[str] = []
     for path in paths:
-        canonical = canonical_path(path)
-        if canonical not in seen:
-            seen.add(canonical)
-            out.append(canonical)
+        for protected in (str(Path(path).expanduser().absolute()), canonical_path(path)):
+            if protected not in seen:
+                seen.add(protected)
+                out.append(protected)
     return out
 
 

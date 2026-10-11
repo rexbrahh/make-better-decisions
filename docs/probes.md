@@ -79,3 +79,15 @@ subagent identity have not been verified.
 
 Global installation and native runtime evidence are recorded locally in
 `probe/out/v1.0.1-verification.json` after activation.
+
+## v1.0.2 repair checks (2026-10-11)
+
+The repair suite uses temporary files and synthetic context. It does not change production repositories.
+
+The live replay passed 32 workflow cases, 16 adversarial cases, and 33 supplemental cases. These are sampled results, not a general catch rate.
+
+Earlier repair samples exposed three cases. Missing platform context incorrectly requested a new option list. An exact journal instruction returned an advisory choice. An omitted retry helper escaped the aggregate option check. Separate questions and code composition corrected these cases.
+
+The new checks cover missing entrypoints, missing imports, missing Python, partial startup output, healthy denials, automatic hook feedback, recent diagnostics, aged recipes, and Python startup injection. They also cover active version namespaces and replacement of a managed profile symlink.
+
+The global result and native runtime evidence are recorded in `probe/out/v1.0.2-verification.json` after activation. Claude model acceptance requires an authenticated Claude session.

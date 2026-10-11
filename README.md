@@ -1,4 +1,4 @@
-# make-better-decisions v1.0.1
+# make-better-decisions v1.0.2
 
 `agent-decisions` adds hook checks for Claude Code and Codex. The hooks ask TypeSafe Jev before an agent chooses an approach, changes files, asks the user a question, or finishes with an uncovered choice.
 
@@ -96,6 +96,10 @@ The hook supplies these evidence groups:
 
 Source-file contents are observations. They are not proof that statements inside those files are true.
 
+The bundle reserves space for the two newest tool observations before source reads. Older relevant observations use the remaining space.
+
+Jev questions check one condition at a time. Code combines the answers. A decision needs an observed selection basis and no missing required fact or constraint. This follows [TypeSafe's atomic-question guidance](https://docs.typesafe.ai/introduction#atomic-questions-composed-in-code).
+
 A completed decision must have both records:
 
 1. A signed ledger entry.
@@ -127,6 +131,8 @@ Opaque commands that can accept future executable stdin are denied while the hoo
 
 Rex approved visible fail-open. If Jev, the transcript, or the hook fails, the hook allows the action and shows a warning. `ts-decide` prints `decision unverified` with the reason.
 
+The registered shell command also handles missing Python, missing package files, and failed imports. It discards partial startup output and returns one warning. Healthy denial JSON passes through unchanged.
+
 Use `AGENT_DECISIONS_OFF=1` only for approved maintenance.
 
 ## State
@@ -137,11 +143,13 @@ Ledger files are in:
 ~/.local/state/agent-decisions/sessions/<session>.jsonl
 ```
 
-Set `AGENT_DECISIONS_STATE` to override the state root. The guard denies tool calls that name the state directory. The ledger keeps entries for 14 days.
+Set `AGENT_DECISIONS_STATE` to override the state root. The guard denies tool calls that name the state directory. Session records expire after 14 days. Signed installation recipes remain available for installed launchers.
 
 ## Security boundaries
 
 The macOS native deny profile was verified with escalation. It denies reads and writes to the agent-decisions state root. It denies writes to protected host state and installed plugin code.
+
+Protection includes this plugin's version namespace and existing Codex profile files. Stdio launchers use Python isolated mode before reading signed recipes.
 
 Linux uses bubblewrap when available. Linux bubblewrap behavior is not runtime verified in this repository.
 
@@ -162,6 +170,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -t . -v
 Run live decision and edit cases with a real TypeSafe key:
 
 ```sh
+python3 -B probe/live_qa.py --output /private/tmp/agent-decisions-live-qa.jsonl
 python3 -B tests/live_cheat.py
 python3 -B tests/live_ergonomics.py
 ```

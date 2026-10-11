@@ -95,3 +95,13 @@ class LedgerTest(StateTestCase):
 
     def test_prune_without_state_directory_is_a_no_op(self):
         ledger.prune()
+
+    def test_installation_recipe_survives_session_retention(self):
+        entry = {"session_id": "installation", "gate": "installation", "action": "configured",
+                 "spec": {"host": "codex", "state_root": str(policy.state_dir()), "servers": {}}}
+        ledger.append(entry)
+        path = policy.state_dir() / "sessions/installation.jsonl"
+        old = time.time() - (policy.RETAIN_DAYS + 1) * 86_400
+        os.utime(path, (old, old))
+        ledger.prune()
+        self.assertEqual(ledger.entries("installation"), [entry])

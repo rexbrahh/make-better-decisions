@@ -22,13 +22,42 @@ def run(fake, request=REQUEST, **ctx):
 
 
 class DecideTest(StateTestCase):
+    def test_existing_helper_omission_is_composed_from_independent_conditions(self):
+        result = run(FakeJev(**{**CONFIDENT, "missing_option": .58,
+                               "helper_present": .93, "helper_in_options": .1}))
+        self.assertEqual(result.action, "refused")
+        self.assertIn("missing_existing_helper", result.message)
+
+    def test_exact_user_operation_does_not_require_reusing_an_existing_helper(self):
+        result = run(FakeJev(**{**CONFIDENT, "specified_lfu": .95,
+                               "helper_present": .93, "helper_in_options": .1}))
+        self.assertEqual(result.action, "routine")
+
+    def test_pick_cannot_contradict_the_option_prescribed_by_the_user(self):
+        result = run(FakeJev(**{**CONFIDENT, "specified_lru": .95, "specified_lfu": .01}))
+        self.assertEqual(result.action, "refused")
+        self.assertIn("pick_conflicts_with_instruction", result.message)
+
+    def test_no_fit_due_to_missing_evidence_requests_the_missing_evidence(self):
+        result = run(FakeJev(**{**CONFIDENT, "pick": "none_fit", "sufficient": .1,
+                               "unsupported": .95, "omitted_requirement": .95}))
+        self.assertEqual(result.action, "gather_evidence")
+
+    def test_omitted_requirement_is_checked_independently_of_unsupported_claim(self):
+        result = run(FakeJev(**{**CONFIDENT, "unsupported": .01, "omitted_requirement": .95}))
+        self.assertEqual(result.action, "gather_evidence")
+
+    def test_routine_operation_does_not_require_an_exact_option_instruction(self):
+        result = run(FakeJev(**{**CONFIDENT, "sufficient": .2, "specified_lfu": .01,
+                               "routine_operation": .95}))
+        self.assertEqual(result.action, "routine")
     def test_authorized_routine_work_does_not_wait_for_design_sufficiency(self):
-        result = run(FakeJev(**{**CONFIDENT, "sufficient": .56, "exact_operation": .95}))
+        result = run(FakeJev(**{**CONFIDENT, "sufficient": .56, "specified_lfu": .95}))
         self.assertEqual(result.action, "routine")
         self.assertIn("PROCEED", result.message)
 
     def test_routine_label_cannot_authorize_unsupported_claims(self):
-        result = run(FakeJev(**{**CONFIDENT, "sufficient": .56, "exact_operation": .95, "unsupported": .95}))
+        result = run(FakeJev(**{**CONFIDENT, "sufficient": .56, "specified_lfu": .95, "unsupported": .95}))
         self.assertEqual(result.action, "gather_evidence")
 
     def test_main_agent_gets_an_advisory_verdict(self):

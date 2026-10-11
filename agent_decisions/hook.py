@@ -178,7 +178,9 @@ def _saved_users(payload: dict, host: str, t: transcript.Transcript, entries: li
         _save_users(payload, host, raw_users, raw_keys)
         return raw_users  # initial history comes from the host's protected transcript
     index, record = saved
-    users = list(record["messages"])
+    # Older snapshots can contain automatic feedback captured before the parser fix.
+    users = [message for message in record["messages"]
+             if host != "codex" or not transcript.is_codex_hook_feedback(message)]
     seen = list(record.get("seen_user_keys", ()))
     new_users = [(key, message) for key, message in zip(raw_keys, raw_users) if key not in seen]
     for observed in entries[index + 1:]:

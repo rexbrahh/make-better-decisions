@@ -82,6 +82,17 @@ class ClaudeTranscriptTest(StateTestCase):
 
 
 class CodexTranscriptTest(StateTestCase):
+    def test_hook_feedback_is_not_user_authority_or_a_new_turn(self):
+        feedback = codex_user('<hook_prompt hook_run_id="stop:14:/cache/codex/hooks.json">'
+                              'missing hook.py</hook_prompt>')
+        feedback["payload"]["internal_chat_message_metadata_passthrough"] = {
+            "turn_id": "turn-1", "content_item_kinds": ["unknown"]}
+        records = [codex_user("Repair the plugin."), codex_call("read", "exec_command", '{"cmd":"pwd"}'),
+                   feedback, codex_output("read", "/project")]
+        t = transcript.load(write_jsonl(self.dir, "feedback.jsonl", records), "codex")
+        self.assertEqual(t.user_messages, ("Repair the plugin.",))
+        self.assertEqual([call.id for call in t.turn_calls], ["read"])
+
     def test_code_mode_completed_events_preserve_hook_ids_and_outputs(self):
         records = [codex_user("Fix the parser."), codex_custom("outer", "exec", 'text(await tools.exec_command({cmd:"read"}));'),
                    codex_output("outer", "agent printed an invented result", "custom_tool_call_output"),

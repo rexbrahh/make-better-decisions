@@ -113,6 +113,21 @@ def build(t: Transcript, secrets: tuple[str, ...] = (), *, query: str = "", cwd=
         else:
             metadata["brief_omitted"] = 1
 
+    selected_calls = _select_tool_calls(usable_calls, query, clean)
+    chosen_calls: dict[int, dict] = {}
+
+    def include_call(idx: int, item: dict) -> None:
+        trial = {**chosen_calls, idx: item}
+        trial_calls = [trial[index] for index in sorted(trial, reverse=True)]
+        if _fits({**bundle, "tool_calls_newest_first": trial_calls}):
+            chosen_calls.update({idx: item})
+            bundle["tool_calls_newest_first"] = trial_calls
+
+    # Retain recent checks before source reads can consume the entire budget.
+    recent_calls = sorted(selected_calls, key=lambda item: item[0], reverse=True)[:2]
+    for idx, item in recent_calls:
+        include_call(idx, item)
+
     source_items, source_omitted, source_too_large = _source_files(t, query, cwd, secrets)
     metadata["source_files_candidates"] = len(source_items) + source_omitted + source_too_large
     if source_items or cwd is not None:
@@ -128,14 +143,9 @@ def build(t: Transcript, secrets: tuple[str, ...] = (), *, query: str = "", cwd=
     metadata["source_files_too_large"] = source_too_large
     metadata["source_files_truncated"] = sum(1 for item in bundle.get("source_files", []) if item.get("truncated"))
 
-    selected_calls = _select_tool_calls(usable_calls, query, clean)
-    chosen_calls: dict[int, dict] = {}
     for _idx, item in selected_calls:
-        trial = {**chosen_calls, _idx: item}
-        trial_calls = [trial[idx] for idx in sorted(trial, reverse=True)]
-        if _fits({**bundle, "tool_calls_newest_first": trial_calls}):
-            chosen_calls = trial
-            bundle["tool_calls_newest_first"] = trial_calls
+        if _idx not in chosen_calls:
+            include_call(_idx, item)
     metadata["tool_calls_included"] = len(bundle["tool_calls_newest_first"])
     metadata["tool_calls_omitted"] = max(0, len(usable_calls) - len(bundle["tool_calls_newest_first"]))
     _trim_to_budget(bundle)

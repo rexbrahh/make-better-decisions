@@ -13,6 +13,14 @@ def _transcript(users=(), calls=(), brief=None):
 
 
 class EvidenceTest(unittest.TestCase):
+    def test_recent_diagnostic_survives_older_broad_observations(self):
+        query = "launcher startup capture stream denial JSON hook"
+        old = [ToolCall(f"old{i}", "Read", query, query + "x" * 1_500) for i in range(80)]
+        latest = ToolCall("latest", "Bash", "run comparison", "capture=valid; stream=invalid\n" + "y" * 5_000)
+        ev = evidence.build(_transcript(["Preserve healthy denials."], [*old, latest]), query=query)
+        self.assertIn("latest", [item["id"] for item in ev["tool_calls_newest_first"]])
+        self.assertLessEqual(len(json.dumps(ev)), policy.EVIDENCE_CHARS)
+
     def test_budget_drops_oldest_tool_calls_and_keeps_user_messages(self):
         users = [f"ask {i}" for i in range(7)]
         calls = [ToolCall(f"t{i}", "Bash", f"cmd {i}", "y" * 15_000) for i in range(20)]

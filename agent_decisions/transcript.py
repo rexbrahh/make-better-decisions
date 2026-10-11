@@ -21,6 +21,11 @@ _CODEX_INJECTED = (
 _CLAUDE_ECHOES = ("<bash-stdout>", "<bash-stderr>", "<local-command-stdout>", "<local-command-stderr>")
 
 
+def is_codex_hook_feedback(text: str) -> bool:
+    """Codex emits hook feedback as user-role records without a human origin."""
+    return text.lstrip().startswith(("<hook_prompt ", "<hook_prompt>"))
+
+
 @dataclass(frozen=True)
 class ToolCall:
     id: str
@@ -192,6 +197,7 @@ def _codex(records: list[dict]) -> Transcript:
         if kind == "message":
             text = _text(p.get("content"))
             if p.get("role") == "user" and text and not text.lstrip().startswith(_CODEX_INJECTED) \
+                    and not is_codex_hook_feedback(text) \
                     and (p.get("origin") or {}).get("kind", "human") == "human":
                 b.user(text, r)
             elif p.get("role") == "assistant" and text:

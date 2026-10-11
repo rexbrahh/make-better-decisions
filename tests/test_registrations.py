@@ -16,6 +16,42 @@ def commands(path):
 
 
 class RegistrationTest(StateTestCase):
+    def run_with_root(self, command, root, **env):
+        command = command.replace("${CLAUDE_PLUGIN_ROOT}", str(root)).replace("${PLUGIN_ROOT}", str(root))
+        return subprocess.run(["/bin/sh", "-c", command], input="{}", capture_output=True, text=True,
+                              timeout=30, env={**os.environ, **env})
+
+    def test_startup_failures_allow_visibly_without_invalid_stdout(self):
+        for registration in ("hooks/hooks.json", "codex/hooks.json"):
+            for event, cmds in commands(registration).items():
+                for case in ("missing_file", "missing_module", "partial_output", "missing_python"):
+                    with self.subTest(registration=registration, event=event, case=case):
+                        root = self.dir / case
+                        entry = root / "hooks/hook.py"
+                        entry.parent.mkdir(parents=True, exist_ok=True)
+                        if case == "missing_module":
+                            entry.write_text("import nonexistent_agent_decisions_module\n")
+                        elif case == "partial_output":
+                            entry.write_text("print('invalid partial output'); raise RuntimeError('startup')\n")
+                        env = {"PATH": str(self.dir / "no-interpreter")} if case == "missing_python" else {}
+                        result = self.run_with_root(cmds[0], root, **env)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        response = json.loads(result.stdout)
+                        self.assertIn("action allowed", response["systemMessage"])
+                        self.assertNotIn("invalid partial output", result.stdout)
+
+    def test_healthy_denial_is_forwarded_without_allow_fallback(self):
+        root = self.dir / "cache with spaces"
+        entry = root / "hooks/hook.py"
+        entry.parent.mkdir(parents=True)
+        response = {"decision": "block", "reason": "healthy denial"}
+        entry.write_text("import json; print(json.dumps(" + repr(response) + "))\n")
+        for registration in ("hooks/hooks.json", "codex/hooks.json"):
+            for cmds in commands(registration).values():
+                result = self.run_with_root(cmds[0], root)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout), response)
+
     def run_registered(self, command):
         command = command.replace("${CLAUDE_PLUGIN_ROOT}", str(ROOT)).replace("${PLUGIN_ROOT}", str(ROOT))
         return subprocess.run(["sh", "-c", command], input="{}", capture_output=True, text=True, timeout=30,

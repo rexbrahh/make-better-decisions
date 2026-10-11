@@ -13,6 +13,32 @@ from tests.helpers import StateTestCase
 
 
 class InstallPlanningTest(StateTestCase):
+    def test_existing_cli_profile_is_write_protected(self):
+        profile = self.dir / ".codex/cli.config.toml"
+        profile.parent.mkdir()
+        profile.write_text('model = "fixture-model"\n')
+        value = install.codex_permission_profile_value(self.dir / "state", self.dir / "installed", home=self.dir)
+        self.assertEqual(value["filesystem"][str(profile.resolve())], "read")
+        self.assertEqual(profile.read_text(), 'model = "fixture-model"\n')
+
+    def test_cli_profile_symlink_and_target_are_both_write_protected(self):
+        target = self.dir / "managed-cli.toml"
+        target.write_text('model = "fixture-model"\n')
+        profile = self.dir / ".codex/cli.config.toml"
+        profile.parent.mkdir()
+        profile.symlink_to(target)
+        value = install.codex_permission_profile_value(self.dir / "state", self.dir / "installed", home=self.dir)
+        self.assertEqual(value["filesystem"].get(str(profile)), "read")
+        self.assertEqual(value["filesystem"].get(str(target)), "read")
+
+    def test_installed_version_protects_other_active_versions_of_this_plugin(self):
+        namespace = self.dir / ".codex/plugins/cache/market/agent-decisions"
+        root = namespace / "1.0.2"
+        root.mkdir(parents=True)
+        value = install.codex_permission_profile_value(self.dir / "state", root, home=self.dir)
+        self.assertEqual(value["filesystem"].get(str(namespace.resolve())), "read")
+        self.assertNotIn(str(namespace.parent.resolve()), value["filesystem"])
+
     def test_codex_wraps_only_stdio_servers_and_preserves_fields_in_recipe_and_config(self):
         root = self.dir / "installed"
         root.mkdir()
