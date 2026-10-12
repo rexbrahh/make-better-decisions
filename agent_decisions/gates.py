@@ -405,7 +405,7 @@ def decide(raw: str, ctx: Context, ask: Ask) -> Outcome:
     except jev.JevError as error:
         next_step = "Decide yourself and state the evidence for your choice." if policy.fail_open(ctx.host) else \
             "Required review is unavailable. Restore the service and consult again before choosing or writing."
-        return Outcome("unverified", f"ts-decide: decision unverified (jev {error.reason}). "
+        return Outcome("unverified", f"ts-decide: decision unverified (jev {error}). "
                                      + next_step, record)
     pick = answers["pick"]["choice"]
     prescribed = {option_id for option_id in options if answers[f"specified_{option_id}"]["noul"] >= BIND_AT}
@@ -842,14 +842,15 @@ def edit_gate(name: str, tool_input: dict, ctx: Context, ask: Ask) -> Outcome:
             "The operation is fully specified now, or future stdin only carries data or control signals.")
     record = {"gate": "edit", "state": state, "cache_contract": _cache_contract(ctx)}
     states = [{**state, "pending_input": part} for part in parts]
+    record["state"] = states[0]
     try:
         results = _ask_parts(ctx, states, questions, ask)
     except jev.JevError as error:
         if not policy.fail_open(ctx.host):
-            return Outcome("deny", f"Required review unavailable (jev {error.reason}); action not run. "
+            return Outcome("deny", f"Required review unavailable (jev {error}); action not run. "
                            "Restore the review service and retry.", {**record, "error": error.reason})
         return Outcome("allow", record={**record, "error": error.reason},
-                       note=f"agent-decisions: edit check skipped (jev {error.reason}); action allowed")
+                       note=f"agent-decisions: edit check skipped (jev {error}); action allowed")
     writes = name in EDIT_TOOLS or any(answer["writes_files"]["noul"] >= STOP_AT for answer in results)
     coverage_at = FOLLOW_AT if ctx.agent_id is None else BIND_AT
     deny = writes and any(answer["needs_decision"]["noul"] >= STOP_AT and (
@@ -894,8 +895,8 @@ def question_gate(tool_input: dict, ctx: Context, ask: Ask) -> Outcome:
         answers = _cached_answers(ctx, "question", state) or ask(state, questions)
     except jev.JevError as error:
         if not policy.fail_open(ctx.host):
-            return Outcome("deny", f"Required question review unavailable (jev {error.reason}); question not sent.")
-        return Outcome("allow", note=f"agent-decisions: question gate skipped (jev {error.reason})")
+            return Outcome("deny", f"Required question review unavailable (jev {error}); question not sent.")
+        return Outcome("allow", note=f"agent-decisions: question gate skipped (jev {error})")
     problems = []
     for i, item in enumerate(asked):
         if answers[f"stated_{i}"]["noul"] >= BIND_AT:
@@ -936,8 +937,8 @@ def plan_gate(ctx: Context, ask: Ask | None = None, *, plan: str | None = None) 
         answers = _cached_answers(ctx, "plan", state) or ask(state, questions)
     except jev.JevError as error:
         if not policy.fail_open(ctx.host):
-            return Outcome("deny", f"Required plan review unavailable (jev {error.reason}); plan not submitted.")
-        return Outcome("allow", note=f"agent-decisions: plan check skipped (jev {error.reason})")
+            return Outcome("deny", f"Required plan review unavailable (jev {error}); plan not submitted.")
+        return Outcome("allow", note=f"agent-decisions: plan check skipped (jev {error})")
     deny = answers["needs_decision"]["noul"] >= STOP_AT and (
         not state["decisions"] or answers["covered"]["noul"] < BIND_AT)
     return Outcome("deny" if deny else "allow", "Consult on the plan's uncovered choice before submitting it." if deny else "",
@@ -1009,9 +1010,9 @@ def stop_gate(final: str, stop_hook_active: bool, ctx: Context, ask: Ask) -> Out
         answers = _cached_answers(ctx, "stop", state) or ask(state, questions)
     except jev.JevError as error:
         if not policy.fail_open(ctx.host):
-            return Outcome("block", f"Required final review unavailable (jev {error.reason}). "
+            return Outcome("block", f"Required final review unavailable (jev {error}). "
                            "Restore the review service and retry.")
-        return Outcome("allow", note=f"agent-decisions: stop check skipped (jev {error.reason})")
+        return Outcome("allow", note=f"agent-decisions: stop check skipped (jev {error})")
     reasons = []
     if answers["made_choice"]["noul"] >= STOP_AT and answers["settled_choice"]["noul"] < BIND_AT and (
             not state["decisions"] or answers["uncovered_choice"]["noul"] > round(1.0 - BIND_AT, 8)):

@@ -75,9 +75,9 @@ def clip(text: str, limit: int = CLIP_CHARS) -> str:
     return f"{text[:half]}\n[... {len(text) - 2 * half} characters cut ...]\n{text[-half:]}"
 
 
-def _clip_source(text: str, query: str) -> str:
-    existing = clip(text, _SOURCE_CHARS)
-    if len(text) <= _SOURCE_CHARS:
+def _clip_source(text: str, query: str, limit: int = _SOURCE_CHARS) -> str:
+    existing = clip(text, limit)
+    if len(text) <= limit:
         return existing
     terms = sorted(_terms(clip(query)), key=lambda term: (-len(term), term))[:_MAX_SOURCE_QUERY_TERMS]
     for term in terms:
@@ -87,8 +87,8 @@ def _clip_source(text: str, query: str) -> str:
             continue
         if re.search(pattern, existing, re.I):
             return existing
-        edge = _SOURCE_CHARS // 4
-        width = _SOURCE_CHARS - 2 * edge
+        edge = limit // 4
+        width = limit - 2 * edge
         start = min(max(match.start() - width // 2, edge), len(text) - edge - width)
         spans = ((0, edge), (start, start + width), (len(text) - edge, len(text)))
         parts = []
@@ -100,6 +100,35 @@ def _clip_source(text: str, query: str) -> str:
             end = right
         return "".join(parts)
     return existing
+
+
+def shorten_observations(bundle: dict, query: str, contracts=()) -> dict | None:
+    """Retry a rejected context without shortening authority or executable input."""
+    result = {**bundle}
+    cut = 0
+    protected = set(contracts) | set(bundle.get("contract_observations", {}))
+    for field, text_key in (("tool_calls_newest_first", "output"), ("source_files", "text")):
+        items = []
+        for item in bundle.get(field, ()):
+            text = item.get(text_key, "")
+            path = item.get("path", "")
+            if field == "source_files" and (path in protected or Path(path).name in _RULE_FILES):
+                items.append(item)
+                continue
+            limit = max(128, min(CLIP_CHARS // 4, len(text) // 4))
+            shorter = _clip_source(text, query, limit) if field == "source_files" else clip(text, limit)
+            cut += len(text) - len(shorter)
+            items.append({**item, text_key: shorter, **({"truncated": True}
+                         if field == "source_files" and shorter != text else {})})
+        if field in bundle:
+            result[field] = items
+    if cut <= 0:
+        return None
+    result["metadata"] = {
+        **bundle.get("metadata", {}), "context_limit_chars_cut": cut,
+        "source_files_truncated": sum(bool(item.get("truncated")) for item in result.get("source_files", ())),
+    }
+    return result
 
 
 def build(t: Transcript, secrets: tuple[str, ...] = (), *, query: str = "", cwd=None) -> dict:

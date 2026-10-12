@@ -4,7 +4,7 @@
 
 The goal is useful, enforceable review. Jev evaluates a material choice against observed evidence. Code checks receipt identity, scope, constraints, and failure policy. Exact instructions and routine operations need no invented choice.
 
-Version 1.1.1 retains cited helper observations and identifies missing evidence in `GATHER` responses. Scoped review still requires review by default. See the [release notes](docs/releases/v1.1.1.md) and [scoped review evidence](docs/validation/scoped-review-2026-10-12.md).
+Version 1.1.2 recovers from Jev context-limit rejections and corrects probability validation at the existing rounding boundary. Required review remains the default. See the [release notes](docs/releases/v1.1.2.md) and [scoped review evidence](docs/validation/scoped-review-2026-10-12.md).
 
 The hook builds the evidence. The agent cannot choose the source set by itself.
 
@@ -189,6 +189,8 @@ Opaque commands that can accept future executable stdin are denied while the hoo
 
 Required review is the default in this implementation. API errors, unreadable context, and hook exceptions block unchecked actions, questions, plans, and final reviews. Known read tools continue without Jev. Unknown tools and shell commands require classification.
 
+An HTTP 400 with `max_tokens_exceeded` triggers one retry within the original three-second deadline. The retry shortens tool output and source excerpts. It preserves human messages, rule files, contracts, pending input, and completed decisions. The receipt records the exact redacted state sent to Jev. A failed retry still blocks execution. Other validation failures identify the question and failed check without displaying response contents.
+
 The owner can select availability mode through the protected installer. Preview the signed policy before applying it:
 
 ```sh
@@ -212,7 +214,7 @@ Ledger files are in:
 
 Set `AGENT_DECISIONS_STATE` to override the state root during operator setup. The guard denies tool calls that name the state directory. Session records expire after 14 days. Signed installation policy and architecture history remain available.
 
-Signed gate records retain context timings, request size, API elapsed time, model, and numeric usage when returned. Metrics stay outside model state and cache fingerprints. Gate reuse requires identical evidence, decisions, actor, repository, model, thresholds, review contract, and operator policy. It does not infer permission for a new write.
+Signed gate records retain context timings, initial and final request sizes, attempt count, API elapsed time, model, and numeric usage when returned. Metrics stay outside model state and cache fingerprints. Gate reuse requires identical evidence, decisions, actor, repository, model, thresholds, review contract, and operator policy. It does not infer permission for a new write.
 
 ## Security boundaries
 

@@ -1,6 +1,6 @@
 # agent-decisions behavior spec
 
-Date: 2026-10-12. Owner: Rex. Status: v1.1.1 behavior.
+Date: 2026-10-12. Owner: Rex. Status: v1.1.2 behavior.
 
 ## Goal
 
@@ -152,6 +152,10 @@ User-question checks read prose outside fenced code. Choice and binding checks r
 ## Review failure policy
 
 Required is the default. Jev errors, timeouts, malformed replies, missing keys, unreadable transcripts, and hook exceptions block unchecked operations. Known read tools remain available.
+
+Only HTTP 400 with the exact `max_tokens_exceeded` validation code permits one retry. Both attempts share the original three-second deadline. The retry shortens tool output and source text with explicit omission markers. Human messages, project rules, contracts, facts, options, scope, pending input, decisions, and observation identities remain intact. Each receipt records the exact redacted state submitted to the API. A second size rejection or any other failure retains required-review denial.
+
+Response validation retains finite numeric values, ranges, answer types, choice keys, and the maximum-probability pick. The distribution sum permits the existing one-percent tolerance plus one binary rounding step. Malformed-response diagnostics identify the question and failed check. They omit response contents.
 
 The owner can select availability through signed installation policy. Runtime failures then permit execution with a warning. Healthy denials remain binding. An unverified result never creates an approach receipt.
 

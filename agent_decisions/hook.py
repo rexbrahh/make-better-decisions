@@ -370,14 +370,19 @@ def _asker(post, metrics: dict | None = None):
     def ask(state, questions):
         key = jev.load_key()
         call_metrics = {} if metrics is not None else None
+        request_state = evidence.scrub(state, (key,))
         try:
-            return jev.ask(evidence.scrub(state, (key,)), evidence.scrub(questions, (key,)),
+            return jev.ask(request_state, evidence.scrub(questions, (key,)),
                            key=key, post=post, metrics=call_metrics)
         except jev.JevError as error:
             if call_metrics is not None:
                 call_metrics["error"] = error.reason
+                if error.detail:
+                    call_metrics["error_detail"] = error.detail
             raise
         finally:
+            state.clear()
+            state.update(request_state)
             if metrics is not None:
                 metrics.setdefault("api_calls", []).append(call_metrics)
     return ask

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import io
 import json
 import os
@@ -8,8 +9,8 @@ import time
 import urllib.error
 from unittest import mock
 
-from agent_decisions import jev, policy
-from tests.helpers import FakeJev, StateTestCase
+from agent_decisions import gates, hook, jev, policy
+from tests.helpers import FakeJev, StateTestCase, make_ctx
 
 QUESTIONS = {
     "ok": {"type": "noul", "instructions": "Is it ok?"},
@@ -18,6 +19,22 @@ QUESTIONS = {
 
 
 class AskTest(StateTestCase):
+    def test_roundoff_at_existing_distribution_tolerance_is_accepted(self):
+        for total in (0.99, 1.01):
+            raw = json.dumps({"answers": {"pick": {
+                "type": "choice", "choice": "a", "confidence": .65,
+                "probabilities": {"a": .65, "b": total - .65}}}}).encode()
+            with self.subTest(total=total):
+                jev.ask({}, {"pick": QUESTIONS["pick"]}, key="k", post=FakeJev(raw=raw))
+
+    def test_malformed_diagnostic_names_the_check_without_response_text(self):
+        raw = b'{"answers":{"ok":{"type":"noul","noul":"private-response-text"}}}'
+        with self.assertRaises(jev.JevError) as caught:
+            jev.ask({}, {"ok": QUESTIONS["ok"]}, key="k", post=FakeJev(raw=raw))
+        self.assertEqual(caught.exception.reason, "malformed")
+        self.assertIn("ok: probability", str(caught.exception))
+        self.assertNotIn("private-response-text", str(caught.exception))
+
     def test_numeric_fields_and_choice_distribution_are_validated(self):
         good = json.loads(FakeJev()(json.dumps({"questions": QUESTIONS}).encode(), "k", 1))
         cases = [
@@ -27,6 +44,7 @@ class AskTest(StateTestCase):
         cases += [("pick", {**base, "probabilities": value}) for value in (
             {"a": "0.9", "b": 0.1}, {"a": True, "b": 0.0}, {"a": 1.0},
             {"a": 1.0, "b": -0.1}, {"a": 0.8, "b": 0.8}, {"a": 0.1, "b": 0.9},
+            {"a": 0.65, "b": 0.3399}, {"a": 0.65, "b": 0.3601},
         )]
         cases += [("pick", {**base, "confidence": value}) for value in ("0.9", True, 2.0)]
         for qid, answer in cases:
@@ -74,6 +92,21 @@ class KeyTest(StateTestCase):
 
 
 class PostTest(StateTestCase):
+    def test_reports_observed_context_limit_code_without_echoing_error_body(self):
+        # Exact detail shape returned by the live oversized Jev 1.13 probe.
+        error = urllib.error.HTTPError(policy.URL, 400, "x", {}, io.BytesIO(
+            b'{"detail":{"error_type":"max_tokens_exceeded","state":"private-text"}}'))
+        with mock.patch("urllib.request.urlopen", side_effect=error), self.assertRaises(jev.JevError) as caught:
+            jev.post(b"{}", "k", 1)
+        self.assertEqual(caught.exception.reason, "http_400")
+        self.assertEqual(caught.exception.detail, "max_tokens_exceeded")
+        self.assertNotIn("private-text", str(caught.exception))
+
+    def test_unknown_validation_details_are_not_echoed(self):
+        error = urllib.error.HTTPError(policy.URL, 400, "x", {}, io.BytesIO(
+            b'{"detail":{"error_type":"private-error-text"}}'))
+        self.assertEqual(self._raises(error), "http_400")
+
     def test_deadline_includes_reading_the_response_body(self):
         class SlowResponse(io.BytesIO):
             def read(self):
@@ -120,3 +153,108 @@ class PostTest(StateTestCase):
         with mock.patch("urllib.request.urlopen", fake_urlopen):
             self.assertEqual(jev.post(b'{"state": 1}', "secret-key", 3.0), b'{"answers": {}}')
         self.assertEqual(seen, {"auth": "Bearer secret-key", "body": b'{"state": 1}', "timeout": 3.0})
+
+
+class ContextLimitTest(StateTestCase):
+    def context(self):
+        ctx = make_ctx(host="codex")
+        ctx.evidence.update({
+            "user_messages": ["Preserve the guard.", "fix it asap"],
+            "brief": "Keep the required review policy.",
+            "tool_calls_newest_first": [{"id": "native-read", "tool": "exec_command",
+                "input": "sed -n '1,400p' scripts/common.sh", "output": "diagnostic evidence\n" * 800,
+                "trust": "unverified_tool_observation", "execution": {"cwd": "/other/worktree"}}],
+            "source_files": [
+                {"path": "scripts/common.sh", "text": "helper source\n" * 1000,
+                 "sha256": "helper-hash", "trust": "verified_file_observation", "truncated": False},
+                {"path": "AGENTS.md", "text": "Mandatory rules\n" * 500, "sha256": "rules-hash"},
+                {"path": "contract.md", "text": "Mandatory contract\n" * 500, "sha256": "contract-hash"}],
+            "contract_observations": {"contract.md": {"sha256": "contract-hash"}},
+        })
+        return ctx
+
+    def transport(self, *, always_fail=False, pause=0):
+        requests, timeouts = [], []
+        fake = FakeJev()
+
+        def post(body, key, timeout):
+            requests.append(json.loads(body))
+            timeouts.append(timeout)
+            if len(requests) == 1 or always_fail:
+                time.sleep(pause)
+                raise jev.JevError("http_400", "max_tokens_exceeded")
+            return fake(body, key, timeout)
+
+        return post, requests, timeouts
+
+    def test_retry_preserves_authority_and_records_actual_native_read_state(self):
+        ctx = self.context()
+        original = copy.deepcopy(ctx.evidence)
+        post, requests, _ = self.transport()
+        outcome = gates.edit_gate("mcp__codex_app__read_thread", {"threadId": "peer"},
+                                  ctx, hook._asker(post))
+        self.assertEqual(outcome.action, "allow")
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(outcome.record["state"], requests[-1]["state"])
+        self.assertEqual(ctx.evidence, original)
+        first, second = (request["state"] for request in requests)
+        self.assertEqual({k: v for k, v in first.items() if k != "evidence"},
+                         {k: v for k, v in second.items() if k != "evidence"})
+        for name in ("user_messages", "brief", "contract_observations"):
+            self.assertEqual(second["evidence"][name], original[name])
+        self.assertEqual(second["evidence"]["source_files"][1:], original["source_files"][1:])
+        call = second["evidence"]["tool_calls_newest_first"][0]
+        self.assertEqual({k: v for k, v in call.items() if k != "output"},
+                         {k: v for k, v in original["tool_calls_newest_first"][0].items() if k != "output"})
+        self.assertIn("characters cut", call["output"])
+        self.assertTrue(second["evidence"]["source_files"][0]["truncated"])
+        self.assertGreater(second["evidence"]["metadata"]["context_limit_chars_cut"], 0)
+
+    def test_retry_uses_remaining_deadline(self):
+        post, requests, timeouts = self.transport(pause=.02)
+        metrics = {}
+        jev.ask({"evidence": self.context().evidence}, QUESTIONS, key="k", post=post, metrics=metrics)
+        self.assertEqual(len(requests), 2)
+        self.assertLess(timeouts[1], timeouts[0] - .01)
+        self.assertEqual(metrics["attempt_count"], 2)
+        self.assertLess(metrics["request_bytes"], metrics["initial_request_bytes"])
+
+    def test_retry_failure_still_denies_with_exact_last_attempt_state(self):
+        post, requests, _ = self.transport(always_fail=True)
+        outcome = gates.edit_gate("mcp__codex_app__wait_threads", {"timeoutMs": 0},
+                                  self.context(), hook._asker(post))
+        self.assertEqual(outcome.action, "deny")
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(outcome.record["state"], requests[-1]["state"])
+        self.assertIn("max_tokens_exceeded", outcome.message)
+
+    def test_unrecognized_errors_and_unshortenable_state_are_not_retried(self):
+        for error in (jev.JevError("http_400"), jev.JevError("unreachable"), jev.JevError("malformed"),
+                      jev.JevError("http_400", "max_tokens_exceeded")):
+            fake = FakeJev(raises=error)
+            with self.subTest(error=str(error)), self.assertRaises(jev.JevError):
+                jev.ask({"policy": "Keep every instruction."}, QUESTIONS, key="k", post=fake)
+            self.assertEqual(len(fake.requests), 1)
+
+    def test_concurrent_chunks_record_their_independent_review_states(self):
+        ctx = self.context()
+        original = copy.deepcopy(ctx.evidence)
+        requests = []
+        fake = FakeJev()
+
+        def post(body, key, timeout):
+            request = json.loads(body)
+            requests.append(request)
+            if "context_limit_chars_cut" not in request["state"]["evidence"]["metadata"]:
+                raise jev.JevError("http_400", "max_tokens_exceeded")
+            return fake(body, key, timeout)
+
+        outcome = gates.edit_gate("Edit", {"file_path": "test.py", "old_string": "x" * 20000,
+                                           "new_string": "y" * 20000}, ctx, hook._asker(post))
+        self.assertEqual(outcome.action, "allow")
+        self.assertEqual(ctx.evidence, original)
+        reviewed = [r["state"] for r in requests
+                    if "context_limit_chars_cut" in r["state"]["evidence"]["metadata"]]
+        self.assertEqual(len(outcome.record["chunks"]), len(reviewed))
+        for chunk in outcome.record["chunks"]:
+            self.assertIn(chunk["state"], reviewed)

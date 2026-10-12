@@ -12,13 +12,14 @@ import urllib.request
 from concurrent.futures import Future, TimeoutError as FutureTimeout
 from threading import Thread
 
-from . import policy
+from . import evidence, policy
 
 
 class JevError(Exception):
-    def __init__(self, reason: str):
-        super().__init__(reason)
+    def __init__(self, reason: str, detail: str | None = None):
+        super().__init__(f"{reason}: {detail}" if detail else reason)
         self.reason = reason
+        self.detail = detail
 
 
 def load_key() -> str:
@@ -58,7 +59,16 @@ def _post(body: bytes, key: str, timeout: float) -> bytes:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.read()
     except urllib.error.HTTPError as error:
-        raise JevError(f"http_{error.code}") from None
+        detail = None
+        if error.code == 400:
+            try:
+                validation = json.loads(error.read(4096)).get("detail")
+                if isinstance(validation, dict) and validation.get("error_type") == "max_tokens_exceeded":
+                    detail = "max_tokens_exceeded"
+            except (ValueError, TypeError, AttributeError, OSError):
+                pass  # Keep the HTTP failure; never echo an unknown response body.
+        error.close()
+        raise JevError(f"http_{error.code}", detail) from None
     except (TimeoutError, socket.timeout):
         raise JevError("timeout") from None
     except urllib.error.URLError as error:
@@ -69,24 +79,51 @@ def _post(body: bytes, key: str, timeout: float) -> bytes:
 
 
 def ask(state: dict, questions: dict, *, key: str, post=post, metrics: dict | None = None) -> dict[str, dict]:
-    started = time.perf_counter()
-    body = json.dumps({"model": policy.MODEL, "state": state, "questions": questions}).encode()
-    if metrics is not None:
-        metrics.update({"serialization_ms": (time.perf_counter() - started) * 1_000,
-                        "request_bytes": len(body), "question_count": len(questions), "requested_model": policy.MODEL})
+    deadline = time.monotonic() + policy.TIMEOUT_S
     started = time.perf_counter()
     try:
-        raw = post(body, key, policy.TIMEOUT_S)
+        for attempt in range(2):
+            serialization_started = time.perf_counter()
+            body = json.dumps({"model": policy.MODEL, "state": state, "questions": questions}).encode()
+            if metrics is not None:
+                metrics.setdefault("initial_request_bytes", len(body))
+                metrics.update({"request_bytes": len(body), "question_count": len(questions),
+                                "requested_model": policy.MODEL, "attempt_count": attempt + 1})
+                metrics["serialization_ms"] = metrics.get("serialization_ms", 0) + (
+                    time.perf_counter() - serialization_started) * 1_000
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise JevError("timeout")
+            try:
+                raw = post(body, key, remaining)
+                break
+            except JevError as error:
+                if attempt or error.reason != "http_400" or error.detail != "max_tokens_exceeded":
+                    raise
+                query = str(state.get("decision") or state.get("final_message") or
+                            json.dumps(state.get("pending_input", {})))
+                shorter = evidence.shorten_observations(state.get("evidence", {}), query, state.get("contracts", ()))
+                if shorter is None:
+                    raise
+                state["evidence"] = shorter
     finally:
         if metrics is not None:
             metrics["api_ms"] = (time.perf_counter() - started) * 1_000
     try:
         response = json.loads(raw)
         answers = response["answers"]
-        for qid, question in questions.items():
-            _check(answers[qid], question)
+        if not isinstance(answers, dict):
+            raise ValueError("answers object")
     except (ValueError, KeyError, TypeError):
-        raise JevError("malformed") from None
+        raise JevError("malformed", "response JSON or answers object") from None
+    for qid, question in questions.items():
+        try:
+            _check(answers[qid], question)
+        except (ValueError, KeyError, TypeError) as error:
+            label = qid if isinstance(qid, str) and len(qid) <= 64 and all(
+                char.isascii() and (char.isalnum() or char in "_-.") for char in qid) else "question"
+            check = str(error) if isinstance(error, ValueError) else "missing or invalid fields"
+            raise JevError("malformed", f"{label}: {check}") from None
     if metrics is not None:
         if isinstance(response.get("model"), str):
             metrics["model"] = response["model"][:100]
@@ -110,7 +147,8 @@ def _check(answer: dict, question: dict) -> None:
     _probability(answer["confidence"])
     for value in probabilities.values():
         _probability(value)
-    if not math.isclose(sum(probabilities.values()), 1.0, abs_tol=0.01) \
+    # Decimal totals 0.99 and 1.01 can lie one binary rounding step past 0.01.
+    if not math.isclose(math.fsum(probabilities.values()), 1.0, rel_tol=0, abs_tol=0.01 + math.ulp(1.0)) \
             or probabilities[answer["choice"]] != max(probabilities.values()):
         raise ValueError("choice distribution")
 
