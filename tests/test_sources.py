@@ -13,6 +13,26 @@ from tests.helpers import StateTestCase
 
 
 class SourceObservationTest(StateTestCase):
+    def test_requested_contract_precedes_candidate_limit_and_helper_observations(self):
+        contract = "Preserve every required interface.\n" * 800
+        (self.dir / "review-contract.md").write_text(contract)
+        names = [f"helper_{index}.cc" for index in range(24)]
+        for name in names:
+            (self.dir / name).write_text("void helper();\n")
+        calls = tuple(ToolCall(str(index), "exec_command", "cat " + " ".join(names),
+                               "native helper output\n" * 800) for index in range(8))
+        query = json.dumps({"decision": "Which route uses " + " ".join(names),
+                            "contracts": ["review-contract.md"]})
+        t = Transcript(("Preserve all required interfaces.",), calls, calls)
+        with mock.patch.object(evidence, "_resolve_source", wraps=evidence._resolve_source) as resolve:
+            bundle = evidence.build(t, query=query, cwd=self.dir, contracts=("review-contract.md",))
+        self.assertLessEqual(resolve.call_count, evidence._MAX_SOURCE_CANDIDATE_PROBES)
+        item = bundle["source_files"][0]
+        self.assertEqual(item["path"], "review-contract.md")
+        self.assertEqual(item["sha256"], hashlib.sha256(contract.encode()).hexdigest())
+        self.assertEqual(item["trust"], "verified_file_observation")
+        self.assertLessEqual(len(json.dumps(bundle, sort_keys=True)), policy.EVIDENCE_CHARS)
+
     def test_peer_helper_reads_survive_history_and_a_different_consultation_root(self):
         fixture = json.loads((Path(__file__).parent / "fixtures" /
                               "windows-diagnostic-evidence.json").read_text())

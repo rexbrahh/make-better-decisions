@@ -1,6 +1,6 @@
 # agent-decisions behavior spec
 
-Date: 2026-10-12. Owner: Rex. Status: v1.1.2 behavior.
+Date: 2026-10-12. Owner: Rex. Status: v1.1.3 behavior.
 
 ## Goal
 
@@ -46,6 +46,8 @@ Source-file contents are observations only. They are not user instructions. They
 The source reader rejects private paths, `.env` files, key files, out-of-root paths, too-large files, binary files, changed files, and symlink swaps. Project `.local` files are allowed unless they are inside the actual state directory.
 
 Evidence is bounded at 80,000 JSON characters. The initial and latest instructions and observations matching cited helper paths precede optional history and project rules. Matching observations retain native directory and trust metadata even when the consultation uses another directory. Hashed source reads remain inside the consultation root. Requested source paths precede project rules and older path candidates.
+
+Requested contracts precede optional observations during source discovery and evidence insertion. The hook validates their relative paths and uses the existing source reader. Candidate discovery remains bounded at 16 paths and source observations at eight files. Requests without contracts retain the existing helper ordering. Printed tool output cannot satisfy the verified contract check.
 
 One text retains at most 16,000 characters plus omission markers. Large sources retain the head, tail, and a window around the most specific matching query term.
 
@@ -154,6 +156,8 @@ User-question checks read prose outside fenced code. Choice and binding checks r
 Required is the default. Jev errors, timeouts, malformed replies, missing keys, unreadable transcripts, and hook exceptions block unchecked operations. Known read tools remain available.
 
 Only HTTP 400 with the exact `max_tokens_exceeded` validation code permits one retry. Both attempts share the original three-second deadline. The retry shortens tool output and source text with explicit omission markers. Human messages, project rules, contracts, facts, options, scope, pending input, decisions, and observation identities remain intact. Each receipt records the exact redacted state submitted to the API. A second size rejection or any other failure retains required-review denial.
+
+The retry clips optional text to one sixteenth of its current length, with a 128-character minimum and a 1,000-character cap. If the size rejection remains, the diagnostic reports attempt count, request bytes, and aggregate context-section sizes. It omits contents.
 
 Response validation retains finite numeric values, ranges, answer types, choice keys, and the maximum-probability pick. The distribution sum permits the existing one-percent tolerance plus one binary rounding step. Malformed-response diagnostics identify the question and failed check. They omit response contents.
 

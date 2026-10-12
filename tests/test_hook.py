@@ -57,6 +57,37 @@ class HookTest(StateTestCase):
         self.assertEqual(specific["permissionDecision"], "allow")
         self.assertIn("ts-decide verdict", self.verdict_output(out, "cmd"))
 
+    def test_nested_native_reads_cannot_displace_a_requested_contract(self):
+        # Observed peer shape: functions.exec wraps exec_command; the host
+        # records its complete native cat output before a separate ts-decide.
+        contract = "Preserve source identities and required review.\n" * 600
+        (self.dir / "AGENTS.md").write_text(contract)
+        records = [codex_user("Choose the isolated diagnostic route under AGENTS.md.")]
+        for index in range(8):
+            records.extend([
+                {"type": "response_item", "payload": {"type": "function_call",
+                 "name": "functions.exec", "call_id": f"outer-{index}", "arguments": json.dumps({
+                     "code": "text(await tools.exec_command({cmd: 'cat AGENTS.md'}));"})}},
+                {"type": "event_msg", "payload": {"type": "item_completed", "item": {
+                    "type": "CommandExecution", "id": f"native-{index}",
+                    "command": ["/bin/zsh", "-lc", "cat AGENTS.md"], "cwd": "file://" + str(self.dir),
+                    "status": "completed", "exit_code": 0, "aggregated_output": contract}}},
+            ])
+        request = {**REQUEST, "contracts": ["AGENTS.md"]}
+        command = "ts-decide <<'EOF'\n" + json.dumps(request) + "\nEOF"
+        payload = {**self.payload(""), "tool_name": "exec_command", "cwd": str(self.dir),
+                   "tool_input": {"cmd": command, "workdir": str(self.dir)},
+                   "transcript_path": str(write_jsonl(self.dir, "native-contract.jsonl", records))}
+        fake = FakeJev(**CONFIDENT)
+        out = hook.handle("pre_tool_use", payload, "codex", post=fake)
+        verdict = self.verdict_output(out, "cmd")
+        self.assertIn("ADVISORY", verdict)
+        sources = fake.requests[0]["state"]["evidence"]["source_files"]
+        self.assertEqual(sources[0]["path"], "AGENTS.md")
+        self.assertEqual(sources[0]["trust"], "verified_file_observation")
+        self.assertLessEqual(len(json.dumps(fake.requests[0]["state"]["evidence"], sort_keys=True)),
+                             policy.EVIDENCE_CHARS)
+
     def test_misuse_and_invalid_requests_are_denied_with_usage(self):
         for command in ("ts-decide '{}' | cat", "ts-decide 'not json'"):
             with self.subTest(command=command):

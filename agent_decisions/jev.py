@@ -78,6 +78,18 @@ def _post(body: bytes, key: str, timeout: float) -> bytes:
         raise JevError("unreachable") from None
 
 
+def _context_limit_error(state: dict, questions: dict, attempt_count: int, request_bytes: int) -> JevError:
+    bundle = state.get("evidence", {})
+    sizes = {name: len(json.dumps(bundle.get(name, {}))) for name in (
+        "user_messages", "tool_calls_newest_first", "source_files", "architecture_history", "brief")}
+    sizes.update({name: len(json.dumps(state.get(name, {}))) for name in ("decisions", "pending_input")})
+    sizes["longest_question"] = max((len(json.dumps(question)) for question in questions.values()), default=0)
+    sizes["state"] = len(json.dumps(state))
+    return JevError("http_400", f"max_tokens_exceeded; attempt_count={attempt_count}; "
+                    f"request_bytes={request_bytes}; JSON characters: "
+                    + ", ".join(f"{name}={size}" for name, size in sizes.items()))
+
+
 def ask(state: dict, questions: dict, *, key: str, post=post, metrics: dict | None = None) -> dict[str, dict]:
     deadline = time.monotonic() + policy.TIMEOUT_S
     started = time.perf_counter()
@@ -98,13 +110,16 @@ def ask(state: dict, questions: dict, *, key: str, post=post, metrics: dict | No
                 raw = post(body, key, remaining)
                 break
             except JevError as error:
-                if attempt or error.reason != "http_400" or error.detail != "max_tokens_exceeded":
+                limited = error.reason == "http_400" and error.detail == "max_tokens_exceeded"
+                if attempt or not limited:
+                    if limited:
+                        raise _context_limit_error(state, questions, attempt + 1, len(body)) from None
                     raise
                 query = str(state.get("decision") or state.get("final_message") or
                             json.dumps(state.get("pending_input", {})))
                 shorter = evidence.shorten_observations(state.get("evidence", {}), query, state.get("contracts", ()))
                 if shorter is None:
-                    raise
+                    raise _context_limit_error(state, questions, attempt + 1, len(body)) from None
                 state["evidence"] = shorter
     finally:
         if metrics is not None:

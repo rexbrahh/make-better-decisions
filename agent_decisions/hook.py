@@ -78,7 +78,12 @@ def _pre_tool_use(payload: dict, host: str, post) -> dict | None:
 def _decide(payload: dict, host: str, tool_input: dict, request: str, post) -> dict:
     ctx = None
     try:
-        ctx = _context(payload, host)
+        paths = json.loads(request).get("contracts", [])
+        contracts = gates._request_scope(json.dumps({"scope": {"paths": paths}})).get("paths", [])[:8]
+    except (ValueError, AttributeError, gates.RequestError):
+        contracts = []  # gates.decide retains the existing invalid-request diagnostic.
+    try:
+        ctx = _context(payload, host, contracts=contracts)
     except OSError as error:
         turn = None
         next_step = "Decide yourself and state your evidence." if policy.fail_open(host) else \
@@ -157,7 +162,7 @@ def _load_transcript(payload: dict, host: str) -> transcript.Transcript:
                    question_reply_keys=main.question_reply_keys)
 
 
-def _context(payload: dict, host: str) -> gates.Context:
+def _context(payload: dict, host: str, *, contracts=()) -> gates.Context:
     started = time.perf_counter()
     t = _load_transcript(payload, host)
     metrics = {"transcript_ms": (time.perf_counter() - started) * 1_000}
@@ -175,7 +180,7 @@ def _context(payload: dict, host: str) -> gates.Context:
     evidence_started = time.perf_counter()
     bundle = evidence.build(t, secrets,
         query=json.dumps(payload.get("tool_input") or payload.get("last_assistant_message") or ""),
-        cwd=payload.get("cwd") or os.getcwd())
+        cwd=payload.get("cwd") or os.getcwd(), contracts=contracts)
     bundle["metadata"]["user_history_source"] = "signed_host_context"
     bundle["metadata"]["source_root"] = str(Path(payload.get("cwd") or os.getcwd()).resolve())
     evidence._trim_to_budget(bundle)

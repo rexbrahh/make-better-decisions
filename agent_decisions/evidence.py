@@ -115,7 +115,7 @@ def shorten_observations(bundle: dict, query: str, contracts=()) -> dict | None:
             if field == "source_files" and (path in protected or Path(path).name in _RULE_FILES):
                 items.append(item)
                 continue
-            limit = max(128, min(CLIP_CHARS // 4, len(text) // 4))
+            limit = max(128, min(CLIP_CHARS // 16, len(text) // 16))
             shorter = _clip_source(text, query, limit) if field == "source_files" else clip(text, limit)
             cut += len(text) - len(shorter)
             items.append({**item, text_key: shorter, **({"truncated": True}
@@ -131,7 +131,7 @@ def shorten_observations(bundle: dict, query: str, contracts=()) -> dict | None:
     return result
 
 
-def build(t: Transcript, secrets: tuple[str, ...] = (), *, query: str = "", cwd=None) -> dict:
+def build(t: Transcript, secrets: tuple[str, ...] = (), *, query: str = "", cwd=None, contracts=()) -> dict:
     def clean(text: str) -> str:
         return clip(redact(text, secrets))
 
@@ -205,7 +205,8 @@ def build(t: Transcript, secrets: tuple[str, ...] = (), *, query: str = "", cwd=
             bundle["tool_calls_newest_first"] = trial_calls
             used_chars += added_chars
 
-    source_items, source_omitted, source_too_large, scan_limited = _source_files(t, query, cwd, secrets)
+    source_items, source_omitted, source_too_large, scan_limited = _source_files(
+        t, query, cwd, secrets, contracts=contracts)
     metadata["source_files_candidates"] = len(source_items) + source_omitted + source_too_large
     if source_items or cwd is not None:
         bundle["source_files"] = []
@@ -218,6 +219,14 @@ def build(t: Transcript, secrets: tuple[str, ...] = (), *, query: str = "", cwd=
             used_chars = len(json.dumps(bundle, sort_keys=True))
         else:
             source_omitted += 1
+
+    # Required contracts must survive optional observations or the preflight
+    # asks for a file the hook has already read. Keep each source only once.
+    required_paths = {Path(path).as_posix() for path in contracts}
+    for item in source_items:
+        if item["path"] in required_paths:
+            include_source(item)
+    source_items = [item for item in source_items if item["path"] not in required_paths]
 
     # Preserve cited native reads even when their cwd differs from the consultation root.
     requested = set(_path_candidates((query,)))
@@ -341,7 +350,7 @@ def _select_tool_calls(calls: list[ToolCall], query: str) -> list[tuple[int, Too
     return [(idx, call) for _score, idx, call in ranked]
 
 
-def _source_files(t: Transcript, query: str, cwd, secrets: tuple[str, ...]) -> tuple[list[dict], int, int, bool]:
+def _source_files(t: Transcript, query: str, cwd, secrets: tuple[str, ...], *, contracts=()) -> tuple[list[dict], int, int, bool]:
     if cwd is None:
         return [], 0, 0, False
     try:
@@ -353,6 +362,13 @@ def _source_files(t: Transcript, query: str, cwd, secrets: tuple[str, ...]) -> t
     requested = set(_path_candidates((query,)))
     requested_paths: set[str] = set()
     ranked_candidates, omitted, scan_limited = _ranked_path_candidates(t, query)
+    if contracts:
+        candidates_with_contracts = list(dict.fromkeys((*contracts, *ranked_candidates)))
+        extra = max(0, len(candidates_with_contracts) - _MAX_SOURCE_CANDIDATE_PROBES)
+        omitted += extra
+        scan_limited = scan_limited or bool(extra)
+        ranked_candidates = candidates_with_contracts[:_MAX_SOURCE_CANDIDATE_PROBES]
+        requested.update(contracts)
     for raw in ranked_candidates:
         path = _resolve_source(root, raw)
         if path is not None:

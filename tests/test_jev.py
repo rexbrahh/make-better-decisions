@@ -227,6 +227,34 @@ class ContextLimitTest(StateTestCase):
         self.assertEqual(len(requests), 2)
         self.assertEqual(outcome.record["state"], requests[-1]["state"])
         self.assertIn("max_tokens_exceeded", outcome.message)
+        self.assertIn("attempt_count=2", outcome.message)
+        self.assertIn("user_messages=", outcome.message)
+        self.assertNotIn("Mandatory rules", outcome.message)
+
+    def test_peer_dispatch_recovers_when_the_old_first_reduction_is_still_too_large(self):
+        ctx = self.context()
+        original = copy.deepcopy(ctx.evidence)
+        requests = []
+        fake = FakeJev()
+
+        def post(body, key, timeout):
+            request = json.loads(body)
+            requests.append(request)
+            if len(body) > 27000:
+                raise jev.JevError("http_400", "max_tokens_exceeded")
+            return fake(body, key, timeout)
+
+        pending = {"task_name": "v45_trim_failure_trace", "model": "gpt-6-luna",
+                   "reasoning_effort": "max", "fork_turns": "none",
+                   "message": "Read-only source trace. Do not edit files or execute remote commands."}
+        outcome = gates.edit_gate("spawn_agent", pending, ctx, hook._asker(post))
+        self.assertEqual(outcome.action, "allow", outcome.message)
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(outcome.record["state"], requests[-1]["state"])
+        self.assertEqual(requests[-1]["state"]["pending_input"], pending)
+        self.assertEqual(ctx.evidence, original)
+        self.assertEqual(requests[-1]["state"]["evidence"]["user_messages"], original["user_messages"])
+        self.assertEqual(requests[-1]["state"]["evidence"]["source_files"][1:], original["source_files"][1:])
 
     def test_unrecognized_errors_and_unshortenable_state_are_not_retried(self):
         for error in (jev.JevError("http_400"), jev.JevError("unreachable"), jev.JevError("malformed"),
