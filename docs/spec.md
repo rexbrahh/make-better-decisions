@@ -107,7 +107,7 @@ For larger inputs, the hook splits the complete tool input into field-path chunk
 
 The hook denies inputs above 256,000 JSON characters.
 
-The edit gate allows exact user instructions, tests, formatting, requested factual logs, and mechanical assertion updates. It denies writes that select an uncovered approach.
+The edit gate allows exact instructions, tests, formatting, factual logs, and routine corrections using existing helpers or test setup. Regression coverage for selected behavior needs no separate consultation. Coverage uses 0.5 for main-agent advice and 0.8 for workers. The gate denies a new uncovered approach.
 
 The hook denies interactive or opaque commands that can accept future executable stdin. This deny applies while Jev and the hook are healthy.
 
@@ -127,6 +127,8 @@ An exact user-settled choice passes at `settled_choice >= 0.8`. A final choice p
 The Stop state highlights the latest user instruction. A later user instruction overrides an earlier binding decision.
 
 The Stop gate can block final questions that the user already answered or that the agent owns. There is no prior-question-tool exemption. There is no active-Stop exemption.
+
+User-question checks read prose outside fenced code. Choice and binding checks retain the full reply, including fenced code. Copied verdict questions do not become questions to the user.
 
 ## Fail-open behavior
 
@@ -156,7 +158,7 @@ The native installer can build and apply host plans.
 
 The boundary helper is required for the stated tamper protection. Run it from the installed plugin root. If you run it from a checkout, pass `--install-root` with the installed root.
 
-For Codex, it writes a permission profile and wraps configured stdio MCP servers with `agent-decisions-isolate`. For Claude, it writes a shell prefix and wraps matching commands.
+For Codex, it registers an optional permission profile without selecting it as the default. It preserves sandbox and approval settings and wraps configured stdio MCP servers with `agent-decisions-isolate`. For Claude, it writes a shell prefix and wraps matching commands.
 
 Run the helper again after you change stdio MCP or plugin command configuration. A source value of `null` limits automatic refresh. Preserved recipes on repeat runs do not prove update tracking.
 

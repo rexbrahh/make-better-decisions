@@ -43,6 +43,12 @@ class EditGateTest(StateTestCase):
         self.assertEqual(self.run_gate(ctx, needs_decision=0.95, covered=0.95).action, "allow")
         self.assertEqual(self.run_gate(ctx, needs_decision=0.95, covered=0.05).action, "deny")
 
+    def test_main_agent_advice_covers_a_follow_up_without_binding_certainty(self):
+        self.assertEqual(self.run_gate(self.context(), needs_decision=.95, covered=.76).action, "allow")
+        worker = replace(self.context(action="binding", agent_id="worker"), agent_id="worker")
+        self.assertEqual(len(gates.consulted(worker)), 1)
+        self.assertEqual(self.run_gate(worker, needs_decision=.95, covered=.76).action, "deny")
+
     def test_unread_or_inactive_verdict_cannot_authorize_an_edit(self):
         for output in ("", "agent-decisions hook inactive: decision unverified",
                        "ts-decide verdict: ASK USER"):

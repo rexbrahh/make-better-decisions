@@ -183,7 +183,6 @@ def codex_config_edits(servers: Iterable[Mapping[str, Any]], state_root: Any, in
     edits: List[Dict[str, Any]] = [
         {"keyPath": _config_key_path("permissions", PROFILE_NAME), "mergeStrategy": "upsert",
          "value": codex_permission_profile_value(state_root, install_root, current_config, home)},
-        {"keyPath": "default_permissions", "mergeStrategy": "replace", "value": PROFILE_NAME},
     ]
     for server in servers:
         wrapped = codex_mcp_wrapper_config(server, install_root)
@@ -586,7 +585,7 @@ def _call_json_rpc(command: List[str], request: Mapping[str, Any], timeout_s: fl
     try:
         if initialize:
             send_and_wait({"id": str(uuid.uuid4()), "method": "initialize",
-                           "params": {"clientInfo": {"name": "agent-decisions-install", "version": "1.0.4"},
+                           "params": {"clientInfo": {"name": "agent-decisions-install", "version": "1.0.5"},
                                       "capabilities": {}}})
         return send_and_wait(request)
     finally:

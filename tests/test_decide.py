@@ -23,6 +23,19 @@ def run(fake, request=REQUEST, **ctx):
 
 
 class DecideTest(StateTestCase):
+    def test_source_backed_main_agent_comparison_returns_advice_without_a_user_tiebreak(self):
+        result = run(FakeJev(**{**CONFIDENT, "sufficient": .68, "pattern_present": .76,
+                               "follows_pattern_lfu": .72}))
+        self.assertEqual(result.action, "advisory")
+
+    def test_advisory_ownership_does_not_need_worker_binding_certainty(self):
+        def ask(state, questions):
+            answers = asker(FakeJev(**{**CONFIDENT, "sufficient": .65}))(state, questions)
+            answers["owner"]["probabilities"] = {"agent": .78, "user": .22}
+            return answers
+
+        self.assertEqual(gates.decide(json.dumps(REQUEST), make_ctx(), ask).action, "advisory")
+
     def test_observed_sdk_interface_pattern_supplies_a_selection_basis(self):
         request = json.loads((Path(__file__).parent / "fixtures" /
                               "sdk-save-export-requests.json").read_text())[-1]["request"]
@@ -50,7 +63,7 @@ class DecideTest(StateTestCase):
         self.assertEqual(gates.decide(json.dumps(REQUEST), make_ctx(t), ask).action, "gather_evidence")
 
     def test_existing_pattern_cannot_ground_a_pick_that_does_not_follow_it(self):
-        result = run(FakeJev(**{**CONFIDENT, "sufficient": .52, "pattern_present": .95,
+        result = run(FakeJev(**{**CONFIDENT, "sufficient": .1, "pattern_present": .95,
                                "follows_pattern_lfu": .1}))
         self.assertEqual(result.action, "gather_evidence")
 

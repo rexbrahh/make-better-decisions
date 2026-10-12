@@ -13,6 +13,12 @@ from tests.helpers import StateTestCase
 
 
 class InstallPlanningTest(StateTestCase):
+    def test_codex_install_preserves_default_sandbox_and_approval_settings(self):
+        edits = install.codex_config_edits([], self.dir / "state", self.dir / "installed",
+                                           {"sandbox_mode": "workspace-write"})
+        self.assertEqual([edit["keyPath"] for edit in edits],
+                         ["permissions.agent-decisions-isolation"])
+
     def test_existing_cli_profile_is_write_protected(self):
         profile = self.dir / ".codex/cli.config.toml"
         profile.parent.mkdir()

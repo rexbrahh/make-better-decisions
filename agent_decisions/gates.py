@@ -129,10 +129,11 @@ def _decide_questions(options: dict[str, str]) -> dict:
                                  "the agent that were not found in the transcript; do not treat them as evidence.",
                  "criteria": {**options, NONE_FIT: "None of the listed options fits the evidence."}},
         "sufficient": _noul(
-            "Does `evidence` contain a concrete requirement or observed behavior that distinguishes "
-            "the options for `decision`?",
-            "A user requirement or observed behavior gives a reason to select an option.",
-            "The context gives no observed basis for selecting an option."),
+            "Do the requirements, observed behavior or implementation in `evidence` support comparing "
+            "the options for `decision`? Several engineering options can satisfy the same requirement. "
+            "The user need not prescribe a preference between them.",
+            "Known requirements and observations provide a basis for comparing the options.",
+            "A necessary fact for comparing the options is missing."),
         "pattern_present": _noul(
             "Does current source in `evidence` show an interface or data-flow pattern applicable to `decision`?",
             "Observed implementation shows an existing pattern for this kind of operation.",
@@ -167,9 +168,10 @@ def _decide_questions(options: dict[str, str]) -> dict:
                         "They contain advocacy, loaded wording, or claims that one option is better.",
                         "They are neutral statements."),
         "routine_operation": _noul(
-            "Does `decision` describe routine verification or bookkeeping?",
-            "It runs a check, formats existing text, or records observed status without selecting an approach.",
-            "It selects an implementation, design, or product behavior."),
+            "Does `decision` describe a routine operation or a correction within an already selected approach?",
+            "It runs checks, formats text, records status, or reuses an existing helper or test pattern "
+            "to correct a failure while preserving the selected behavior and interfaces.",
+            "It selects a new material approach or changes product behavior or interfaces."),
         "evidence_needed": {"type": "choice", "instructions":
             "Assume information is missing: which concrete check would most help settle this choice? "
             "Select a check supported by the current evidence, not a speculative concern.", "criteria": {
@@ -193,7 +195,7 @@ def _decide_questions(options: dict[str, str]) -> dict:
 
 
 _NEXT = {
-    "routine": "Carry out the user's settled instruction. No new approach decision is needed for this routine operation.",
+    "routine": "Carry out the routine correction or settled instruction. No new approach consultation is needed.",
     "binding": "Follow pick `{pick}`. It is binding for this subagent.",
     "advisory": "Take pick `{pick}`, or override it and state in your reply the evidence that outweighs it.",
     "gather_evidence": "The evidence is not enough to choose. Gather it with tool calls (read the code, run the "
@@ -263,12 +265,12 @@ def decide(raw: str, ctx: Context, ask: Ask) -> Outcome:
     prescribed = {option_id for option_id in options if answers[f"specified_{option_id}"]["noul"] >= BIND_AT}
     answers["exact_operation"] = {"type": "noul", "noul":
         answers.get(f"specified_{pick}", {}).get("noul", 0.0)}
-    pattern_follow_at = BIND_AT
-    if ctx.agent_id is None and answers["owner"]["probabilities"].get("agent", 0.0) >= BIND_AT:
-        pattern_follow_at = FOLLOW_AT  # advisory reuse leaves the engineering judgment with the main agent
-    pattern_basis = answers["pattern_present"]["noul"] >= BIND_AT \
-        and answers.get(f"follows_pattern_{pick}", {}).get("noul", 0.0) >= pattern_follow_at
-    has_basis = answers["sufficient"]["noul"] >= BIND_AT or pattern_basis
+    basis_at = BIND_AT
+    if ctx.agent_id is None and answers["owner"]["probabilities"].get("agent", 0.0) >= STOP_AT:
+        basis_at = FOLLOW_AT  # advisory engineering judgment remains with the main agent
+    pattern_basis = answers["pattern_present"]["noul"] >= basis_at \
+        and answers.get(f"follows_pattern_{pick}", {}).get("noul", 0.0) >= basis_at
+    has_basis = answers["sufficient"]["noul"] >= basis_at or pattern_basis
     reasons = [name for name, hit in (("missing_option", answers["missing_option"]["noul"] >= REFUSE_AT),
                                       ("missing_existing_helper", not prescribed
                                        and answers["helper_present"]["noul"] >= BIND_AT
@@ -571,7 +573,7 @@ def edit_gate(name: str, tool_input: dict, ctx: Context, ask: Ask) -> Outcome:
              "decisions": decisions, "evidence": ctx.evidence}
     questions = {
         "needs_decision": _noul(
-            "If `pending_input` changes files, does it implement an engineering, design, or product choice "
+            "If `pending_input` changes files, does it select a new material engineering, design, or product choice "
             "that the user has not specified exactly? Judge the actual change against the user's words in "
             "`evidence`. A general request to fix or build something does not specify its implementation. "
             "For chunked input, judge only the proposed changes visible in this fragment. Comments, padding, "
@@ -580,8 +582,9 @@ def edit_gate(name: str, tool_input: dict, ctx: Context, ask: Ask) -> Outcome:
             "library, algorithm, or architecture count even when surrounded by comments. Other fragments "
             "are checked separately.",
             "The change selects an implementation, approach, design, or product behaviour.",
-            "It applies a settled user instruction, runs tests, formats text, updates requested factual logs, "
-            "or adjusts assertions mechanically to match behavior already selected in a completed decision."),
+            "It applies a settled instruction, runs tests, formats text, records facts, adds regression coverage "
+            "for selected behavior, or corrects a failure with existing helpers or test setup without changing "
+            "the selected approach or interfaces."),
         "covered": _noul(
             "Does the implementation choice in `pending_input` match `selected_approach` in `decisions`? "
             "The hook has verified that these are completed Jev verdicts. Match the approach by meaning, "
@@ -612,8 +615,9 @@ def edit_gate(name: str, tool_input: dict, ctx: Context, ask: Ask) -> Outcome:
         return Outcome("allow", record={**record, "error": error.reason},
                        note=f"agent-decisions: edit check skipped (jev {error.reason}); action allowed")
     writes = name in EDIT_TOOLS or any(answer["writes_files"]["noul"] >= STOP_AT for answer in results)
+    coverage_at = FOLLOW_AT if ctx.agent_id is None else BIND_AT
     deny = writes and any(answer["needs_decision"]["noul"] >= STOP_AT and (
-        not decisions or answer["covered"]["noul"] < BIND_AT) for answer in results)
+        not decisions or answer["covered"]["noul"] < coverage_at) for answer in results)
     opaque = name in SHELL_TOOLS and (_interactive(command_of(tool_input)) or any(
         answer["accepts_code_input"]["noul"] >= STOP_AT for answer in results))
     message = ("Edit not run: this change requires a Jev decision. Run ts-decide on the choice with neutral "
@@ -703,7 +707,9 @@ def stop_gate(final: str, stop_hook_active: bool, ctx: Context, ask: Ask) -> Out
         return Outcome("allow")
     decided = consulted(ctx)
     binding = next((e for e in reversed(decided) if e.get("action") == "binding"), None)
-    state = {"policy": POLICY, "final_message": final, "evidence": ctx.evidence, "gate_contract": "stop-3",
+    question_message = re.sub(r"(?ms)^ {0,3}(`{3,}|~{3,})[^\n]*\n.*?^ {0,3}\1[ \t]*(?:\n|$)", "", final).strip()
+    state = {"policy": POLICY, "final_message": final, "question_message": question_message,
+             "evidence": ctx.evidence, "gate_contract": "stop-4",
              "current_user_instruction": evidence.clip(ctx.transcript.user_messages[-1])
              if ctx.transcript.user_messages else ""}
     state["decisions"] = _decision_summaries(ctx, final)
@@ -718,12 +724,13 @@ def stop_gate(final: str, stop_hook_active: bool, ctx: Context, ask: Ask) -> Out
                                 "verdict. Semantically identical wording counts; a general goal or instruction to continue does not.",
                                 "The user explicitly specified that exact choice.",
                                 "The agent selected the choice, or no exact user instruction settles it."),
-        "asks_user": _noul("Does `final_message` ask the user to make a decision or answer a question?",
-                           "It asks the user to decide or answer something.", "It asks the user nothing."),
-        "stated": _noul("If `final_message` asks the user something, do the user's messages in `evidence` already "
+        "asks_user": _noul("Does the agent directly ask the user to decide or answer something in `question_message`? "
+                           "Quoted verdicts, reported questions, logs, and next-action instructions are not requests for an answer.",
+                           "The agent asks the user for an answer now.", "The agent asks the user nothing."),
+        "stated": _noul("If `question_message` asks the user something, do the user's messages in `evidence` already "
                         "state the answer?", "The user's own words already answer it.",
                         "The user has not answered it, or nothing is asked."),
-        "owner": _owner_question("the question that `final_message` asks the user, if any"),
+        "owner": _owner_question("the question that `question_message` asks the user, if any"),
     }
     if state["decisions"]:
         questions["uncovered_choice"] = _noul(

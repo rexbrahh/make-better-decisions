@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
+from pathlib import Path
 
 from agent_decisions import gates, jev
 from agent_decisions.transcript import ToolCall, Transcript
@@ -17,6 +19,27 @@ def ctx_with(calls=(), entries=(), host="claude"):
 
 
 class StopGateTest(StateTestCase):
+    def test_observed_quoted_verdict_is_not_a_question_to_the_user(self):
+        final = json.loads((Path(__file__).parent / "fixtures" / "peer-ergonomics.json").read_text())["e2e_final"]
+
+        def ask(state, questions):
+            self.assertEqual(state["final_message"], current)
+            self.assertNotIn("ts-decide verdict:", state["question_message"])
+            for key in ("asks_user", "stated", "owner"):
+                self.assertIn("question_message", questions[key]["instructions"])
+            return asker(FakeJev(asks_user=.95 if "Should I" in state["question_message"] else .01))(state, questions)
+
+        current = final
+        self.assertEqual(gates.stop_gate(current, False, ctx_with(), ask).action, "allow")
+        current = final + "\nShould I replace the test framework?"
+        self.assertEqual(gates.stop_gate(current, False, ctx_with(), ask).action, "block")
+
+    def test_a_choice_inside_fenced_code_still_requires_a_consultation(self):
+        final = "```text\nI chose PostgreSQL instead of SQLite.\n```"
+        fake = FakeJev(made_choice=.95)
+        self.assertEqual(gates.stop_gate(final, False, ctx_with(), asker(fake)).action, "block")
+        self.assertEqual(fake.requests[0]["state"]["final_message"], final)
+
     def test_stop_hook_active_still_checks_a_new_choice(self):
         fake = FakeJev(made_choice=1.0)
         self.assertEqual(gates.stop_gate("I chose LRU.", True, ctx_with(), asker(fake)).action, "block")

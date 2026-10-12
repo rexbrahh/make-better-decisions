@@ -66,6 +66,8 @@ python3 bin/agent-decisions-install --host claude --install-root /path/to/instal
 
 Use per-host commands when you need separate evidence or rollback. The protected authority cache is sealed while the development checkout stays editable.
 
+The Codex helper registers an optional isolation profile. It preserves the default sandbox, approval policy, and reviewer. Select the profile explicitly to apply its native filesystem restrictions.
+
 Run the helper again after you change stdio MCP or plugin command configuration. A source value of `null` limits automatic refresh. Repeat runs preserve signed recipes, so do not treat them as proof that every upstream command change was tracked.
 
 Useful verified help commands:
@@ -106,7 +108,9 @@ Source discovery prioritizes requested paths, then project rule files, then othe
 
 Jev questions check one condition at a time. Code combines the answers. A decision needs an observed selection basis and no missing required fact or constraint. This follows [TypeSafe's atomic-question guidance](https://docs.typesafe.ai/introduction#atomic-questions-composed-in-code).
 
-An observed interface or data-flow pattern can provide a selection basis when the chosen option follows it. Pattern presence requires 0.8. A main-agent advisory uses the existing 0.5 follow threshold only when agent ownership is at least 0.8; worker bindings retain the 0.8 follow threshold. Missing facts, constraints, options, and user ownership still gate the result.
+An observed interface or data-flow pattern can provide a selection basis when the chosen option follows it. Main-agent advice uses a 0.5 basis threshold when agent ownership is at least 0.7. Worker bindings retain 0.8. Missing facts, constraints, options, and user ownership still gate the result.
+
+Routine fixes that reuse existing helpers, test setup, or regression patterns need no additional consultation. A selected approach covers its implementation and routine tests. The edit gate uses 0.5 for main-agent advisory coverage and 0.8 for worker coverage.
 
 A completed decision must have both records:
 

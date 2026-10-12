@@ -1,0 +1,34 @@
+{
+  "source": {
+    "e2e_final": "2026-10-11T22:26:00.209Z",
+    "e2e_stop": "stop:15 at 2026-10-11T22:26:07.906Z",
+    "web_reset_call": "call_6812664abbbd415eb81633f79d143e9e",
+    "web_mixed_edit_call": "call_92ace215db5f4e8f9a7dc11c5cf296a6",
+    "sanitized": "Project paths and serializer name replaced; test examples retain the observed helper pattern."
+  },
+  "e2e_final": "```text\nts-decide verdict: ADVISORY\ndecision: How should the missing portable coverage of PolicyInputJson be repaired within the existing adapter test file? Implementation source: project/app/editing/protocol_adapter.cc. Adapter test source: project/tests/app/editing_protocol_adapter_test.cc.\npick: extend_probe_round_trip  (extend_probe_round_trip 0.76, dedicated_serialization_case 0.18, none_fit 0.06)\nsufficient 0.43  missing_option 0.15  argued 0.10  owner=user 0.05\nobserved_pattern 0.89  pick_follows_pattern 0.76\nnext: Take pick `extend_probe_round_trip`, or override it and state in your reply the evidence that outweighs it.\n```\n\n- Exit code: **0**\n- Consultation wall time: **8.604 seconds**, end to end\n- Output chunk ID: **`459ce1`**\n- Follow-up `pwd`: **exit 0**, correct directory, no warning; **14.719 seconds**, chunk **`4d5018`**. Execution continued.\n\n| Assessment | Proposed fix | Source evidence |\n|---|---|---|\n| Direction is relevant but already implemented. | No additional change for this case. | The existing test calls the public serializer for both inputs and compares each digest with its wire digest. |\n\nNo product or configuration edits. Stopped after this case.",
+  "web_reset": {
+    "user": "Fix the failing test without changing production behavior.",
+    "observation": "FAIL: process already created its one instance",
+    "source": "func TestFlush(t *testing.T) { resetCreated(t); s := openFake(t); defer s.Close() }",
+    "edit": {
+      "file_path": "test_session.go",
+      "old_string": "t.Run(\"flush\", func(t *testing.T) {\n    s := openFake(t)\n",
+      "new_string": "t.Run(\"flush\", func(t *testing.T) {\n    resetCreated(t)\n    s := openFake(t)\n"
+    }
+  },
+  "web_mixed_edit": {
+    "decision": "How should SDK startup preserve the explicit validated plan?",
+    "selected_approach": "Validate the requested plan before startup, verify the effective plan, and close the session on startup failure.",
+    "edit": {
+      "file_path": "session.go",
+      "old_string": "session, err := start(plan)\nreturn session, err",
+      "new_string": "if err := validatePlan(plan); err != nil { return nil, err }\nsession, err := start(plan)\nif err != nil { return nil, err }\nif err := verifyPlan(session, plan); err != nil { session.Close(); return nil, err }\nreturn session, nil"
+    },
+    "test_edit": {
+      "file_path": "test_session.go",
+      "old_string": "// existing startup tests",
+      "new_string": "// startup regressions use the existing fake session\nfunc TestInvalidPlan(t *testing.T) { resetCreated(t); assertRejected(t, invalidPlan()) }\nfunc TestStartupClose(t *testing.T) { resetCreated(t); assertClosed(t, mismatchedPlan()) }"
+    }
+  }
+}

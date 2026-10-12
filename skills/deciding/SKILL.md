@@ -1,6 +1,6 @@
 ---
 name: deciding
-description: Use before discretionary edits to code or docs, before choosing between approaches, designs, libraries, or root-cause theories, and before asking the user to decide. Runs ts-decide with evidence the hook reads from signed context, tool observations, and bounded source files.
+description: Use for new material choices between approaches, designs, libraries, or root-cause theories, and before asking the user to decide. Routine fixes that reuse an existing helper or selected approach do not need another consultation. Runs ts-decide with hook-owned evidence.
 ---
 
 # Deciding with ts-decide
@@ -8,6 +8,8 @@ description: Use before discretionary edits to code or docs, before choosing bet
 Use `ts-decide` before you choose an approach, design, library, root-cause theory, or non-routine implementation.
 
 Do not use it for an exact user instruction or routine operation. Examples are tests, formatting, requested factual logs, and mechanical updates that implement a completed decision.
+
+Routine corrections include test setup/reset helpers and regression coverage for selected behavior. Reuse the existing helpers and conventions. Consult again when the fix selects a new material approach or changes product behavior or interfaces.
 
 Use Jev to evaluate a concrete choice against current evidence. Code owns the workflow. For an evidence request, perform the named check and include the helper path in the next decision question.
 
@@ -74,6 +76,8 @@ A completed decision is reusable only when the ledger entry and full verdict rec
 ## Edit and final-message gates
 
 The edit gate can reuse relevant advisory and binding decisions across later turns in the same session.
+
+One consultation covers the selected approach and its routine implementation and test corrections. Several viable engineering options can meet the same requirement. The user need not provide a preference between them.
 
 The Stop gate separates selected choices from exact user-settled choices. It accepts exact user-settled choices at `settled_choice >= 0.8`. It accepts a final choice only when `uncovered_choice <= 0.2`.
 
