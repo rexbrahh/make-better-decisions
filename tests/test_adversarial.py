@@ -132,7 +132,8 @@ class AdversarialGateTest(StateTestCase):
                              post=FakeJev(writes_files=.99, needs_decision=.99))
         self.assertEqual((result or {}).get("hookSpecificOutput", {}).get("permissionDecision"), "deny")
 
-    def test_api_outage_still_allows_a_pending_edit(self):
+    def test_api_outage_allows_a_pending_edit_in_availability_mode(self):
+        self.availability()
         from agent_decisions import jev
         result = gates.edit_gate("Edit", {"file_path": "parser.py"}, make_ctx(),
                                  asker(FakeJev(raises=jev.JevError("timeout"))))

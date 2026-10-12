@@ -14,6 +14,15 @@ def _transcript(users=(), calls=(), brief=None):
 
 
 class EvidenceTest(unittest.TestCase):
+    def test_encoded_budget_preserves_escaped_text_and_call_order(self):
+        text = '"\\\nλ' * 3_000
+        calls = [ToolCall(f"call{i}", "Read", f"source{i}.py", text) for i in range(25)]
+        bundle = evidence.build(_transcript(["Preserve the current instructions."], calls))
+        self.assertLessEqual(len(json.dumps(bundle)), policy.EVIDENCE_CHARS)
+        retained = bundle["tool_calls_newest_first"]
+        self.assertEqual(retained[0]["id"], "call24")
+        self.assertTrue(all(call["output"] == text for call in retained))
+
     def test_large_discarded_tool_outputs_do_not_dominate_context_building(self):
         log = "unrelated historical output " * 80_000
         calls = [ToolCall(f"old{i}", "Bash", "read unrelated log", log) for i in range(30)]

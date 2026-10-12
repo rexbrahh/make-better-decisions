@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 MODEL = "jev-1.13.0"
+REVIEW_CONTRACT = "scoped-review-1"
 URL = "https://api.typesafe.ai/v1/systemone"
 TIMEOUT_S = 3.0
 KEY_FILE = Path.home() / ".config" / "sops-nix" / "secrets" / "typesafe_api_key"
@@ -40,3 +41,17 @@ POLICY = (
 def state_dir() -> Path:
     override = os.environ.get("AGENT_DECISIONS_STATE")
     return Path(override) if override else Path.home() / ".local" / "state" / "agent-decisions"
+
+
+def review_mode(host: str) -> str:
+    """Only the protected, signed installation policy can permit unchecked actions."""
+    from . import ledger
+    for entry in reversed(ledger.entries("installation")):
+        spec = entry.get("spec")
+        if entry.get("gate") == "installation" and isinstance(spec, dict) and spec.get("host") == host:
+            return "availability" if spec.get("review_mode") == "availability" else "required"
+    return "required"
+
+
+def fail_open(host: str) -> bool:
+    return review_mode(host) == "availability"

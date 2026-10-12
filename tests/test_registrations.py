@@ -21,7 +21,7 @@ class RegistrationTest(StateTestCase):
         return subprocess.run(["/bin/sh", "-c", command], input="{}", capture_output=True, text=True,
                               timeout=30, env={**os.environ, **env})
 
-    def test_startup_failures_allow_visibly_without_invalid_stdout(self):
+    def test_startup_failures_block_reviewed_actions_without_invalid_stdout(self):
         for registration in ("hooks/hooks.json", "codex/hooks.json"):
             for event, cmds in commands(registration).items():
                 for case in ("missing_file", "missing_module", "partial_output", "missing_python"):
@@ -37,7 +37,12 @@ class RegistrationTest(StateTestCase):
                         result = self.run_with_root(cmds[0], root, **env)
                         self.assertEqual(result.returncode, 0, result.stderr)
                         response = json.loads(result.stdout)
-                        self.assertIn("action allowed", response["systemMessage"])
+                        if event == "PreToolUse":
+                            self.assertEqual(response["hookSpecificOutput"]["permissionDecision"], "deny")
+                        elif event in {"Stop", "SubagentStop"}:
+                            self.assertEqual(response["decision"], "block")
+                        else:
+                            self.assertIn("startup failed", response["systemMessage"])
                         self.assertNotIn("invalid partial output", result.stdout)
 
     def test_healthy_denial_is_forwarded_without_allow_fallback(self):

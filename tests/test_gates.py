@@ -113,7 +113,8 @@ class QuestionGateTest(StateTestCase):
         self.assertEqual(second.action, "deny")
         self.assertEqual(fake.requests, [])
 
-    def test_jev_failure_allows_with_a_note(self):
+    def test_jev_failure_allows_with_a_note_in_availability_mode(self):
+        self.availability()
         outcome = gates.question_gate(ASKED, make_ctx(), asker(FakeJev(raises=jev.JevError("http_529"))))
         self.assertEqual(outcome.action, "allow")
         self.assertIn("http_529", outcome.note)

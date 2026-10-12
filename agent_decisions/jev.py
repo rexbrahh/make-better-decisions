@@ -6,6 +6,7 @@ import json
 import math
 import os
 import socket
+import time
 import urllib.error
 import urllib.request
 from concurrent.futures import Future, TimeoutError as FutureTimeout
@@ -67,14 +68,32 @@ def _post(body: bytes, key: str, timeout: float) -> bytes:
         raise JevError("unreachable") from None
 
 
-def ask(state: dict, questions: dict, *, key: str, post=post) -> dict[str, dict]:
+def ask(state: dict, questions: dict, *, key: str, post=post, metrics: dict | None = None) -> dict[str, dict]:
+    started = time.perf_counter()
     body = json.dumps({"model": policy.MODEL, "state": state, "questions": questions}).encode()
+    if metrics is not None:
+        metrics.update({"serialization_ms": (time.perf_counter() - started) * 1_000,
+                        "request_bytes": len(body), "question_count": len(questions), "requested_model": policy.MODEL})
+    started = time.perf_counter()
     try:
-        answers = json.loads(post(body, key, policy.TIMEOUT_S))["answers"]
+        raw = post(body, key, policy.TIMEOUT_S)
+    finally:
+        if metrics is not None:
+            metrics["api_ms"] = (time.perf_counter() - started) * 1_000
+    try:
+        response = json.loads(raw)
+        answers = response["answers"]
         for qid, question in questions.items():
             _check(answers[qid], question)
     except (ValueError, KeyError, TypeError):
         raise JevError("malformed") from None
+    if metrics is not None:
+        if isinstance(response.get("model"), str):
+            metrics["model"] = response["model"][:100]
+        usage = response.get("usage")
+        if isinstance(usage, dict):
+            metrics["usage"] = {key: value for key, value in usage.items()
+                                if type(value) in (int, float) and math.isfinite(value) and value >= 0}
     return answers
 
 

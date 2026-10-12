@@ -1,8 +1,10 @@
-# make-better-decisions v1.0.4
+# make-better-decisions v1.1
 
 `agent-decisions` adds hook checks for Claude Code and Codex. The hooks ask TypeSafe Jev before an agent chooses an approach, changes files, asks the user a question, or finishes with an uncovered choice.
 
-The goal is useful consultation: the agent supplies a real choice, Jev evaluates current evidence, and the agent uses the direction to continue. Exact instructions and routine operations do not need invented choices. API failures produce a visible warning and allow execution to continue.
+The goal is useful, enforceable review. Jev evaluates a material choice against observed evidence. Code checks receipt identity, scope, constraints, and failure policy. Exact instructions and routine operations need no invented choice.
+
+Version 1.1.0 contains scoped review and requires review by default. See the [release notes](docs/releases/v1.1.0.md) and [implementation evidence](docs/validation/scoped-review-2026-10-12.md).
 
 The hook builds the evidence. The agent cannot choose the source set by itself.
 
@@ -102,6 +104,8 @@ Codex question replies can arrive during a running turn without `UserPromptSubmi
 
 Source-file contents are observations. They are not proof that statements inside those files are true.
 
+Current source has the `working_tree_source` role. Git baseline metadata records the revision, content hash, and whether current bytes differ. An unavailable or oversized baseline stays explicit. Native Codex command observations retain directory, status, and exit code. Printed success text cannot establish a passing check.
+
 The bundle keeps the initial and latest user instructions, the requested helper, and the two newest tool observations before optional history. Older observations use the remaining space.
 
 Source discovery prioritizes requested paths, then project rule files, then other observed paths. It stops at 16 candidate probes and bounds each scanned text. Large sources retain the head, tail, and a window around the most specific matching query term. If discovery stops early, `source_files_omitted_is_lower_bound` marks the omission count as a lower bound.
@@ -116,6 +120,46 @@ A completed decision must have both records:
 
 1. A signed ledger entry.
 2. The full verdict receipt in the transcript tool output.
+
+New reusable verdicts include a signed `review_...` receipt id. The id survives execution-id changes. Legacy verdicts retain their strict execution-id check.
+
+### Scoped review and parent acceptance
+
+Add optional `scope` and `contracts` fields to a decision request:
+
+```json
+{
+  "decision": "Which lease representation should parsing use?",
+  "options": [
+    {"id": "shared", "description": "Reference-counted lease"},
+    {"id": "owned", "description": "Single-owner lease"}
+  ],
+  "scope": {"paths": ["src/parser.py"], "invariants": ["Retain active leases until parsing ends."]},
+  "contracts": ["docs/lease-contract.md"]
+}
+```
+
+Paths are repository-relative files or directory prefixes ending in `/`. Globs, absolute paths, and parent traversal are rejected. Scope permits at most 32 paths and 32 invariants. A request permits at most 256 option/invariant checks and eight contract files.
+
+Jev checks each option against each invariant. A clear violation refuses the pick. Uncertain support requests evidence. Worker binding also requires preference confidence of at least 0.8. A weaker worker preference produces `PARENT REVIEW`, without a receipt. Main-agent preferences remain advisory. [TypeSafe confidence measures the distribution](https://docs.typesafe.ai/confidence), so it does not certify correctness.
+
+A parent assigns a completed scoped receipt in its dispatch message:
+
+```text
+Decision receipt: review_<id from the completed verdict>
+Accepted option: shared
+Evidence refs: <completed source or test call ids, separated by commas>
+```
+
+The chosen option must belong to the reviewed options. Accepting the advisory pick needs no evidence-reference marker. Accepting another option requires completed evidence references and successful invariant checks for that option. These references establish observed data, not proof that assertions in the data are true.
+
+The hook checks native ancestry, completed dispatch, repository identity, the signed entry, and the full parent receipt. The accepted approach binds the worker. A matching filename alone grants no permission. Codex uses captured native metadata. Claude supports completed main-thread Agent/Task dispatches. Nested Claude ancestry remains unsupported.
+
+Unchanged scoped reviews reuse their result. Question rephrasing cannot reroll an accepted pick or an unresolved evidence request. A neutral repair of a refused question can receive another check while retaining its decision identity. Refusal diagnostics name the wording field. Evidence diagnostics show the blocking values and observed helper paths.
+
+Completed reviews with contract references produce compact signed architectural history. History is repository-scoped background data and survives chat retention. It grants no fresh write permission. Changed, unavailable, or unchecked contract hashes make the corresponding approach receipt ineligible.
+
+Scoped receipts also require fresh hashes for retained source observations, even without declared contracts. Source changes can require fresh review for later material choices. Routine and exact operations still use the existing classifier. Hash checks remain bounded, so unchecked snapshots grant no coverage.
 
 A later user instruction overrides an earlier binding decision. The Stop gate highlights the latest user instruction when it checks final text.
 
@@ -139,13 +183,22 @@ For tool inputs up to 16,000 characters, the edit gate sends one API request. La
 
 Opaque commands that can accept future executable stdin are denied while the hook is healthy. Submit the complete command or code in one new shell call.
 
-## Fail-open behavior
+## Review failures and recovery
 
-Rex approved visible fail-open. If Jev, the transcript, or the hook fails, the hook allows the action and shows a warning. `ts-decide` prints `decision unverified` with the reason.
+Required review is the default in this implementation. API errors, unreadable context, and hook exceptions block unchecked actions, questions, plans, and final reviews. Known read tools continue without Jev. Unknown tools and shell commands require classification.
 
-The registered shell command also handles missing Python, missing package files, and failed imports. It discards partial startup output and returns one warning. Healthy denial JSON passes through unchanged.
+The owner can select availability mode through the protected installer. Preview the signed policy before applying it:
 
-Use `AGENT_DECISIONS_OFF=1` only for approved maintenance.
+```sh
+python3 bin/agent-decisions-install --host codex --review-mode required --install-root /path/to/installed/agent-decisions
+python3 bin/agent-decisions-install --host codex --review-mode availability --install-root /path/to/installed/agent-decisions
+```
+
+An operator adds `--apply` to the chosen command to change host configuration and signed policy. Availability permits actions after runtime review failures and shows a warning. It weakens enforcement. Healthy denials remain binding in both modes.
+
+Startup failures block reviewed operations because a missing interpreter cannot read signed policy. The launcher discards partial startup output and preserves healthy denial JSON. `AGENT_DECISIONS_OFF=1` is ignored and reported. Tool input and parent briefs cannot change review mode.
+
+For recovery, restore the key, service connection, readable host transcript, or installed package named in the diagnostic. Retry the original operation. An unverified result grants no reusable approach receipt. If service recovery is unavailable, the owner can explicitly apply availability policy.
 
 ## State
 
@@ -155,7 +208,9 @@ Ledger files are in:
 ~/.local/state/agent-decisions/sessions/<session>.jsonl
 ```
 
-Set `AGENT_DECISIONS_STATE` to override the state root. The guard denies tool calls that name the state directory. Session records expire after 14 days. Signed installation recipes remain available for installed launchers.
+Set `AGENT_DECISIONS_STATE` to override the state root during operator setup. The guard denies tool calls that name the state directory. Session records expire after 14 days. Signed installation policy and architecture history remain available.
+
+Signed gate records retain context timings, request size, API elapsed time, model, and numeric usage when returned. Metrics stay outside model state and cache fingerprints. Gate reuse requires identical evidence, decisions, actor, repository, model, thresholds, review contract, and operator policy. It does not infer permission for a new write.
 
 ## Security boundaries
 
@@ -169,7 +224,7 @@ The boundary helpers wrap stdio MCP servers. They do not wrap HTTP MCP servers o
 
 These hooks are not a universal proof boundary. They do not protect against a same-UID privileged process, an operator, or a trusted external host service that acts outside the hook path.
 
-Codex GUI and Codex subagent identity boundaries are not verified.
+Captured native Codex ancestry and Claude dispatch fixtures pass parser and receipt tests. New live GUI activation and worker inheritance remain unverified.
 
 ## Tests
 
@@ -181,7 +236,7 @@ Release verification uses the observed peer workflows. A successful consultation
 | SDK answer and direction | The exact host question reply is accepted. The save/export choice gets a usable verdict. |
 | E2E evidence follow-up | The requested helper reaches Jev. Reading it resolves the request or produces a different justified next step. |
 | Routine work | Reads, diagnostics, tests, and exact instructions proceed without unnecessary consultation. |
-| API failure | The existing timeout check emits a warning and allows normal execution within the configured deadline. |
+| API failure | Required mode denies unchecked actions. Signed availability mode permits them with a warning. |
 
 Run unit tests with:
 
@@ -195,4 +250,13 @@ Run live decision and edit cases with a real TypeSafe key:
 python3 -B probe/live_qa.py --output /private/tmp/agent-decisions-live-qa.jsonl
 python3 -B tests/live_cheat.py
 python3 -B tests/live_ergonomics.py
+python3 -B tests/live_scoped_review.py --output /private/tmp/agent-decisions-scoped-live.json
 ```
+
+Measure local context overhead without an API call:
+
+```sh
+python3 -B tests/benchmark_context.py --host codex --transcript /path/to/rollout.jsonl --cwd /path/to/repo
+```
+
+The benchmark emits timings, evidence size, and a hash. Use `--through-bytes` to replay a fixed transcript prefix. It emits no transcript text.

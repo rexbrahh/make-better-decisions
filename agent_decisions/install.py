@@ -502,6 +502,7 @@ def installation_entry(host: str, state_root: Any, servers: Mapping[str, Mapping
     return {"session_id": "installation", "gate": "installation", "action": "configured",
             "time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "spec": {"host": host, "state_root": canonical_path(state_root),
+                     "review_mode": "required",
                      "servers": copy.deepcopy(dict(servers)),
                      "claude_matchers": copy.deepcopy(claude_matchers),
                      "previous_shell_prefix": previous_shell_prefix,
@@ -585,7 +586,7 @@ def _call_json_rpc(command: List[str], request: Mapping[str, Any], timeout_s: fl
     try:
         if initialize:
             send_and_wait({"id": str(uuid.uuid4()), "method": "initialize",
-                           "params": {"clientInfo": {"name": "agent-decisions-install", "version": "1.0.5"},
+                           "params": {"clientInfo": {"name": "agent-decisions-install", "version": "1.1.0"},
                                       "capabilities": {}}})
         return send_and_wait(request)
     finally:
@@ -775,6 +776,8 @@ def cli(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="agent-decisions-install")
     parser.add_argument("--host", choices=("codex", "claude", "both"), default="both")
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--review-mode", choices=("required", "availability"), default="required",
+                        help="Required blocks unchecked actions; availability permits them with a warning.")
     parser.add_argument("--state-root", default=str(policy.state_dir()))
     parser.add_argument("--install-root", default=str(default_install_root()))
     parser.add_argument("--codex-binary", default=CODEX_BINARY)
@@ -805,6 +808,8 @@ def cli(argv: Optional[List[str]] = None) -> int:
                                        plugin_manifests=read_claude_plugin_manifests(manifest_paths),
                                        previous_spec=previous_installation_spec("claude")))
 
+    for plan in plans:
+        plan["installation_entry"]["spec"]["review_mode"] = args.review_mode
     result: Dict[str, Any] = {"apply": args.apply, "plans": plans}
     if args.apply:
         applied = []

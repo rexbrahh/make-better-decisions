@@ -87,6 +87,11 @@ class StateTestCase(unittest.TestCase):
             else:
                 os.environ[key] = value
 
+    def availability(self, host="claude"):
+        from agent_decisions import ledger
+        ledger.append({"session_id": "installation", "gate": "installation", "action": "configured",
+                       "spec": {"host": host, "review_mode": "availability"}})
+
 
 class FakeJev:
     """Stands in for the HTTP transport. A noul answers its override or 0.0;

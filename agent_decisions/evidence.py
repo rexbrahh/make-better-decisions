@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 from pathlib import Path
 
 from .policy import CLIP_CHARS, EVIDENCE_CHARS, USER_MESSAGES, state_dir
@@ -30,7 +31,7 @@ _PATH_TOKEN = re.compile(
     r"((?:\.{1,2}/|/)?[A-Za-z0-9_@+.-]+(?:/[A-Za-z0-9_@+.-]+)+"
     r"|[A-Za-z0-9_@+.-]+\.(?:c|cc|cpp|cxx|css|go|h|hpp|html|ini|js|json|jsx|md|py|rs|sh|toml|ts|tsx|txt|yaml|yml)"
     r"|\.env(?:\.[A-Za-z0-9_.-]+)?)"
-    r"(?=$|[\s\"'`)>}\],:;])")
+    r"(?=$|[\s\"'`)>}\],:;?!])")
 _CONSTRAINT_HINTS = (
     "must", "never", "always", "only", "preserve", "do not", "don't", "scope",
     "constraint", "required", "require", "non negotiable", "approved", "without authorization",
@@ -122,16 +123,19 @@ def build(t: Transcript, secrets: tuple[str, ...] = (), *, query: str = "", cwd=
         "source_files_truncated": 0,
     }
     bundle: dict = {"user_messages": [], "tool_calls_newest_first": [], "metadata": metadata}
+    used_chars = len(json.dumps(bundle, sort_keys=True))
 
     selected_users = _select_user_messages(t.user_messages, query, clean)
     chosen_users: dict[int, str] = {}
 
     def include_user(idx: int, text: str) -> None:
+        nonlocal used_chars
         trial = {**chosen_users, idx: text}
         trial_messages = [trial[idx] for idx in sorted(trial)]
         if _fits({**bundle, "user_messages": trial_messages}, reserved_chars=_CONTEXT_METADATA_CHARS):
             chosen_users[idx] = text
             bundle["user_messages"] = trial_messages
+            used_chars = len(json.dumps(bundle, sort_keys=True))
 
     # Keep the original constraint and current instruction ahead of optional history.
     for idx, text in sorted(selected_users):
@@ -143,6 +147,7 @@ def build(t: Transcript, secrets: tuple[str, ...] = (), *, query: str = "", cwd=
         trial = {**bundle, "brief": brief, "brief_trust": "unverified_parent_agent_brief"}
         if _fits(trial, reserved_chars=_CONTEXT_METADATA_CHARS):
             bundle.update({"brief": brief, "brief_trust": "unverified_parent_agent_brief"})
+            used_chars = len(json.dumps(bundle, sort_keys=True))
         else:
             metadata["brief_omitted"] = 1
 
@@ -150,19 +155,26 @@ def build(t: Transcript, secrets: tuple[str, ...] = (), *, query: str = "", cwd=
     chosen_calls: dict[int, dict] = {}
 
     def include_call(idx: int, call: ToolCall) -> None:
+        nonlocal used_chars
         projected = {"id": call.id, "tool": call.name, "input": clip(call.input),
                      "output": clip(call.output), "trust": "unverified_tool_observation"}
-        projected_calls = [*bundle["tool_calls_newest_first"], projected]
-        if not _fits({**bundle, "tool_calls_newest_first": projected_calls},
-                     reserved_chars=_CONTEXT_METADATA_CHARS):
+        if call.execution is not None:
+            projected["execution"] = scrub(call.execution, secrets)
+        remaining = EVIDENCE_CHARS - _CONTEXT_METADATA_CHARS - used_chars
+        if len(projected["input"]) + len(projected["output"]) > remaining:
+            return  # even unescaped text cannot fit, so do not encode the full candidate
+        separator = 2 if bundle["tool_calls_newest_first"] else 0
+        if len(json.dumps(projected, sort_keys=True)) + separator > remaining:
             return
         # Redact complete retained texts before clipping, so boundary fragments cannot expose secrets.
         item = {**projected, "input": clean(call.input), "output": clean(call.output)}
         trial = {**chosen_calls, idx: item}
         trial_calls = [trial[index] for index in sorted(trial, reverse=True)]
-        if _fits({**bundle, "tool_calls_newest_first": trial_calls}, reserved_chars=_CONTEXT_METADATA_CHARS):
+        added_chars = len(json.dumps(item, sort_keys=True)) + separator
+        if added_chars <= remaining:
             chosen_calls.update({idx: item})
             bundle["tool_calls_newest_first"] = trial_calls
+            used_chars += added_chars
 
     source_items, source_omitted, source_too_large, scan_limited = _source_files(t, query, cwd, secrets)
     metadata["source_files_candidates"] = len(source_items) + source_omitted + source_too_large
@@ -170,16 +182,18 @@ def build(t: Transcript, secrets: tuple[str, ...] = (), *, query: str = "", cwd=
         bundle["source_files"] = []
 
     def include_source(item: dict) -> None:
-        nonlocal source_omitted
+        nonlocal source_omitted, used_chars
         trial_items = [*bundle.get("source_files", []), item]
         if _fits({**bundle, "source_files": trial_items}, reserved_chars=_CONTEXT_METADATA_CHARS):
             bundle["source_files"] = trial_items
+            used_chars = len(json.dumps(bundle, sort_keys=True))
         else:
             source_omitted += 1
 
     # Source discovery ranks the requested helper first. Older history must not displace it.
     for item in source_items[:1]:
         include_source(item)
+    used_chars = len(json.dumps(bundle, sort_keys=True))
     recent_calls = sorted(selected_calls, key=lambda item: item[0], reverse=True)[:2]
     for idx, item in recent_calls:
         include_call(idx, item)
@@ -196,6 +210,7 @@ def build(t: Transcript, secrets: tuple[str, ...] = (), *, query: str = "", cwd=
             include_user(idx, text)
     metadata["user_messages_included"] = len(bundle["user_messages"])
     metadata["user_messages_omitted"] = max(0, len(t.user_messages) - len(bundle["user_messages"]))
+    used_chars = len(json.dumps(bundle, sort_keys=True))
 
     for _idx, item in selected_calls:
         if _idx not in chosen_calls:
@@ -212,6 +227,8 @@ def _fits(bundle: dict, *, reserved_chars: int = 0) -> bool:
 
 def _trim_to_budget(bundle: dict) -> None:
     metadata = bundle.get("metadata", {})
+    while not _fits(bundle) and bundle.get("architecture_history"):
+        bundle["architecture_history"].pop()
     while not _fits(bundle) and bundle.get("tool_calls_newest_first"):
         bundle["tool_calls_newest_first"].pop()
         metadata["tool_calls_included"] = len(bundle["tool_calls_newest_first"])
@@ -309,6 +326,7 @@ def _source_files(t: Transcript, query: str, cwd, secrets: tuple[str, ...]) -> t
 
     items: list[dict] = []
     too_large = 0
+    revision = _git_revision(root)
     for rel, path in prioritized.items():
         if len(items) >= _MAX_SOURCE_FILES:
             omitted += 1
@@ -320,8 +338,69 @@ def _source_files(t: Transcript, query: str, cwd, secrets: tuple[str, ...]) -> t
             else:
                 omitted += 1
         else:
+            item["git_baseline"] = _git_baseline(root, rel, revision, item["sha256"])
             items.append(item)
     return items, omitted, too_large, scan_limited
+
+
+def _git_revision(root: Path) -> str | None:
+    try:
+        result = subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "HEAD"],
+                                capture_output=True, timeout=1)
+        value = result.stdout.decode("ascii", errors="replace").strip()
+        return value if result.returncode == 0 and re.fullmatch(r"[a-f0-9]{40,64}", value) else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _git_baseline(root: Path, rel: str, revision: str | None, current_hash: str) -> dict:
+    if revision is None:
+        return {"status": "unavailable"}
+    reference = f"{revision}:{rel}"
+    try:
+        size = subprocess.run(["git", "-C", str(root), "cat-file", "-s", reference],
+                              capture_output=True, timeout=1)
+        if size.returncode != 0:
+            return {"revision": revision, "status": "not_in_baseline"}
+        if int(size.stdout) > _MAX_SOURCE_BYTES:
+            return {"revision": revision, "status": "too_large"}
+        result = subprocess.run(["git", "-C", str(root), "cat-file", "blob", reference],
+                                capture_output=True, timeout=1)
+        if result.returncode != 0 or len(result.stdout) > _MAX_SOURCE_BYTES:
+            return {"revision": revision, "status": "unavailable"}
+        digest = hashlib.sha256(result.stdout).hexdigest()
+        return {"revision": revision, "status": "observed", "sha256": digest,
+                "differs_from_worktree": digest != current_hash}
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return {"revision": revision, "status": "unavailable"}
+
+
+def contract_observations(paths, cwd, secrets: tuple[str, ...]) -> dict:
+    """Read bounded current hashes without promoting contract text to user authority."""
+    root = Path(cwd).resolve()
+    current = {}
+    for rel in dict.fromkeys(paths):
+        if len(current) == _MAX_SOURCE_FILES:
+            break
+        path = _resolve_source(root, rel)
+        item, _reason = _read_source(root, rel, path, secrets) if path is not None else (None, None)
+        current[rel] = {"sha256": item["sha256"] if item is not None else None,
+                        "trust": "verified_file_observation" if item is not None else "unavailable"}
+    return current
+
+
+def architecture_history(records: list[dict], current: dict) -> list[dict]:
+    """Historical decisions never grant authority. Unchecked contracts stay explicit."""
+    result = []
+    for record in reversed(records):
+        statuses = {}
+        for rel, expected in record.get("contracts", {}).items():
+            actual = current.get(rel, {}).get("sha256")
+            statuses[rel] = "not_checked" if rel not in current else "unavailable" if actual is None \
+                else "unchanged" if actual == expected else "changed"
+        result.append({**record, "contract_status": statuses, "trust": "signed_historical_decision",
+                       "authorizes_write": False})
+    return result
 
 
 def _ranked_path_candidates(t: Transcript, query: str) -> tuple[list[str], int, bool]:
@@ -552,6 +631,7 @@ def _read_source(root: Path, rel: str, path: Path, secrets: tuple[str, ...], *, 
         "sha256": hashlib.sha256(data).hexdigest(),
         "text": text,
         "source": "hook_file_read",
+        "role": "working_tree_source",
         "trust": "verified_file_observation",
         "truncated": truncated,
     }, None

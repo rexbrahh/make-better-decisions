@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,7 @@ _CODEX_INJECTED = (
     "The following is the Codex agent history",
     "<codex_delegation>",
     "<subagent_notification>",
+    "<external_codex_apps_open_page>",
 )
 # Claude Code echoes shell and slash-command output as origin-less user records.
 _CLAUDE_ECHOES = ("<bash-stdout>", "<bash-stderr>", "<local-command-stdout>", "<local-command-stderr>")
@@ -29,11 +31,21 @@ def is_codex_hook_feedback(text: str) -> bool:
 
 
 @dataclass(frozen=True)
+class HostIdentity:
+    thread_id: str
+    session_id: str
+    parent_thread_id: str | None
+    agent_id: str | None
+    cwd: str
+
+
+@dataclass(frozen=True)
 class ToolCall:
     id: str
     name: str
     input: str
     output: str = ""
+    execution: dict | None = None  # native host fields remain observations, not verification
 
 
 @dataclass(frozen=True)
@@ -45,6 +57,7 @@ class Transcript:
     brief: str | None = None  # a subagent's task, written by its parent agent
     user_keys: tuple[str, ...] = ()  # host record identities, including timestamps when present
     question_reply_keys: tuple[str, ...] = ()  # host replies matched to earlier completed questions
+    identity: HostIdentity | None = None
 
     @property
     def turn_key(self) -> str:
@@ -140,7 +153,7 @@ def load(path: str | Path, host: str) -> Transcript:
             if isinstance(record, dict):
                 records.append(record)
     parsed = parse(records)
-    if not parsed.user_messages and not parsed.tool_calls and parsed.brief is None:
+    if not parsed.user_messages and not parsed.tool_calls and parsed.brief is None and parsed.identity is None:
         raise OSError("no usable transcript records")
     return parsed
 
@@ -164,6 +177,7 @@ class _Builder:
         self.calls: list[tuple[str, str, str]] = []
         self.call_ids: set[str] = set()
         self.outputs: dict[str, str] = {}
+        self.executions: dict[str, dict] = {}
         self.turn_start = 0
         self.last_text = ""
         self.brief: str | None = None
@@ -198,7 +212,7 @@ class _Builder:
         self.outputs[call_id] = output
 
     def build(self) -> Transcript:
-        calls = tuple(ToolCall(i, n, inp, self.outputs.get(i, "")) for i, n, inp in self.calls)
+        calls = tuple(ToolCall(i, n, inp, self.outputs.get(i, ""), self.executions.get(i)) for i, n, inp in self.calls)
         return Transcript(tuple(self.users), calls, calls[self.turn_start:], self.last_text,
                           self.brief, tuple(self.user_keys), tuple(self.question_reply_keys))
 
@@ -234,6 +248,7 @@ def _claude(records: list[dict]) -> Transcript:
 
 def _codex(records: list[dict]) -> Transcript:
     b = _Builder()
+    identity = _codex_identity(records)
     for r in records:
         if r.get("type") == "event_msg":
             p = r.get("payload") or {}
@@ -244,6 +259,8 @@ def _codex(records: list[dict]) -> Transcript:
             if item.get("type") == "CommandExecution":
                 b.call(call_id, "Bash", {"command": item.get("command", [])})
                 b.output(call_id, item.get("aggregated_output", ""))
+                b.executions[call_id] = {key: item[key] for key in ("cwd", "status", "exit_code", "process_id")
+                                         if key in item}
             elif item.get("type") == "McpToolCall":
                 b.call(call_id, f"mcp__{item.get('server', '')}__{item.get('tool', '')}", item.get("arguments"))
                 b.output(call_id, item.get("result"))
@@ -257,7 +274,18 @@ def _codex(records: list[dict]) -> Transcript:
         kind = p.get("type")
         if kind == "message":
             text = _text(p.get("content"))
-            if p.get("role") == "user" and text and not text.lstrip().startswith(_CODEX_INJECTED) \
+            if p.get("role") == "user" and text.lstrip().startswith("<send_user_message_question_reply"):
+                questions = tuple(ToolCall(i, n, inp, b.outputs.get(i, "")) for i, n, inp in b.calls
+                                  if n in QUESTION_TOOLS)
+                if (p.get("origin") or {}).get("kind", "human") == "human" and _codex_question_reply(text, questions):
+                    b.user(text, r, question_reply=True)
+            elif p.get("role") == "user" and text.lstrip().startswith("<codex_delegation>"):
+                b.parent(text)
+            elif p.get("role") == "user" and text and identity is not None and identity.agent_id is not None \
+                    and (p.get("origin") or {}).get("kind") != "human" \
+                    and not text.lstrip().startswith(_CODEX_INJECTED) and not is_codex_hook_feedback(text):
+                b.parent(text)
+            elif p.get("role") == "user" and text and not text.lstrip().startswith(_CODEX_INJECTED) \
                     and not is_codex_hook_feedback(text) \
                     and (p.get("origin") or {}).get("kind", "human") == "human":
                 questions = tuple(ToolCall(i, n, inp, b.outputs.get(i, "")) for i, n, inp in b.calls
@@ -275,4 +303,42 @@ def _codex(records: list[dict]) -> Transcript:
                 b.call(p.get("call_id", ""), p.get("name", ""), p.get("input", ""))
         elif kind in ("function_call_output", "custom_tool_call_output"):
             b.output(p.get("call_id", ""), p.get("output", ""))
-    return b.build()
+    built = b.build()
+    return Transcript(built.user_messages, built.tool_calls, built.turn_calls,
+                      built.last_assistant_text, built.brief, built.user_keys,
+                      built.question_reply_keys, identity)
+
+
+def _codex_identity(records: list[dict]) -> HostIdentity | None:
+    metadata = [record.get("payload") for record in records if record.get("type") == "session_meta"]
+    if not metadata:
+        return None
+    first = metadata[0]
+    if not isinstance(first, dict) or "source" not in first:
+        return None  # older host transcripts do not contain native identity
+    if any(item != first for item in metadata[1:]):
+        raise OSError("conflicting host identity records")
+    thread_id = first.get("id")
+    session_id = first.get("session_id", thread_id)
+    cwd = first.get("cwd")
+    valid_id = lambda value: isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value)
+    if not valid_id(thread_id) or not valid_id(session_id) or not isinstance(cwd, str) or not cwd:
+        raise OSError("invalid host identity")
+    source = first["source"]
+    if isinstance(source, str):
+        return HostIdentity(thread_id, session_id, None, None, cwd)
+    subagent = source.get("subagent") if isinstance(source, dict) else None
+    spawn = subagent.get("thread_spawn") if isinstance(subagent, dict) else None
+    if not isinstance(spawn, dict):
+        raise OSError("unsupported host agent identity")
+    parent = spawn.get("parent_thread_id")
+    agent = spawn.get("agent_path")
+    depth = spawn.get("depth")
+    if not valid_id(parent) or parent == thread_id or not isinstance(agent, str):
+        raise OSError("invalid host ancestry")
+    parts = agent.split("/")
+    if len(parts) < 3 or parts[:2] != ["", "root"] or type(depth) is not int \
+            or depth != len(parts) - 2 or depth > 32 \
+            or any(not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", part) for part in parts[2:]):
+        raise OSError("invalid canonical agent path")
+    return HostIdentity(thread_id, session_id, parent, agent, cwd)

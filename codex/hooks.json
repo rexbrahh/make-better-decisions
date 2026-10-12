@@ -1,9 +1,59 @@
 {
   "hooks": {
-    "PreToolUse": [{"hooks": [{"type": "command", "command": "if ad_hook_output=$(python3 -I -B \"${PLUGIN_ROOT}/hooks/hook.py\" pre_tool_use --host codex); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"systemMessage\":\"agent-decisions: hook startup failed; action allowed\"}'; fi", "timeout": 15}]}],
-    "Stop": [{"hooks": [{"type": "command", "command": "if ad_hook_output=$(python3 -I -B \"${PLUGIN_ROOT}/hooks/hook.py\" stop --host codex); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"systemMessage\":\"agent-decisions: hook startup failed; action allowed\"}'; fi", "timeout": 15}]}],
-    "SubagentStop": [{"hooks": [{"type": "command", "command": "if ad_hook_output=$(python3 -I -B \"${PLUGIN_ROOT}/hooks/hook.py\" subagent_stop --host codex); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"systemMessage\":\"agent-decisions: hook startup failed; action allowed\"}'; fi", "timeout": 15}]}],
-    "SessionStart": [{"hooks": [{"type": "command", "command": "if ad_hook_output=$(python3 -I -B \"${PLUGIN_ROOT}/hooks/hook.py\" session_start --host codex); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"systemMessage\":\"agent-decisions: hook startup failed; action allowed\"}'; fi", "timeout": 10}]}],
-    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "if ad_hook_output=$(python3 -I -B \"${PLUGIN_ROOT}/hooks/hook.py\" user_prompt_submit --host codex); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"systemMessage\":\"agent-decisions: hook startup failed; action allowed\"}'; fi", "timeout": 5}]}]
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if ad_hook_output=$(python3 -I -B \"${PLUGIN_ROOT}/hooks/hook.py\" pre_tool_use --host codex); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"agent-decisions: hook startup failed; required review unavailable. Restore the plugin and retry.\"}}'; fi",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if ad_hook_output=$(python3 -I -B \"${PLUGIN_ROOT}/hooks/hook.py\" stop --host codex); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"decision\":\"block\",\"reason\":\"agent-decisions: hook startup failed; required review unavailable. Restore the plugin and retry.\"}'; fi",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if ad_hook_output=$(python3 -I -B \"${PLUGIN_ROOT}/hooks/hook.py\" subagent_stop --host codex); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"decision\":\"block\",\"reason\":\"agent-decisions: hook startup failed; required review unavailable. Restore the plugin and retry.\"}'; fi",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if ad_hook_output=$(python3 -I -B \"${PLUGIN_ROOT}/hooks/hook.py\" session_start --host codex); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"systemMessage\":\"agent-decisions: hook startup failed; required review unavailable. Restore the plugin and retry.\"}'; fi",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if ad_hook_output=$(python3 -I -B \"${PLUGIN_ROOT}/hooks/hook.py\" user_prompt_submit --host codex); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"systemMessage\":\"agent-decisions: hook startup failed; required review unavailable. Restore the plugin and retry.\"}'; fi",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
   }
 }

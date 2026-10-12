@@ -87,14 +87,15 @@ class HookTest(StateTestCase):
         read = {**self.payload("ls"), "tool_name": "Read", "tool_input": {"file_path": "/x"}}
         self.assertIsNone(hook.handle("pre_tool_use", read, "claude", post=FakeJev()))
 
-    def test_stop_block_shape_and_fail_open_note(self):
+    def test_stop_block_shape_and_unreadable_context_denial(self):
         payload = {"session_id": "s1", "transcript_path": str(self.transcript), "stop_hook_active": False,
                    "last_assistant_message": "I chose LRU over LFU."}
         out = hook.handle("stop", payload, "claude", post=FakeJev(made_choice=0.9))
         self.assertEqual(out["decision"], "block")
         self.assertIn("without a relevant ts-decide", out["reason"])
         out = hook.handle("stop", {**payload, "transcript_path": str(self.dir / "gone.jsonl")}, "claude", post=FakeJev())
-        self.assertIn("systemMessage", out)
+        self.assertEqual(out["decision"], "block")
+        self.assertIn("transcript unreadable", out["reason"])
 
     def test_subagent_reads_its_own_transcript_and_the_users_words(self):
         write_jsonl(self.dir / "s1" / "subagents", "agent-a1.jsonl", [
@@ -122,14 +123,19 @@ class ScriptTest(StateTestCase):
         return subprocess.run([sys.executable, "-B", str(ROOT / "hooks" / "hook.py"), *args], input=stdin,
                               capture_output=True, text=True, env={**os.environ, **env}, timeout=30)
 
-    def test_garbage_input_fails_open_with_a_note(self):
+    def test_garbage_input_denies_required_review(self):
         result = self.run_script(["pre_tool_use", "--host", "claude"], "not json")
         self.assertEqual(result.returncode, 0)
-        self.assertIn("agent-decisions: hook error", json.loads(result.stdout)["systemMessage"])
+        response = json.loads(result.stdout)["hookSpecificOutput"]
+        self.assertEqual(response["permissionDecision"], "deny")
+        self.assertIn("agent-decisions: hook error", response["permissionDecisionReason"])
 
-    def test_off_switch_produces_no_output(self):
+    def test_off_switch_is_visible_and_does_not_disable_review(self):
         result = self.run_script(["pre_tool_use", "--host", "claude"], "not json", AGENT_DECISIONS_OFF="1")
-        self.assertEqual((result.returncode, result.stdout), (0, ""))
+        self.assertEqual(result.returncode, 0)
+        response = json.loads(result.stdout)
+        self.assertEqual(response["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertIn("AGENT_DECISIONS_OFF ignored", response["systemMessage"])
 
     def test_stub_reports_an_inactive_hook(self):
         result = subprocess.run([str(ROOT / "bin" / "ts-decide"), "{}"], capture_output=True, text=True)

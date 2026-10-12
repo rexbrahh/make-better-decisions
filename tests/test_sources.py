@@ -13,6 +13,15 @@ from tests.helpers import StateTestCase
 
 
 class SourceObservationTest(StateTestCase):
+    def test_helper_at_the_end_of_a_decision_question_is_read(self):
+        (self.dir / "lease.py").write_text("class Lease: pass\n")
+        request = {"decision": "Which control structure should parser.py use with the Lease API in lease.py?",
+                   "options": [{"id": "finally", "description": "Use try/finally"},
+                               {"id": "with", "description": "Use a context manager"}]}
+        query = json.dumps({"command": "ts-decide <<'EOF'\n" + json.dumps(request) + "\nEOF"})
+        bundle = evidence.build(Transcript(("Choose a lease control structure.",), (), ()), query=query, cwd=self.dir)
+        self.assertIn("lease.py", [item["path"] for item in bundle["source_files"]])
+
     def test_e2e_helper_in_the_middle_keeps_head_tail_hash_and_redaction(self):
         symbol = "NumericalPolicyResolutionInputJson"
         secret = "sk-" + "q" * 40

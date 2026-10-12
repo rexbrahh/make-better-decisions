@@ -1,6 +1,6 @@
-# agent-decisions v1.0.4 behavior spec
+# agent-decisions behavior spec
 
-Date: 2026-10-11. Owner: Rex. Status: current code behavior.
+Date: 2026-10-12. Owner: Rex. Status: v1.1.0 behavior.
 
 ## Goal
 
@@ -10,7 +10,7 @@ The hooks help the agent make useful decisions:
 2. Jev evaluates relevant evidence and returns a pick or a specific next check.
 3. The agent uses that direction and continues normal execution.
 
-Exact instructions and routine work proceed directly. API and hook failures allow execution with a visible warning.
+Exact instructions and routine work proceed directly. Required review blocks unchecked operations after failures. Signed availability policy permits them with warnings.
 
 ## Ownership policy
 
@@ -38,6 +38,8 @@ The evidence bundle includes these origins and trust labels:
 | `source_files` | Hook file reads under `cwd` | `verified_file_observation` |
 
 Each source item includes path, SHA-256 hash, text, origin, trust, and truncation state. Metadata reports candidates, omissions, too-large files, and truncation counts.
+
+The `working_tree_source` role identifies current bytes. Git baseline metadata reports the observed revision, hash, and difference. Unavailable baselines remain explicit. Native command observations include directory, status, and exit code when supplied by the host.
 
 Source-file contents are observations only. They are not user instructions. They are not proof that statements inside the files are true.
 
@@ -75,11 +77,26 @@ Verdicts:
 | `GATHER EVIDENCE` | The agent must inspect or test more, then call again. |
 | `ASK USER` | The user owns the choice. Ask the user. |
 | `REFUSED` | Repair options or facts, then call again. |
-| `decision unverified` | Jev failed. The action can continue with a visible warning. |
+| `PARENT REVIEW` | The worker preference is uncertain. The parent must accept an eligible reviewed option. No receipt is minted. |
+| `decision unverified` | Review failed. Required mode grants no permission. Availability mode permits execution with a warning. |
 
 `REFUSED` and `GATHER EVIDENCE` never authorize work. The refusal cap only marks repeated bad requests. It does not create an exemption.
 
 A completed reusable decision needs both a signed ledger entry and the full verdict receipt in the transcript tool output. A matching tool id alone is not enough.
+
+New receipts carry a hook-owned id. Native execution-id changes do not invalidate a complete matching receipt. Legacy receipts retain strict id matching.
+
+Optional scopes permit 32 repository-relative paths and 32 invariants. Each option/invariant pair gets an independent check, capped at 256 checks. Clear invariant violations refuse selection. Uncertain compliance requests evidence. Worker binding requires preference confidence of at least 0.8.
+
+Parent inheritance requires a completed host dispatch with an explicit scoped receipt reference, verified ancestry, and the same repository. The accepted option binds the worker. Accepting a non-picked advisory option requires successful invariant checks and completed evidence references. Nested Claude inheritance is unsupported.
+
+Up to eight contract paths can accompany a request. Contract hashes come from verified current file observations. Missing observations require evidence. Changed, unavailable, or unchecked hashes invalidate approach coverage.
+
+Scoped source snapshots must also match current verified hashes. Source changes, disappearance, or exhausted recheck budgets make that receipt ineligible. Edit, plan, and final coverage share this rule. Routine classification remains separate from approach coverage.
+
+The hook records completed contract reviews as compact signed architectural history. History survives chat retention, remains repository-scoped, and grants no new authority. Rechecked hashes label historical contracts unchanged, changed, unavailable, or unchecked.
+
+Scoped review identity survives neutral question repairs. Unchanged accepted decisions and evidence requests cannot reroll. Refused question wording can be repaired under the same identity. Diagnostics name the affected field and blocking predicates.
 
 The edit, plan, and stop gates can reuse relevant advisory and binding decisions across turns in the same session. Later user instructions override earlier binding decisions.
 
@@ -130,13 +147,13 @@ The Stop gate can block final questions that the user already answered or that t
 
 User-question checks read prose outside fenced code. Choice and binding checks retain the full reply, including fenced code. Copied verdict questions do not become questions to the user.
 
-## Fail-open behavior
+## Review failure policy
 
-The system fails open by design. Jev errors, timeouts, malformed replies, missing keys, unreadable transcripts, and hook exceptions allow the action.
+Required is the default. Jev errors, timeouts, malformed replies, missing keys, unreadable transcripts, and hook exceptions block unchecked operations. Known read tools remain available.
 
-The hook shows a visible warning. `ts-decide` reports `decision unverified`.
+The owner can select availability through signed installation policy. Runtime failures then permit execution with a warning. Healthy denials remain binding. An unverified result never creates an approach receipt.
 
-The registered shell launcher handles failures before the Python handler starts. Successful JSON denials remain binding. Failed startup output is replaced with one warning JSON object.
+The launcher denies PreToolUse and blocks Stop/SubagentStop when startup fails. Metadata events show a warning. Partial startup output is discarded. A missing interpreter cannot verify availability policy. The environment disable flag is ignored and reported.
 
 ## Ledger
 
@@ -148,7 +165,9 @@ The ledger path is:
 
 `AGENT_DECISIONS_STATE` overrides the root.
 
-The ledger stores full states, answers, actions, signed user context, installation recipes, and verdict text. SessionStart prunes session records older than 14 days. It retains signed installation recipes.
+The ledger stores full states, answers, actions, signed user context, installation policy, and verdict text. SessionStart prunes chat records older than 14 days. It retains installation policy and compact architecture history.
+
+Gate records retain timings and API model/usage metadata outside model state. Exact gate caches also match actor, repository, model, thresholds, review contract, and operator policy. Evidence, source hashes, user constraints, and approach receipts remain part of the cache state.
 
 The guard denies tool calls that name the state directory.
 
@@ -183,7 +202,7 @@ Not verified here:
 - Final live hook counts or global activation state.
 - Linux bubblewrap runtime behavior.
 - Codex GUI identity boundaries.
-- Codex subagent identity boundaries.
+- New live Codex worker inheritance. Captured native fixtures pass local checks.
 
 Not guaranteed:
 

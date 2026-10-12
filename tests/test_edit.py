@@ -73,10 +73,10 @@ class EditGateTest(StateTestCase):
         self.assertEqual(self.run_gate(name="Bash", writes_files=0.95, needs_decision=0.95).action, "deny")
         self.assertEqual(self.run_gate(name="Bash", writes_files=0.01, needs_decision=0.95).action, "allow")
 
-    def test_failure_allows_action_with_visible_note(self):
+    def test_failure_blocks_action_under_required_policy(self):
         outcome = gates.edit_gate("Edit", {}, make_ctx(), asker(FakeJev(raises=jev.JevError("timeout"))))
-        self.assertEqual(outcome.action, "allow")
-        self.assertIn("timeout", outcome.note)
+        self.assertEqual(outcome.action, "deny")
+        self.assertIn("timeout", outcome.message)
 
 
 class EditHookTest(StateTestCase):
@@ -116,13 +116,15 @@ class EditHookTest(StateTestCase):
                                       "claude", post=fake))
         self.assertEqual(len(fake.requests), 1)
 
-    def test_unreadable_transcript_fails_open(self):
+    def test_unreadable_transcript_fails_open_in_availability_mode(self):
+        self.availability()
         payload = {**self.payload("Edit", {}), "transcript_path": str(self.dir / "missing")}
         out = hook.handle("pre_tool_use", payload, "claude", post=FakeJev(needs_decision=1.0))
         self.assertIn("transcript unreadable", out["systemMessage"])
 
-    def test_empty_or_unparseable_transcript_fails_open_without_jev(self):
+    def test_empty_or_unparseable_transcript_fails_open_in_availability_mode_without_jev(self):
         for host in ("claude", "codex"):
+            self.availability(host)
             for content in ("", "not json\n", "{}\n"):
                 with self.subTest(host=host, content=content):
                     (self.codex_path if host == "codex" else self.path).write_text(content)

@@ -1,11 +1,13 @@
-"""Hook entry point: one payload in, one host-specific response out. Never blocks on its own failure."""
+"""Hook entry point: one payload in, one response under the protected review policy."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import re
 import shlex
+import subprocess
 import sys
 import time
 import uuid
@@ -63,34 +65,37 @@ def _pre_tool_use(payload: dict, host: str, post) -> dict | None:
             pass  # the denial must not depend on the ledger being writable
         return _deny(outcome.message)
     if name in policy.QUESTION_TOOLS:
-        return _gate(payload, host, lambda ctx: gates.question_gate(tool_input, ctx, _asker(post)))
+        return _gate(payload, host, lambda ctx: gates.question_gate(tool_input, ctx, _asker(post, ctx.metrics)))
     if host == "claude" and name == "ExitPlanMode":
         plan = tool_input.get("plan")
         return _gate(payload, host, lambda ctx: gates.plan_gate(
-            ctx, _asker(post), plan=plan if isinstance(plan, str) else None))
+            ctx, _asker(post, ctx.metrics), plan=plan if isinstance(plan, str) else None))
     if name in policy.READ_TOOLS:
         return None
-    return _gate(payload, host, lambda ctx: gates.edit_gate(name, tool_input, ctx, _asker(post)))
+    return _gate(payload, host, lambda ctx: gates.edit_gate(name, tool_input, ctx, _asker(post, ctx.metrics)))
 
 
 def _decide(payload: dict, host: str, tool_input: dict, request: str, post) -> dict:
+    ctx = None
     try:
         ctx = _context(payload, host)
     except OSError as error:
         turn = None
+        next_step = "Decide yourself and state your evidence." if policy.fail_open(host) else \
+            "Required review is unavailable. Restore readable host context and consult again."
         outcome = gates.Outcome("unverified", f"ts-decide: decision unverified (transcript unreadable: "
-                                              f"{type(error).__name__}). Decide yourself and state your evidence.",
+                                              f"{type(error).__name__}). " + next_step,
                                 {"gate": "decide"})
     else:
         turn = ctx.transcript.turn_key
         if any(c.id == ctx.tool_use_id and c.output for c in ctx.transcript.tool_calls) or any(
                 e.get("gate") == "decide" and e.get("tool_use_id") == ctx.tool_use_id for e in ctx.entries):
             return _deny("ts-decide: this tool call has already completed. Run a new, separate ts-decide call.")
-        outcome = gates.decide(request, ctx, _asker(post))
+        outcome = gates.decide(request, ctx, _asker(post, ctx.metrics))
     outcome = replace(outcome, message=evidence.redact(outcome.message, _secrets()))
     if outcome.record is not None:
         outcome = replace(outcome, record={**outcome.record, "verdict": outcome.message})
-        _append(payload, host, turn, outcome)
+        _append(payload, host, turn, outcome, ctx=ctx)
     if outcome.action == "invalid":
         return _deny(outcome.message)
     updated = dict(tool_input)
@@ -107,10 +112,13 @@ def _gate(payload: dict, host: str, run) -> dict | None:
     try:
         ctx = _context(payload, host)
     except OSError as error:
+        if not policy.fail_open(host):
+            return _deny(f"Required review unavailable: transcript unreadable ({type(error).__name__}); "
+                         "action not run. Restore readable host context and retry.")
         return _note(f"agent-decisions: gate skipped, transcript unreadable ({type(error).__name__})")
     outcome = run(ctx)
     if outcome.record is not None:
-        _append(payload, host, ctx.transcript.turn_key, outcome)
+        _append(payload, host, ctx.transcript.turn_key, outcome, ctx=ctx)
     if outcome.action == "deny":
         return _deny(outcome.message)
     return _note(outcome.note) if outcome.note else None
@@ -120,12 +128,15 @@ def _stop(payload: dict, host: str, post) -> dict | None:
     try:
         ctx = _context(payload, host)
     except OSError as error:
+        if not policy.fail_open(host):
+            return {"decision": "block", "reason": f"Required final review unavailable: transcript unreadable "
+                    f"({type(error).__name__}). Restore readable host context and retry."}
         return _note(f"agent-decisions: stop check skipped, transcript unreadable ({type(error).__name__})")
     final = payload.get("last_assistant_message")
     final = final if isinstance(final, str) else ctx.transcript.last_assistant_text
-    outcome = gates.stop_gate(final, bool(payload.get("stop_hook_active")), ctx, _asker(post))
+    outcome = gates.stop_gate(final, bool(payload.get("stop_hook_active")), ctx, _asker(post, ctx.metrics))
     if outcome.record is not None:
-        _append(payload, host, ctx.transcript.turn_key, outcome)
+        _append(payload, host, ctx.transcript.turn_key, outcome, ctx=ctx)
     if outcome.action == "block":
         return {"decision": "block", "reason": outcome.message}
     return _note(outcome.note) if outcome.note else None
@@ -147,19 +158,168 @@ def _load_transcript(payload: dict, host: str) -> transcript.Transcript:
 
 
 def _context(payload: dict, host: str) -> gates.Context:
+    started = time.perf_counter()
     t = _load_transcript(payload, host)
+    metrics = {"transcript_ms": (time.perf_counter() - started) * 1_000}
+    canonical = dict(payload)
+    if t.identity is not None:
+        canonical.update({"session_id": t.identity.session_id, "agent_id": t.identity.agent_id})
     secrets = _secrets()
-    session = payload.get("session_id") or "unknown"
+    session = canonical.get("session_id") or "unknown"
+    ledger_started = time.perf_counter()
     entries = ledger.entries(session)
-    t = replace(t, user_messages=_saved_users(payload, host, t, entries))
+    t = replace(t, user_messages=_saved_users(canonical, host, t, entries))
+    metrics["ledger_ms"] = (time.perf_counter() - ledger_started) * 1_000
+    repo_id = _repository_id(payload.get("cwd") or os.getcwd())
+    _record_identity(canonical, host, t, entries, repo_id)
+    evidence_started = time.perf_counter()
     bundle = evidence.build(t, secrets,
         query=json.dumps(payload.get("tool_input") or payload.get("last_assistant_message") or ""),
         cwd=payload.get("cwd") or os.getcwd())
     bundle["metadata"]["user_history_source"] = "signed_host_context"
+    bundle["metadata"]["source_root"] = str(Path(payload.get("cwd") or os.getcwd()).resolve())
     evidence._trim_to_budget(bundle)
-    return gates.Context(host=host, session_id=session, agent_id=payload.get("agent_id"),
+    inherited = _inherited_decisions(t, entries, host, session, repo_id, secrets, canonical)
+    ctx = gates.Context(host=host, session_id=session, agent_id=canonical.get("agent_id"),
                          tool_use_id=payload["tool_use_id"], transcript=t,
-                         evidence=bundle, entries=tuple(entries))
+                         evidence=bundle, entries=tuple(entries), repo_id=repo_id,
+                         inherited_entries=tuple(inherited), metrics=metrics)
+    completed = gates.consulted(ctx)
+    ledger.remember_architecture(repo_id, completed)
+    history = ledger.architecture_entries(repo_id)
+    contract_paths = [path for entry in [*reversed(completed), *reversed(history)] for path in entry.get("contracts", {})]
+    source_paths = [item["path"] for entry in reversed(completed)
+                    if entry.get("state", {}).get("scope", {}).get("paths")
+                    for item in entry.get("state", {}).get("evidence", {}).get("source_files", ())
+                    if item.get("trust") == "verified_file_observation"]
+    current_files = {item["path"]: {"sha256": item["sha256"], "trust": item["trust"]}
+                     for item in bundle.get("source_files", ()) if item.get("trust") == "verified_file_observation"}
+    missing = [path for path in [*contract_paths, *source_paths] if path not in current_files]
+    if missing:
+        current_files.update(evidence.contract_observations(missing, payload.get("cwd") or os.getcwd(), secrets))
+    if contract_paths or source_paths:
+        bundle["file_observations"] = current_files
+        bundle["contract_observations"] = {path: current_files[path] for path in dict.fromkeys(contract_paths)
+                                           if path in current_files}
+    if history:
+        bundle["architecture_history"] = evidence.architecture_history(history, bundle.get("contract_observations", {}))
+    evidence._trim_to_budget(bundle)
+    metrics["evidence_ms"] = (time.perf_counter() - evidence_started) * 1_000
+    metrics["context_ms"] = (time.perf_counter() - started) * 1_000
+    return ctx
+
+
+def _repository_id(cwd: str) -> str:
+    root = Path(cwd).resolve()
+    try:
+        result = subprocess.run(["git", "-C", str(root), "rev-parse", "--git-common-dir"],
+                                capture_output=True, text=True, timeout=1)
+        if result.returncode == 0:
+            return str((root / result.stdout.strip()).resolve())
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return str(root)
+
+
+def _record_identity(payload: dict, host: str, t: transcript.Transcript, entries: list[dict], repo_id: str) -> None:
+    identity = t.identity
+    if identity is None:
+        return
+    record = {"gate": "host_identity", "thread_id": identity.thread_id,
+              "transcript_path": str(Path(payload["transcript_path"]).resolve()), "repo_id": repo_id}
+    if not any(entry.get("gate") == "host_identity" and entry.get("host") == host
+               and all(entry.get(key) == value for key, value in record.items()) for entry in entries):
+        _append(payload, host, None, gates.Outcome("observed", record=record))
+
+
+def _inherited_decisions(t: transcript.Transcript, entries: list[dict], host: str,
+                         session: str, repo_id: str, secrets: tuple[str, ...], payload: dict) -> list[dict]:
+    identity = t.identity
+    if t.brief is None:
+        return []
+    if host == "claude":
+        agent_id = payload.get("agent_id")
+        if not agent_id:
+            return []
+        try:
+            parent = transcript.load(payload["transcript_path"], host)
+        except OSError:
+            return []
+        expected_parent = None  # only the main transcript proves this Claude dispatch
+    else:
+        if identity is None or identity.parent_thread_id is None:
+            return []
+        registered = next((entry for entry in reversed(entries)
+                           if entry.get("gate") == "host_identity" and entry.get("host") == host
+                           and entry.get("thread_id") == identity.parent_thread_id
+                           and entry.get("repo_id") == repo_id), None)
+        if registered is None:
+            return []
+        try:
+            parent = transcript.load(registered["transcript_path"], host)
+        except OSError:
+            return []
+        if parent.identity is None or parent.identity.thread_id != identity.parent_thread_id \
+                or parent.identity.session_id != session:
+            return []
+        agent_id = identity.agent_id
+        parent_path = agent_id.rsplit("/", 1)[0]
+        expected_parent = None if parent_path == "/root" else parent_path
+        if parent.identity.agent_id != expected_parent:
+            return []
+    assigned = {}
+    for call in parent.tool_calls:
+        if call.name not in {"spawn_agent", "Agent", "Task"} or not call.output:
+            continue
+        try:
+            args = json.loads(call.input)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(args, dict):
+            continue
+        if host == "claude":
+            footer = re.search(r"(?m)^agentId: ([A-Za-z0-9_-]{1,128}) \(use SendMessage[^\n]*\)\n"
+                               r"<usage>[\s\S]*</usage>\s*$", call.output)
+            message = args.get("prompt")
+            verified = call.output.startswith("[Subagent hand-back]") and footer is not None \
+                and footer[1] == agent_id and message == t.brief
+        else:
+            try:
+                result = json.loads(call.output)
+            except (ValueError, TypeError):
+                continue
+            message = args.get("message")
+            verified = isinstance(result, dict) and result.get("task_name") == agent_id \
+                and isinstance(message, str) and message in t.brief
+        if not verified:
+            continue
+        accepted = re.search(r"(?m)^Accepted option:\s*([A-Za-z0-9_-]{1,40})\s*$", message)
+        references = re.search(r"(?m)^Evidence refs:\s*([^\n]+)$", message)
+        refs = [value.strip() for value in references[1].split(",")] if references is not None else []
+        for receipt_id in re.findall(r"(?m)^Decision receipt:\s*([A-Za-z0-9_-]{1,128})\s*$", message):
+            assigned[receipt_id] = (accepted[1] if accepted is not None else None, refs)
+    if not assigned:
+        return []
+    parent_context = gates.Context(host, session, expected_parent, "parent-observation", parent,
+                                  evidence.build(parent, secrets), tuple(entries), repo_id)
+    observed_refs = {call.id for call in parent.tool_calls if call.output and not transcript.is_decide(call)}
+    inherited = []
+    for entry in gates.consulted(parent_context):
+        if entry.get("receipt_id") not in assigned or entry.get("repo_id") != repo_id \
+                or not entry.get("state", {}).get("scope", {}).get("paths"):
+            continue
+        accepted, refs = assigned[entry["receipt_id"]]
+        selected = entry["pick"] if accepted is None else accepted
+        if selected != entry["pick"] and (entry["action"] != "advisory"
+                or not entry.get("eligibility_checked") or selected not in entry.get("eligible_options", ())
+                or not refs or not set(refs).issubset(observed_refs)):
+            continue
+        if selected not in entry.get("state", {}).get("options", {}):
+            continue
+        inherited.append({**entry, "origin": "parent_dispatch", "source_action": entry["action"],
+                          "action": "binding", "pick": selected, "parent_agent_id": expected_parent,
+                          "inherited_by": agent_id, "accepted_evidence_refs": refs})
+    return inherited
 
 
 def _save_users(payload: dict, host: str, messages: tuple[str, ...], keys: tuple[str, ...]) -> None:
@@ -206,17 +366,30 @@ def _secrets() -> tuple[str, ...]:
         return ()
 
 
-def _asker(post):
+def _asker(post, metrics: dict | None = None):
     def ask(state, questions):
         key = jev.load_key()
-        return jev.ask(evidence.scrub(state, (key,)), evidence.scrub(questions, (key,)), key=key, post=post)
+        call_metrics = {} if metrics is not None else None
+        try:
+            return jev.ask(evidence.scrub(state, (key,)), evidence.scrub(questions, (key,)),
+                           key=key, post=post, metrics=call_metrics)
+        except jev.JevError as error:
+            if call_metrics is not None:
+                call_metrics["error"] = error.reason
+            raise
+        finally:
+            if metrics is not None:
+                metrics.setdefault("api_calls", []).append(call_metrics)
     return ask
 
 
-def _append(payload: dict, host: str, turn: str | None, outcome: gates.Outcome) -> None:
+def _append(payload: dict, host: str, turn: str | None, outcome: gates.Outcome,
+            *, ctx: gates.Context | None = None) -> None:
     ledger.append({"time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "host": host,
-                   "session_id": payload.get("session_id") or "unknown", "agent_id": payload.get("agent_id"),
+                   "session_id": ctx.session_id if ctx is not None else payload.get("session_id") or "unknown",
+                   "agent_id": ctx.agent_id if ctx is not None else payload.get("agent_id"),
                    "tool_use_id": payload["tool_use_id"], "turn": turn, "action": outcome.action,
+                   **({"metrics": evidence.scrub(ctx.metrics, _secrets())} if ctx is not None else {}),
                    **evidence.scrub(outcome.record, _secrets())})
 
 
@@ -234,12 +407,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("event", choices=("pre_tool_use", "stop", "subagent_stop", "session_start", "user_prompt_submit"))
     parser.add_argument("--host", required=True, choices=("claude", "codex"))
     args = parser.parse_args(argv)
-    if os.environ.get("AGENT_DECISIONS_OFF") == "1":
-        return 0
     try:
         out = handle(args.event, json.load(sys.stdin), args.host)
-    except Exception as error:  # fail open: an outage or a bug must never block the agent
-        out = _note(f"agent-decisions: hook error ({type(error).__name__}); action allowed")
+    except Exception as error:
+        try:
+            availability = policy.fail_open(args.host)
+        except Exception:
+            availability = False
+        message = f"agent-decisions: hook error ({type(error).__name__})"
+        if availability:
+            out = _note(message + "; action allowed under availability policy")
+        elif args.event == "pre_tool_use":
+            out = _deny(message + "; required review unavailable, action not run")
+        elif args.event in {"stop", "subagent_stop"}:
+            out = {"decision": "block", "reason": message + "; required final review unavailable"}
+        else:
+            out = _note(message + "; required review remains active")
+    if os.environ.get("AGENT_DECISIONS_OFF") == "1":
+        out = dict(out or {})
+        out["systemMessage"] = (out.get("systemMessage", "") + " agent-decisions: AGENT_DECISIONS_OFF ignored; "
+                                "review policy is controlled by the protected installer").strip()
     if out:
         json.dump(out, sys.stdout)
     return 0

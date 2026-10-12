@@ -316,6 +316,7 @@ network_access = true # comment
 
     def test_signed_installation_entry_round_trips_and_tamper_is_ignored(self):
         entry = install.installation_entry("codex", self.dir / "state", {}, [], None, [self.dir / "config"])
+        self.assertEqual(entry["spec"]["review_mode"], "required")
         install.sign_installation(entry)
         path = policy.state_dir() / "sessions" / "installation.jsonl"
         row = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
@@ -481,6 +482,7 @@ network_access = true # comment
         out = io.StringIO()
         with mock.patch.object(sys, "stdout", out):
             rc = install.cli(["--host", "codex", "--state-root", str(self.dir / "state"),
+                              "--review-mode", "availability",
                               "--install-root", str(self.dir / "installed"),
                               "--codex-mcp-json", str(mcp), "--codex-config", str(config)])
         self.assertEqual(rc, 0)
@@ -488,6 +490,7 @@ network_access = true # comment
         self.assertIn('"apply": false', text)
         self.assertNotIn("super-secret-cli", text)
         self.assertIn("keyPath", text)
+        self.assertEqual(json.loads(text)["plans"][0]["installation_entry"]["spec"]["review_mode"], "availability")
         self.assertEqual(ledger.entries("installation"), [])
 
     def test_cli_apply_refuses_state_root_that_does_not_match_policy_state_dir(self):

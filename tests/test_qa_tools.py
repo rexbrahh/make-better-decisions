@@ -65,7 +65,8 @@ class ToolCoverageTest(StateTestCase):
         self.assertEqual(out.action, "deny")
         self.assertIn("complete", out.message)
 
-    def test_api_outage_still_allows_with_a_visible_note(self):
+    def test_api_outage_allows_with_a_visible_note_in_availability_mode(self):
+        self.availability()
         out = gates.edit_gate("Bash", {"command": "python3"}, make_ctx(),
                               asker(FakeJev(raises=jev.JevError("timeout"))))
         self.assertEqual(out.action, "allow")

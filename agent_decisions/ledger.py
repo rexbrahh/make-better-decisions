@@ -163,6 +163,39 @@ def write_verdict(tool_use_id: str, text: str) -> Path:
     return path
 
 
+def _architecture_session(repo_id: str) -> str:
+    return "architecture-" + hashlib.sha256(repo_id.encode()).hexdigest()
+
+
+def architecture_path(repo_id: str) -> Path:
+    return _session_file(_architecture_session(repo_id))
+
+
+def architecture_entries(repo_id: str) -> list[dict]:
+    rows = entries(_architecture_session(repo_id))
+    return [row for row in rows if row.get("gate") == "architecture" and row.get("repo_id") == repo_id][-16:]
+
+
+def remember_architecture(repo_id: str, decisions: list[dict]) -> None:
+    """Called only for completed receipts verified by the host-context loader."""
+    if not any(entry.get("contracts") for entry in decisions):
+        return
+    known = {row.get("source_receipt") for row in entries(_architecture_session(repo_id))}
+    for entry in decisions:
+        if entry.get("action") not in {"advisory", "binding"} or not entry.get("contracts") \
+                or not entry.get("receipt_id") or entry.get("repo_id") != repo_id or entry["receipt_id"] in known:
+            continue
+        state = entry.get("state", {})
+        scope = state.get("scope", {})
+        append({"session_id": _architecture_session(repo_id), "gate": "architecture", "action": "observed",
+                "repo_id": repo_id, "source_receipt": entry["receipt_id"], "time": entry.get("time"),
+                "decision": entry.get("decision", "")[:500], "pick": entry["pick"],
+                "selected_approach": state.get("options", {}).get(entry["pick"], "")[:1_000],
+                "scope": {key: [value[:200] for value in scope.get(key, ())[:8]] for key in ("paths", "invariants")},
+                "contracts": entry["contracts"]})
+        known.add(entry["receipt_id"])
+
+
 def prune(now: float | None = None) -> None:
     cutoff = (time.time() if now is None else now) - RETAIN_DAYS * 86_400
     for sub in ("sessions", "verdicts"):
@@ -170,8 +203,8 @@ def prune(now: float | None = None) -> None:
         if not directory.is_dir():
             continue
         for path in directory.iterdir():
-            if sub == "sessions" and path.name == "installation.jsonl":
-                continue  # installed launchers need their signed recipes until reconfiguration
+            if sub == "sessions" and (path.name == "installation.jsonl" or path.name.startswith("architecture-")):
+                continue  # installation policy and architectural context outlive chat retention
             try:
                 if path.stat().st_mtime < cutoff:
                     path.unlink()

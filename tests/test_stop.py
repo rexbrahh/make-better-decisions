@@ -19,6 +19,15 @@ def ctx_with(calls=(), entries=(), host="claude"):
 
 
 class StopGateTest(StateTestCase):
+    def test_uncovered_choice_identifies_the_checked_section_and_receipt_count(self):
+        final = "The parser tests passed.\n\nI selected PostgreSQL for application storage."
+        outcome = gates.stop_gate(final, False, make_ctx(),
+                                  asker(FakeJev(made_choice=.95, uncovered_section="section_1")))
+        self.assertEqual(outcome.action, "block")
+        self.assertIn("Eligible receipts: 0", outcome.message)
+        self.assertIn("section_1", outcome.message)
+        self.assertIn("PostgreSQL", outcome.message)
+
     def test_observed_quoted_verdict_is_not_a_question_to_the_user(self):
         final = json.loads((Path(__file__).parent / "fixtures" / "peer-ergonomics.json").read_text())["e2e_final"]
 
@@ -106,6 +115,6 @@ class StopGateTest(StateTestCase):
         self.assertEqual(gates.stop_gate("  ", False, ctx_with(), asker(fake)).action, "allow")
         self.assertEqual(fake.requests, [])
 
-    def test_jev_failure_allows_with_a_note(self):
+    def test_jev_failure_blocks_under_required_policy(self):
         outcome = gates.stop_gate("I chose LRU.", False, ctx_with(), asker(FakeJev(raises=jev.JevError("timeout"))))
-        self.assertEqual((outcome.action, "timeout" in outcome.note), ("allow", True))
+        self.assertEqual((outcome.action, "timeout" in outcome.message), ("block", True))

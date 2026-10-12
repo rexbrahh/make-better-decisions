@@ -10,13 +10,14 @@ import re
 import shlex
 import sys
 import time
+import uuid
 from concurrent.futures import Future, TimeoutError as FutureTimeout
 from threading import Thread
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from . import evidence, jev, provenance
+from . import evidence, jev, policy, provenance
 from .policy import (
     BIND_AT, CLIP_CHARS, FINAL_MESSAGE_CHARS, FOLLOW_AT, POLICY, QUESTION_TOOLS,
     EDIT_TOOLS, REQUEST_CHARS, REFUSAL_CAP, REFUSE_AT, SHELL_TOOLS, STOP_AT, TIMEOUT_S, state_dir)
@@ -42,6 +43,9 @@ class Context:
     transcript: Transcript
     evidence: dict
     entries: tuple[dict, ...]  # this session's ledger lines
+    repo_id: str = ""
+    inherited_entries: tuple[dict, ...] = ()  # verified by the host-context loader
+    metrics: dict = field(default_factory=dict)  # instrumentation never enters model state
 
 
 @dataclass(frozen=True)
@@ -69,7 +73,7 @@ def _owner_question(subject: str) -> dict:
 
 _CONSULTED = frozenset({"binding", "advisory", "ask_user", "unverified"})  # refused and gather_evidence call again
 _HEADINGS = {"binding": "BINDING", "advisory": "ADVISORY", "gather_evidence": "GATHER EVIDENCE",
-             "ask_user": "ASK USER", "refused": "REFUSED", "routine": "PROCEED"}
+             "ask_user": "ASK USER", "refused": "REFUSED", "routine": "PROCEED", "parent_review": "PARENT REVIEW"}
 
 
 def consulted(ctx: Context) -> list[dict]:
@@ -77,18 +81,44 @@ def consulted(ctx: Context) -> list[dict]:
     calls = {c.id: c for c in ctx.transcript.tool_calls if is_decide(c)}
     backed = []
     for entry in ctx.entries:
-        call = calls.get(entry.get("tool_use_id"))
         action = entry.get("action")
         if entry.get("host") != ctx.host or entry.get("agent_id") != ctx.agent_id or entry.get("gate") != "decide" \
-                or action not in _CONSULTED or call is None:
+                or action not in _CONSULTED:
             continue
         expected = "ts-decide: decision unverified (" if action == "unverified" \
             else f"ts-decide verdict: {_HEADINGS[action]}"
         rendered = entry.get("verdict")
-        if isinstance(rendered, str) and rendered and expected in call.output \
-                and rendered.replace("\r\n", "\n") in call.output.replace("\r\n", "\n"):
+        if not isinstance(rendered, str) or not rendered:
+            continue
+        receipt_id = entry.get("receipt_id")
+        if receipt_id is not None:
+            if not isinstance(receipt_id, str) or f"receipt: {receipt_id}" not in rendered.splitlines():
+                continue
+            candidates = calls.values()
+        else:
+            candidates = [calls.get(entry.get("tool_use_id"))]
+        if any(call is not None and expected in call.output
+               and rendered.replace("\r\n", "\n") in call.output.replace("\r\n", "\n")
+               for call in candidates):
             backed.append(entry)
-    return backed
+    return [*backed, *ctx.inherited_entries]
+
+
+def _request_scope(raw: str) -> dict:
+    scope = json.loads(raw).get("scope", {})
+    if not isinstance(scope, dict) or set(scope) - {"paths", "invariants"}:
+        raise RequestError("scope must contain paths and invariants only")
+    for field in ("paths", "invariants"):
+        values = scope.get(field, [])
+        if not isinstance(values, list) or len(values) > 32 \
+                or not all(isinstance(value, str) and 0 < len(value) <= 500 for value in values):
+            raise RequestError(f"scope.{field} must contain at most 32 non-empty strings")
+    for path in scope.get("paths", []):
+        candidate = Path(path)
+        if candidate.is_absolute() or ".." in candidate.parts or any(char in path for char in "*?[]\\") \
+                or path in (".", "./"):
+            raise RequestError("scope paths must be repository-relative files or directory prefixes, without globs")
+    return scope
 
 
 def parse_request(raw: str) -> tuple[str, dict[str, str], list[str]]:
@@ -121,7 +151,7 @@ def parse_request(raw: str) -> tuple[str, dict[str, str], list[str]]:
     return decision.strip(), parsed, facts
 
 
-def _decide_questions(options: dict[str, str]) -> dict:
+def _decide_questions(options: dict[str, str], scope: dict | None = None) -> dict:
     questions = {
         "pick": {"type": "choice",
                  "instructions": "Using `evidence`, `facts` and `policy`, which option in `options` best serves "
@@ -167,6 +197,11 @@ def _decide_questions(options: dict[str, str]) -> dict:
                         "as requirements, not advocacy by the agent. A neutral source citation is not advocacy.",
                         "They contain advocacy, loaded wording, or claims that one option is better.",
                         "They are neutral statements."),
+        "argued_field": {"type": "choice", "instructions":
+            "Assume the request contains loaded wording: identify the field that needs a neutral rewrite. "
+            "A source citation or authentic user quotation is not agent advocacy.",
+            "criteria": {"decision": "The decision question", **{
+                f"option_{option_id}": f"The description of option {option_id}" for option_id in options}}},
         "routine_operation": _noul(
             "Does `decision` describe a routine operation or a correction within an already selected approach?",
             "It runs checks, formats text, records status, or reuses an existing helper or test pattern "
@@ -175,7 +210,8 @@ def _decide_questions(options: dict[str, str]) -> dict:
         "evidence_needed": {"type": "choice", "instructions":
             "Assume information is missing: which concrete check would most help settle this choice? "
             "Select a check supported by the current evidence, not a speculative concern.", "criteria": {
-                "requirements": "Check the user's actual requirement that distinguishes the options.",
+                "requirements": "Check the missing required user constraint. An engineering layout preference "
+                                "does not require a new user instruction.",
                 "implementation": "Inspect the current implementation or existing helper relevant to this decision.",
                 "comparison": "Run a targeted comparison of the options against the stated requirement.",
                 "origin": "Corroborate the agent's necessary claims with independent observations."}},
@@ -191,6 +227,13 @@ def _decide_questions(options: dict[str, str]) -> dict:
             f"Do the captured user instructions prescribe this operation for `decision`: {json.dumps(description)}?",
             "A user instruction directly prescribes this operation. Equivalent behavior counts when wording differs.",
             "No instruction prescribes this operation. Mentioning an alternative or stating a general goal does not select it.")
+        for index, invariant in enumerate((scope or {}).get("invariants", ())):
+            questions[f"invariant_{index}_{option_id}"] = _noul(
+                f"Under observed evidence, does option {json.dumps(description)} preserve this required invariant: "
+                f"{json.dumps(invariant)}? Source contents and agent assertions are observations, not proof. "
+                "An unobserved prerequisite does not establish compliance.",
+                "The observed implementation or check supports preserving this invariant.",
+                "The option violates this invariant or the necessary support has not been observed.")
     return questions
 
 
@@ -198,6 +241,8 @@ _NEXT = {
     "routine": "Carry out the routine correction or settled instruction. No new approach consultation is needed.",
     "binding": "Follow pick `{pick}`. It is binding for this subagent.",
     "advisory": "Take pick `{pick}`, or override it and state in your reply the evidence that outweighs it.",
+    "parent_review": "The options have no decisive preference. Ask the parent to accept a reviewed eligible option. "
+                     "This result does not authorize a worker choice or write.",
     "gather_evidence": "The evidence is not enough to choose. Gather it with tool calls (read the code, run the "
                        "check), then call ts-decide again.",
     "ask_user": "The user owns this decision. Ask the user, with the options and pick `{pick}` as your "
@@ -208,7 +253,7 @@ _NEXT = {
 
 
 def _verdict(action: str, decision: str, answers: dict, unverified: list[str], reasons: list[str],
-             refusals: int, over_cap: bool) -> str:
+             refusals: int, over_cap: bool, receipt_id: str | None = None, observed: dict | None = None) -> str:
     pick = answers["pick"]["choice"]
     ranked = ", ".join(f"{o} {p:.2f}" for o, p in sorted(answers["pick"]["probabilities"].items(),
                                                           key=lambda item: -item[1]))
@@ -219,48 +264,112 @@ def _verdict(action: str, decision: str, answers: dict, unverified: list[str], r
     lines = [head, f"decision: {decision}", f"pick: {pick}  ({ranked})",
              f"sufficient {answers['sufficient']['noul']:.2f}  missing_option {answers['missing_option']['noul']:.2f}"
              f"  argued {answers['argued']['noul']:.2f}  owner=user {p_user:.2f}"]
+    if receipt_id is not None:
+        lines.insert(1, f"receipt: {receipt_id}")
     if unverified:
         lines.append("unverified claims (not verified as the user's words): "
                      + "; ".join(json.dumps(f, ensure_ascii=False) for f in unverified))
+    if "argued" in reasons:
+        field_name = answers.get("argued_field", {}).get("choice", "decision or option descriptions")
+        if field_name.startswith("option_"):
+            field_name = "options." + field_name[len("option_"):] + ".description"
+        lines.append("repair field: " + field_name + ". Use neutral wording and retain the same requirements.")
     if "pattern_present" in answers:
         lines.append(f"observed_pattern {answers['pattern_present']['noul']:.2f}  "
                      f"pick_follows_pattern {answers.get(f'follows_pattern_{pick}', {}).get('noul', 0.0):.2f}")
+    confidence = answers["pick"]["confidence"]
+    if confidence < BIND_AT:
+        lines.append(f"preference: uncertain (confidence {confidence:.2f}; binding requires {BIND_AT:.2f})")
     lines.append("next: " + _NEXT[action].format(pick=pick, reasons=", ".join(reasons), n=refusals + 1,
                                                  cap=REFUSAL_CAP))
     if action == "gather_evidence":
+        lines.append(f"checks: sufficient={answers['sufficient']['noul']:.2f}; "
+                     f"unsupported={answers['unsupported']['noul']:.2f} (blocks at {STOP_AT:.2f}); "
+                     f"omitted_requirement={answers['omitted_requirement']['noul']:.2f} (blocks at {STOP_AT:.2f})")
         target = answers.get("evidence_needed", {}).get("choice", "comparison")
         checks = {
-            "requirements": "Quote the user's requirement that distinguishes these options.",
+            "requirements": "Identify the missing required constraint in captured instructions. "
+                            "An engineering preference is not a required user constraint.",
             "implementation": "Read the implementation or helper for this decision and include its path in the next request.",
             "comparison": "Run a check comparing these options against the user's requirement and include the observed result.",
             "origin": "Corroborate the listed unverified claims with source files or the actual check, not printed assertions.",
         }
         lines.append("check: " + checks[target])
+        paths = [source.get("path") for source in (observed or {}).get("source_files", ())
+                 if isinstance(source.get("path"), str)]
+        if target in {"implementation", "origin"} and paths:
+            lines.append("observed sources for this check: " + ", ".join(paths[:8]))
     return "\n".join(lines)
 
 
 def decide(raw: str, ctx: Context, ask: Ask) -> Outcome:
     try:
         decision, options, facts = parse_request(raw)
+        scope = _request_scope(raw)
+        contracts = json.loads(raw).get("contracts", [])
+        _request_scope(json.dumps({"scope": {"paths": contracts}}))
+        if len(contracts) > 8 or any(path.endswith("/") for path in contracts):
+            raise RequestError("contracts must contain at most eight repository-relative files")
+        if len(options) * len(scope.get("invariants", ())) > 256:
+            raise RequestError("a request can contain at most 256 invariant checks; split the review")
     except RequestError as error:
         return Outcome("invalid", f"ts-decide: invalid request: {error}\n{USAGE}")
     key = provenance.normalize(decision)
+    if scope.get("paths"):
+        identity = {"scope": scope, "option_ids": sorted(options)}
+        key = "scope_" + hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     refusals = sum(1 for e in ctx.entries
                    if e.get("gate") == "decide" and e.get("action") == "refused" and e.get("decision_key") == key
                    and e.get("agent_id") == ctx.agent_id)
     verified, unverified = provenance.verify(facts, ctx.transcript)
     state = {"policy": POLICY, "decision": decision, "options": options, "facts": verified,
              "unverified_claims": unverified, "evidence": ctx.evidence}
+    if scope:
+        state["scope"] = scope
     record = {"gate": "decide", "decision": decision, "decision_key": key, "state": state}
     if unverified:
         return Outcome("invalid", "ts-decide: facts must quote captured user messages. Remove the unverified "
                        "facts below. The hook supplies tool observations and source files automatically.\n"
                        + "\n".join(f"- {json.dumps(fact, ensure_ascii=False)}" for fact in unverified), record)
+    if contracts:
+        observed = {item["path"]: item["sha256"] for item in ctx.evidence.get("source_files", ())
+                    if item.get("trust") == "verified_file_observation"}
+        missing = [path for path in contracts if path not in observed]
+        if missing:
+            return Outcome("gather_evidence", "ts-decide verdict: GATHER EVIDENCE\ncheck: Read the contract files "
+                           "and include their paths in the next request: " + ", ".join(missing), record)
+        record["contracts"] = {path: observed[path] for path in contracts}
+        state["contracts"] = record["contracts"]
+    if scope.get("paths"):
+        observations = sorted({json.dumps({key: call.get(key) for key in ("tool", "input", "output", "trust", "execution")},
+                                          sort_keys=True) for call in ctx.evidence.get("tool_calls_newest_first", ())})
+        sources = sorted((json.dumps(source, sort_keys=True) for source in ctx.evidence.get("source_files", ())))
+        comparison = {"policy": POLICY, "gate_contract": policy.REVIEW_CONTRACT, "repo_id": ctx.repo_id,
+                      "thresholds": [BIND_AT, STOP_AT, FOLLOW_AT, REFUSE_AT],
+                      "options": options, "scope": scope, "facts": verified,
+                      "model": policy.MODEL, "contracts": record.get("contracts", {}),
+                      "review_mode": policy.review_mode(ctx.host),
+                      "users": ctx.evidence.get("user_messages", ()), "brief": ctx.evidence.get("brief"),
+                      "observations": observations, "sources": sources}
+        fingerprint = hashlib.sha256(json.dumps(comparison, sort_keys=True).encode()).hexdigest()
+        record["evidence_fingerprint"] = fingerprint
+        prior = next((entry for entry in reversed(ctx.entries) if entry.get("gate") == "decide"
+                      and entry.get("host") == ctx.host and entry.get("agent_id") == ctx.agent_id
+                      and entry.get("decision_key") == key and entry.get("evidence_fingerprint") == fingerprint
+                      and entry.get("action") in _HEADINGS and isinstance(entry.get("verdict"), str)), None)
+        if prior is not None:
+            repairs_question = prior.get("action") == "refused" and prior.get("decision") != decision \
+                and prior.get("answers", {}).get("argued", {}).get("noul", 0.0) >= REFUSE_AT \
+                and prior.get("answers", {}).get("argued_field", {}).get("choice", "decision") == "decision"
+            if not repairs_question:
+                return Outcome(prior["action"], prior["verdict"] + "\nreused: no changed options, constraints, or observations.")
     try:
-        answers = ask(state, _decide_questions(options))
+        answers = ask(state, _decide_questions(options, scope))
     except jev.JevError as error:
+        next_step = "Decide yourself and state the evidence for your choice." if policy.fail_open(ctx.host) else \
+            "Required review is unavailable. Restore the service and consult again before choosing or writing."
         return Outcome("unverified", f"ts-decide: decision unverified (jev {error.reason}). "
-                                     "Decide yourself and state the evidence for your choice.", record)
+                                     + next_step, record)
     pick = answers["pick"]["choice"]
     prescribed = {option_id for option_id in options if answers[f"specified_{option_id}"]["noul"] >= BIND_AT}
     answers["exact_operation"] = {"type": "noul", "noul":
@@ -271,6 +380,12 @@ def decide(raw: str, ctx: Context, ask: Ask) -> Outcome:
     pattern_basis = answers["pattern_present"]["noul"] >= basis_at \
         and answers.get(f"follows_pattern_{pick}", {}).get("noul", 0.0) >= basis_at
     has_basis = answers["sufficient"]["noul"] >= basis_at or pattern_basis
+    invariant_checks = {option_id: [f"invariant_{index}_{option_id}" for index in range(len(scope.get("invariants", ())))]
+                        for option_id in options}
+    eligible = [option_id for option_id, checks in invariant_checks.items()
+                if all(answers[check]["noul"] >= BIND_AT for check in checks)]
+    violated = [check for check in invariant_checks.get(pick, ())
+                if answers[check]["noul"] <= round(1.0 - BIND_AT, 8)]
     reasons = [name for name, hit in (("missing_option", answers["missing_option"]["noul"] >= REFUSE_AT),
                                       ("missing_existing_helper", not prescribed
                                        and answers["helper_present"]["noul"] >= BIND_AT
@@ -278,6 +393,7 @@ def decide(raw: str, ctx: Context, ask: Ask) -> Outcome:
                                       ("argued", answers["argued"]["noul"] >= REFUSE_AT),
                                       ("pick_conflicts_with_instruction", bool(prescribed) and pick not in prescribed),
                                       ("none_fit", pick == NONE_FIT)) if hit]
+    reasons.extend(violated)
     over_cap = refusals >= REFUSAL_CAP
     user_owned = answers["owner"]["probabilities"].get("user", 0.0) >= BIND_AT
     if user_owned and reasons == ["none_fit"]:
@@ -294,14 +410,26 @@ def decide(raw: str, ctx: Context, ask: Ask) -> Outcome:
         action = "ask_user"
     elif not has_basis \
             or max(answers["unsupported"]["noul"], answers["omitted_requirement"]["noul"]) >= STOP_AT \
-            or pick == NONE_FIT:
+            or pick == NONE_FIT or pick not in eligible:
         action = "gather_evidence"
+    elif ctx.agent_id and answers["pick"]["confidence"] < BIND_AT:
+        action = "parent_review"
     elif ctx.agent_id:
         action = "binding"
     else:
         action = "advisory"
-    message = _verdict(action, decision, answers, unverified, reasons, refusals, over_cap)
-    return Outcome(action, message, {**record, "answers": answers, "pick": pick})
+    receipt_id = "review_" + uuid.uuid4().hex if action in {"advisory", "binding"} else None
+    message = _verdict(action, decision, answers, unverified, reasons, refusals, over_cap, receipt_id, ctx.evidence)
+    if action == "gather_evidence":
+        pending = [f"{check}={answers[check]['noul']:.2f} (requires {BIND_AT:.2f})"
+                   for check in invariant_checks.get(pick, ()) if answers[check]["noul"] < BIND_AT]
+        if pending:
+            message += "\ncheck invariants: " + "; ".join(pending)
+    fields = {**record, "answers": answers, "pick": pick, "eligible_options": eligible,
+              "eligibility_checked": bool(scope.get("invariants"))}
+    if receipt_id is not None:
+        fields.update({"receipt_id": receipt_id, "repo_id": ctx.repo_id})
+    return Outcome(action, message, fields)
 
 
 MISUSE = ("ts-decide must be the whole command, not part of a pipeline, a compound command, or a redirect.\n"
@@ -396,8 +524,9 @@ def guard(tool_input: dict, cwd: str | None = None) -> Outcome | None:
 
 def _cached_answers(ctx: Context, gate: str, state: dict) -> dict | None:
     """Reuse a signed result only when all evidence and decisions are unchanged."""
+    contract = _cache_contract(ctx)
     for entry in reversed(ctx.entries):
-        if entry.get("host") != ctx.host:
+        if entry.get("host") != ctx.host or entry.get("cache_contract") != contract:
             continue
         if entry.get("gate") == gate and entry.get("agent_id") == ctx.agent_id \
                 and entry.get("state") == state and isinstance(entry.get("answers"), dict):
@@ -407,6 +536,12 @@ def _cached_answers(ctx: Context, gate: str, state: dict) -> dict | None:
                 if chunk.get("state") == state:
                     return chunk.get("answers")
     return None
+
+
+def _cache_contract(ctx: Context) -> dict:
+    return {"version": policy.REVIEW_CONTRACT, "model": policy.MODEL, "repo_id": ctx.repo_id,
+            "review_mode": policy.review_mode(ctx.host), "policy": POLICY,
+            "thresholds": [BIND_AT, STOP_AT, FOLLOW_AT, REFUSE_AT]}
 
 
 def _pending_parts(tool_input: dict) -> list:
@@ -541,16 +676,37 @@ def _interactive(command: str) -> bool:
     return False
 
 
+def _eligible_decisions(ctx: Context, subject: str) -> list[dict]:
+    eligible = []
+    for entry in consulted(ctx):
+        if entry["action"] not in {"advisory", "binding"}:
+            continue
+        if any(ctx.evidence.get("contract_observations", {}).get(path, {}).get("sha256") != digest
+               for path, digest in entry.get("contracts", {}).items()):
+            continue
+        scope = entry.get("state", {}).get("scope", {})
+        if scope.get("paths") and not _scope_matches(scope, subject, ctx.evidence.get("metadata", {}).get("source_root")):
+            continue
+        if scope.get("paths") and any(
+                ctx.evidence.get("file_observations", {}).get(item["path"], {}).get("sha256") != item["sha256"]
+                for item in entry.get("state", {}).get("evidence", {}).get("source_files", ())
+                if item.get("trust") == "verified_file_observation"):
+            continue
+        eligible.append(entry)
+    return eligible
+
+
 def _decision_summaries(ctx: Context, subject: str) -> list[dict]:
     terms = evidence._terms(subject)
     ranked = []
-    for index, entry in enumerate(consulted(ctx)):
-        if entry["action"] not in {"advisory", "binding"}:
-            continue
+    for index, entry in enumerate(_eligible_decisions(ctx, subject)):
         options = entry.get("state", {}).get("options", {})
         summary = {"decision": entry.get("decision", ""), "pick": entry.get("pick", ""),
                    "selected_approach": options.get(entry.get("pick"), ""),
                    "options": options, "action": entry["action"]}
+        if entry.get("receipt_id"):
+            summary.update({"receipt_id": entry["receipt_id"], "scope": entry.get("state", {}).get("scope", {}),
+                            "origin": entry.get("origin", "own_consultation")})
         score = len(terms & evidence._terms(json.dumps(summary)))
         ranked.append((score, index, summary))
     ranked.sort(key=lambda item: (-item[0], -item[1]))
@@ -559,6 +715,44 @@ def _decision_summaries(ctx: Context, subject: str) -> list[dict]:
         if len(json.dumps([*selected, summary])) <= CLIP_CHARS:
             selected.append(summary)
     return selected
+
+
+def _scope_matches(scope: dict, subject: str, root: str | None) -> bool:
+    try:
+        value = json.loads(subject)
+    except ValueError:
+        return True  # final prose has no executable target paths
+    paths = []
+
+    def collect(item):
+        if isinstance(item, dict):
+            for key, child in item.items():
+                if key in {"file_path", "path", "file", "notebook_path"} and isinstance(child, str):
+                    paths.append(child)
+                elif isinstance(child, str) and child.startswith("*** Begin Patch"):
+                    paths.extend(re.findall(r"(?m)^\*\*\* (?:Add|Update|Delete) File: (.+)$", child))
+                else:
+                    collect(child)
+        elif isinstance(item, list):
+            for child in item:
+                collect(child)
+
+    collect(value)
+    for raw in paths:
+        candidate = Path(raw)
+        if root is not None:
+            base = Path(root).resolve()
+            try:
+                candidate = (base / candidate).resolve().relative_to(base)
+            except ValueError:
+                return False
+        elif candidate.is_absolute() or ".." in candidate.parts:
+            return False
+        relative = candidate.as_posix()
+        if not any(relative == allowed.rstrip("/") or allowed.endswith("/") and relative.startswith(allowed)
+                   for allowed in scope["paths"]):
+            return False
+    return True  # unknown shell targets still require the semantic coverage check
 
 
 def edit_gate(name: str, tool_input: dict, ctx: Context, ask: Ask) -> Outcome:
@@ -588,7 +782,8 @@ def edit_gate(name: str, tool_input: dict, ctx: Context, ask: Ask) -> Outcome:
         "covered": _noul(
             "Does the implementation choice in `pending_input` match `selected_approach` in `decisions`? "
             "The hook has verified that these are completed Jev verdicts. Match the approach by meaning, "
-            "not exact source syntax or file paths. One decision can cover several edits implementing its "
+            "not exact source syntax. Respect explicit `scope.paths` and `scope.invariants`. "
+            "Computed shell targets outside the scope are not covered. One decision can cover several edits implementing its "
             "approach. Do not judge whether the code is correct or fully tested. A documented evidence-based "
             "override of an advisory pick is also covered. An unrelated decision or an empty list is not.",
             "The change implements an approach selected in a completed decision, or an evidence-based advisory override.",
@@ -607,11 +802,14 @@ def edit_gate(name: str, tool_input: dict, ctx: Context, ask: Ask) -> Outcome:
             "Distinguish executable input from ordinary data, test progress, or a signal used to stop a process.",
             "Future stdin can execute commands, code, or database mutations that are absent from this tool input.",
             "The operation is fully specified now, or future stdin only carries data or control signals.")
-    record = {"gate": "edit", "state": state}
+    record = {"gate": "edit", "state": state, "cache_contract": _cache_contract(ctx)}
     states = [{**state, "pending_input": part} for part in parts]
     try:
         results = _ask_parts(ctx, states, questions, ask)
     except jev.JevError as error:
+        if not policy.fail_open(ctx.host):
+            return Outcome("deny", f"Required review unavailable (jev {error.reason}); action not run. "
+                           "Restore the review service and retry.", {**record, "error": error.reason})
         return Outcome("allow", record={**record, "error": error.reason},
                        note=f"agent-decisions: edit check skipped (jev {error.reason}); action allowed")
     writes = name in EDIT_TOOLS or any(answer["writes_files"]["noul"] >= STOP_AT for answer in results)
@@ -620,8 +818,13 @@ def edit_gate(name: str, tool_input: dict, ctx: Context, ask: Ask) -> Outcome:
         not decisions or answer["covered"]["noul"] < coverage_at) for answer in results)
     opaque = name in SHELL_TOOLS and (_interactive(command_of(tool_input)) or any(
         answer["accepts_code_input"]["noul"] >= STOP_AT for answer in results))
-    message = ("Edit not run: this change requires a Jev decision. Run ts-decide on the choice with neutral "
-               "options and transcript facts. Read the verdict before retrying this edit.") if deny else ""
+    failed = [f"needs_decision={answer['needs_decision']['noul']:.2f} (at least {STOP_AT:.2f}), "
+              f"covered={answer['covered']['noul']:.2f} (requires {coverage_at:.2f})" for answer in results
+              if answer["needs_decision"]["noul"] >= STOP_AT and (not decisions or answer["covered"]["noul"] < coverage_at)]
+    message = ("Edit not run: this change requires a Jev decision. "
+               f"Eligible receipts: {len(decisions)}. " + "; ".join(failed) + ". "
+               "Run ts-decide on the choice with neutral options and captured user excerpts. "
+               "Read the verdict before retrying this edit.") if deny else ""
     if opaque:
         deny = True
         message = ("Submit the complete commands or code in a new shell call. This host does not hook later "
@@ -652,6 +855,8 @@ def question_gate(tool_input: dict, ctx: Context, ask: Ask) -> Outcome:
     try:
         answers = _cached_answers(ctx, "question", state) or ask(state, questions)
     except jev.JevError as error:
+        if not policy.fail_open(ctx.host):
+            return Outcome("deny", f"Required question review unavailable (jev {error.reason}); question not sent.")
         return Outcome("allow", note=f"agent-decisions: question gate skipped (jev {error.reason})")
     problems = []
     for i, item in enumerate(asked):
@@ -663,13 +868,14 @@ def question_gate(tool_input: dict, ctx: Context, ask: Ask) -> Outcome:
                             "for a choice between approaches) and state the call.")
     action = "deny" if problems else "allow"
     message = "Question not sent.\n" + "\n".join(problems) if problems else ""
-    return Outcome(action, message, {"gate": "question", "question_key": key, "state": state, "answers": answers})
+    return Outcome(action, message, {"gate": "question", "question_key": key, "state": state, "answers": answers,
+                                     "cache_contract": _cache_contract(ctx)})
 
 
 def plan_gate(ctx: Context, ask: Ask | None = None, *, plan: str | None = None) -> Outcome:
-    decided = consulted(ctx)
+    decided = _eligible_decisions(ctx, plan if plan is not None else ctx.transcript.last_assistant_text)
     if ask is None:
-        if any(entry["action"] in {"advisory", "binding", "unverified"} for entry in decided):
+        if decided or policy.fail_open(ctx.host) and any(entry["action"] == "unverified" for entry in consulted(ctx)):
             return Outcome("allow")
         return Outcome("deny", "Plan not submitted: no completed ts-decide. Consult on the plan's main choice.",
                        {"gate": "plan"})
@@ -691,11 +897,13 @@ def plan_gate(ctx: Context, ask: Ask | None = None, *, plan: str | None = None) 
     try:
         answers = _cached_answers(ctx, "plan", state) or ask(state, questions)
     except jev.JevError as error:
+        if not policy.fail_open(ctx.host):
+            return Outcome("deny", f"Required plan review unavailable (jev {error.reason}); plan not submitted.")
         return Outcome("allow", note=f"agent-decisions: plan check skipped (jev {error.reason})")
     deny = answers["needs_decision"]["noul"] >= STOP_AT and (
         not state["decisions"] or answers["covered"]["noul"] < BIND_AT)
     return Outcome("deny" if deny else "allow", "Consult on the plan's uncovered choice before submitting it." if deny else "",
-                   {"gate": "plan", "state": state, "answers": answers})
+                   {"gate": "plan", "state": state, "answers": answers, "cache_contract": _cache_contract(ctx)})
 
 
 def stop_gate(final: str, stop_hook_active: bool, ctx: Context, ask: Ask) -> Outcome:
@@ -705,7 +913,7 @@ def stop_gate(final: str, stop_hook_active: bool, ctx: Context, ask: Ask) -> Out
                                 "or save the detailed report in a file, then finish.")
     if not final:
         return Outcome("allow")
-    decided = consulted(ctx)
+    decided = _eligible_decisions(ctx, final)
     binding = next((e for e in reversed(decided) if e.get("action") == "binding"), None)
     question_message = re.sub(r"(?ms)^ {0,3}(`{3,}|~{3,})[^\n]*\n.*?^ {0,3}\1[ \t]*(?:\n|$)", "", final).strip()
     state = {"policy": POLICY, "final_message": final, "question_message": question_message,
@@ -713,6 +921,12 @@ def stop_gate(final: str, stop_hook_active: bool, ctx: Context, ask: Ask) -> Out
              "current_user_instruction": evidence.clip(ctx.transcript.user_messages[-1])
              if ctx.transcript.user_messages else ""}
     state["decisions"] = _decision_summaries(ctx, final)
+    paragraphs = re.split(r"\n\s*\n", final)
+    if len(paragraphs) > 16:
+        paragraphs = [*paragraphs[:15], "\n\n".join(paragraphs[15:])]
+    sections = {f"section_{index}": evidence.clip(paragraph, 1_000)
+                for index, paragraph in enumerate(paragraphs)}
+    state["final_sections"] = sections
     questions = {
         "made_choice": _noul("Judge only `final_message`: does the agent state that it selected an alternative? "
                              "Include algorithms, libraries, databases, implementations, designs, and root-cause theories. "
@@ -731,6 +945,11 @@ def stop_gate(final: str, stop_hook_active: bool, ctx: Context, ask: Ask) -> Out
                         "state the answer?", "The user's own words already answer it.",
                         "The user has not answered it, or nothing is asked."),
         "owner": _owner_question("the question that `question_message` asks the user, if any"),
+        "uncovered_section": {"type": "choice", "instructions":
+            "If a material choice lacks coverage, which section in final_sections contains that choice? "
+            "Compare decisions and captured user instructions. Reporting observations or a completed "
+            "selected approach is not an additional choice.",
+            "criteria": {**sections, "none_fit": "No section contains an uncovered material choice."}},
     }
     if state["decisions"]:
         questions["uncovered_choice"] = _noul(
@@ -751,12 +970,22 @@ def stop_gate(final: str, stop_hook_active: bool, ctx: Context, ask: Ask) -> Out
     try:
         answers = _cached_answers(ctx, "stop", state) or ask(state, questions)
     except jev.JevError as error:
+        if not policy.fail_open(ctx.host):
+            return Outcome("block", f"Required final review unavailable (jev {error.reason}). "
+                           "Restore the review service and retry.")
         return Outcome("allow", note=f"agent-decisions: stop check skipped (jev {error.reason})")
     reasons = []
     if answers["made_choice"]["noul"] >= STOP_AT and answers["settled_choice"]["noul"] < BIND_AT and (
             not state["decisions"] or answers["uncovered_choice"]["noul"] > round(1.0 - BIND_AT, 8)):
+        section = answers["uncovered_section"]["choice"]
+        excerpt = evidence.clip(sections.get(section, "No specific section was identified."), 500)
+        probability = answers.get("uncovered_choice", {}).get("noul")
+        detail = f"uncovered_choice={probability:.2f} (must be at most {1.0 - BIND_AT:.2f})" \
+            if probability is not None else "No verified completed decision covers this reply."
         reasons.append("You chose between approaches without a relevant ts-decide verdict. "
-                       "Consult on the uncovered choice, read the verdict, then finish.")
+                       f"Eligible receipts: {len(state['decisions'])}. {detail}. "
+                       f"Disputed section {section}: {excerpt}\n"
+                       "Consult on that choice, read the verdict, then finish.")
     if answers["asks_user"]["noul"] >= STOP_AT:
         if answers["stated"]["noul"] >= BIND_AT:
             reasons.append("Your reply asks the user something their messages already answer. Use their answer, "
@@ -768,4 +997,4 @@ def stop_gate(final: str, stop_hook_active: bool, ctx: Context, ask: Ask) -> Out
         reasons.append(f"The binding pick for {binding.get('decision', '')!r} is `{binding.get('pick', '')}`. "
                        "Your reply does not follow it. Follow it.")
     return Outcome("block" if reasons else "allow", "\n".join(reasons),
-                   {"gate": "stop", "state": state, "answers": answers})
+                   {"gate": "stop", "state": state, "answers": answers, "cache_contract": _cache_contract(ctx)})
