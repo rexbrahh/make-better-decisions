@@ -4,7 +4,7 @@
 
 The goal is useful, enforceable review. Jev evaluates a material choice against observed evidence. Code checks receipt identity, scope, constraints, and failure policy. Exact instructions and routine operations need no invented choice.
 
-Version 1.1.3 corrects remaining dispatch-size rejections and contract-read loops. Required review remains the default. See the [release notes](docs/releases/v1.1.3.md) and [scoped review evidence](docs/validation/scoped-review-2026-10-12.md).
+Version 1.1.4 corrects a Python 3.9 guard error on ordinary read commands. Required review remains the default. See the [release notes](docs/releases/v1.1.4.md) and [scoped review evidence](docs/validation/scoped-review-2026-10-12.md).
 
 The hook builds the evidence. The agent cannot choose the source set by itself.
 

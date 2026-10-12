@@ -180,6 +180,7 @@ The ledger stores full states, answers, actions, signed user context, installati
 Gate records retain timings and API model/usage metadata outside model state. Exact gate caches also match actor, repository, model, thresholds, review contract, and operator policy. Evidence, source hashes, user constraints, and approach receipts remain part of the cache state.
 
 The guard denies tool calls that name the state directory.
+Invalid glob syntax in interpreter fragments does not stop path inspection. Literal private paths and valid wildcard matches remain denied. Ordinary tool review still follows.
 
 ## Native boundaries
 

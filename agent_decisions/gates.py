@@ -549,9 +549,15 @@ def guard(tool_input: dict, cwd: str | None = None) -> Outcome | None:
         path = path.resolve()
         text = str(path).casefold() if sys.platform == "darwin" else str(path)
         roots = [str(root).casefold() if sys.platform == "darwin" else str(root) for root in private]
-        if any(text == root or text.startswith(root + os.sep) or fnmatch.fnmatchcase(root, text)
-               for root in roots):
+        if any(text == root or text.startswith(root + os.sep) for root in roots):
             break
+        try:
+            if any(fnmatch.fnmatchcase(root, text) for root in roots):
+                break
+        except re.error:
+            # Interpreter fragments can resemble invalid globs on Python 3.9.
+            # Continue checking paths; the ordinary tool review still follows.
+            continue
     else:
         return None
     if paths:

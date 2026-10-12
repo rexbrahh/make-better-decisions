@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
+from unittest import mock
 
 from agent_decisions import gates, jev, policy
 from agent_decisions.transcript import ToolCall, Transcript
@@ -57,6 +59,28 @@ class ClassifyTest(StateTestCase):
 
 
 class GuardTest(StateTestCase):
+    def test_peer_python_list_read_does_not_raise_an_invalid_glob_error(self):
+        command = """python3 - <<'PY'
+import hashlib,json
+from pathlib import Path
+root=Path('/Users/rexliu/fieldforge/.local/v45-campaign-20261004')
+for p in [root/'journal.jsonl',root/'qualification-20261005/QUALIFICATION.md']:
+    data=p.read_bytes()
+    print(str(p),hashlib.sha256(data).hexdigest())
+    if p.suffix=='.jsonl':
+        rows=[json.loads(x) for x in data.decode().splitlines() if x.strip()]
+        print(json.dumps(rows[-1],indent=2))
+    else:print('\\n'.join(data.decode().splitlines()[:42]))
+PY
+"""
+        self.assertIsNone(gates.guard({"cmd": command}, cwd="/Users/rexliu/fieldforge"))
+
+    def test_invalid_glob_does_not_skip_a_later_private_path(self):
+        # Python versions differ in how fnmatch handles invalid bracket ranges.
+        with mock.patch.object(gates.fnmatch, "fnmatchcase", side_effect=re.error("bad character range")):
+            outcome = gates.guard({"paths": ["/tmp/[z-a]", str(policy.state_dir() / "sessions/s.jsonl")]})
+        self.assertEqual(outcome.action, "deny")
+
     def test_denies_any_mention_of_the_state_directory(self):
         state = str(policy.state_dir())
         for tool_input in ({"command": f"echo x >> {state}/sessions/s.jsonl"},
