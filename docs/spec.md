@@ -1,6 +1,6 @@
 # agent-decisions behavior spec
 
-Date: 2026-10-12. Owner: Rex. Status: v1.1.0 behavior.
+Date: 2026-10-12. Owner: Rex. Status: v1.1.1 behavior.
 
 ## Goal
 
@@ -45,7 +45,7 @@ Source-file contents are observations only. They are not user instructions. They
 
 The source reader rejects private paths, `.env` files, key files, out-of-root paths, too-large files, binary files, changed files, and symlink swaps. Project `.local` files are allowed unless they are inside the actual state directory.
 
-Evidence is bounded at 80,000 JSON characters. The initial and latest instructions, requested helper, and recent checks precede optional history. Requested source paths precede project rules and older path candidates.
+Evidence is bounded at 80,000 JSON characters. The initial and latest instructions and observations matching cited helper paths precede optional history and project rules. Matching observations retain native directory and trust metadata even when the consultation uses another directory. Hashed source reads remain inside the consultation root. Requested source paths precede project rules and older path candidates.
 
 One text retains at most 16,000 characters plus omission markers. Large sources retain the head, tail, and a window around the most specific matching query term.
 
@@ -101,6 +101,8 @@ Scoped review identity survives neutral question repairs. Unchanged accepted dec
 The edit, plan, and stop gates can reuse relevant advisory and binding decisions across turns in the same session. Later user instructions override earlier binding decisions.
 
 Decision questions use separate conditions for observed selection grounds, unsupported implementation facts, missing constraints, omitted named alternatives, exact user instructions, and routine work. Code combines these answers. A no-fit answer caused by missing context requests evidence. It does not demand a new option list.
+
+One diagnostic Choice selects the missing request statement from at most 32 candidates. Each candidate retains at most 1,000 characters plus omission markers. The question shares the existing API call. A `GATHER` response quotes the selected statement or explicitly reports that no specific missing fact was identified. The selection does not control authorization. The updated diagnostic contract refreshes older scoped responses once. Unchanged requests then retain the existing reuse rules.
 
 ## Gates
 

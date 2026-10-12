@@ -4,7 +4,7 @@
 
 The goal is useful, enforceable review. Jev evaluates a material choice against observed evidence. Code checks receipt identity, scope, constraints, and failure policy. Exact instructions and routine operations need no invented choice.
 
-Version 1.1.0 contains scoped review and requires review by default. See the [release notes](docs/releases/v1.1.0.md) and [implementation evidence](docs/validation/scoped-review-2026-10-12.md).
+Version 1.1.1 retains cited helper observations and identifies missing evidence in `GATHER` responses. Scoped review still requires review by default. See the [release notes](docs/releases/v1.1.1.md) and [scoped review evidence](docs/validation/scoped-review-2026-10-12.md).
 
 The hook builds the evidence. The agent cannot choose the source set by itself.
 
@@ -106,6 +106,8 @@ Source-file contents are observations. They are not proof that statements inside
 
 Current source has the `working_tree_source` role. Git baseline metadata records the revision, content hash, and whether current bytes differ. An unavailable or oversized baseline stays explicit. Native Codex command observations retain directory, status, and exit code. Printed success text cannot establish a passing check.
 
+Cited helper observations precede optional history and project rule files within the existing evidence budget. Captured reads from another worktree retain their native directory and trust label. The hashed source reader retains its current directory boundary.
+
 The bundle keeps the initial and latest user instructions, the requested helper, and the two newest tool observations before optional history. Older observations use the remaining space.
 
 Source discovery prioritizes requested paths, then project rule files, then other observed paths. It stops at 16 candidate probes and bounds each scanned text. Large sources retain the head, tail, and a window around the most specific matching query term. If discovery stops early, `source_files_omitted_is_lower_bound` marks the omission count as a lower bound.
@@ -155,7 +157,7 @@ The chosen option must belong to the reviewed options. Accepting the advisory pi
 
 The hook checks native ancestry, completed dispatch, repository identity, the signed entry, and the full parent receipt. The accepted approach binds the worker. A matching filename alone grants no permission. Codex uses captured native metadata. Claude supports completed main-thread Agent/Task dispatches. Nested Claude ancestry remains unsupported.
 
-Unchanged scoped reviews reuse their result. Question rephrasing cannot reroll an accepted pick or an unresolved evidence request. A neutral repair of a refused question can receive another check while retaining its decision identity. Refusal diagnostics name the wording field. Evidence diagnostics show the blocking values and observed helper paths.
+Unchanged scoped reviews reuse their result. Question rephrasing cannot reroll an accepted pick or an unresolved evidence request. A neutral repair of a refused question can receive another check while retaining its decision identity. Refusal diagnostics name the wording field. Evidence diagnostics show the blocking values and quote the request statement that needs evidence. Jev selects that statement from bounded candidates in the same API call. If no candidate identifies the missing fact, the response says so. This diagnostic does not change the verdict.
 
 Completed reviews with contract references produce compact signed architectural history. History is repository-scoped background data and survives chat retention. It grants no fresh write permission. Changed, unavailable, or unchecked contract hashes make the corresponding approach receipt ineligible.
 

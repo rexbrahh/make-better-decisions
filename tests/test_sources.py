@@ -7,12 +7,41 @@ import time
 from pathlib import Path
 from unittest import mock
 
-from agent_decisions import evidence, policy
+from agent_decisions import evidence, policy, transcript
 from agent_decisions.transcript import ToolCall, Transcript
 from tests.helpers import StateTestCase
 
 
 class SourceObservationTest(StateTestCase):
+    def test_peer_helper_reads_survive_history_and_a_different_consultation_root(self):
+        fixture = json.loads((Path(__file__).parent / "fixtures" /
+                              "windows-diagnostic-evidence.json").read_text())
+        worktree = self.dir / "qualification"
+        root = self.dir / "main"
+        root.mkdir()
+        for name in ("AGENTS.md", "CLAUDE.md"):
+            (root / name).write_text("Preserve project constraints.\n" + "x" * 16_000)
+        records = json.loads(json.dumps(fixture["observations"]).replace("{worktree}", str(worktree)))
+        calls = transcript._codex(records).tool_calls
+        noise = (ToolCall("unrelated-linux", "Bash", "run linux qualification", "x" * 12_000),
+                 ToolCall("unrelated-log", "Bash", "read linux build log", "z" * 12_000))
+        users = ("Preserve source and diagnostics.", *("Constraint: preserve interfaces. " + "y" * 8_000
+                  for _ in range(20)), fixture["request"]["facts"][0])
+        t = Transcript(users, (*calls, *noise), (*calls, *noise))
+        query = json.dumps(fixture["request"]).replace("{worktree}", str(worktree))
+
+        bundle = evidence.build(t, query=query, cwd=root)
+
+        retained = {call["id"]: call for call in bundle["tool_calls_newest_first"]}
+        self.assertIn("exec-f2c0383f-45bb-4eff-85ef-85843c71000e", set(retained))
+        journal = retained["exec-981692d5-493d-4910-8ff9-41656dad227f"]
+        self.assertIn("observability/journal", journal["output"])
+        self.assertEqual(journal["execution"]["cwd"], "file://" + str(worktree))
+        self.assertEqual(journal["trust"], "unverified_tool_observation")
+        self.assertEqual(bundle["user_messages"][0], users[0])
+        self.assertEqual(bundle["user_messages"][-1], users[-1])
+        self.assertLessEqual(len(json.dumps(bundle, sort_keys=True)), policy.EVIDENCE_CHARS)
+
     def test_helper_at_the_end_of_a_decision_question_is_read(self):
         (self.dir / "lease.py").write_text("class Lease: pass\n")
         request = {"decision": "Which control structure should parser.py use with the Lease API in lease.py?",

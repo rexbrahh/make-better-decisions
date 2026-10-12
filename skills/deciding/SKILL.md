@@ -11,7 +11,7 @@ Do not use it for an exact user instruction or routine operation. Examples are t
 
 Routine corrections include test setup/reset helpers and regression coverage for selected behavior. Reuse the existing helpers and conventions. Consult again when the fix selects a new material approach or changes product behavior or interfaces.
 
-Use Jev to evaluate a concrete choice against current evidence. Code owns the workflow. For an evidence request, perform the named check and include the helper path in the next decision question.
+Use Jev to evaluate a concrete choice against current evidence. Code owns the workflow. For an evidence request, check the statement named by `missing evidence` and include the helper path and observed result in the next decision question. If Jev identifies no specific missing fact, use the displayed blocker and observed sources to diagnose the incomplete review.
 
 The hook checks edits and shell writes before execution. It denies writes that select an uncovered approach.
 

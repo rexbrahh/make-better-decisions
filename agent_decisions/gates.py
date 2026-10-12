@@ -151,7 +151,26 @@ def parse_request(raw: str) -> tuple[str, dict[str, str], list[str]]:
     return decision.strip(), parsed, facts
 
 
-def _decide_questions(options: dict[str, str], scope: dict | None = None) -> dict:
+def _missing_fact_candidates(decision: str, options: dict[str, str], scope: dict) -> dict[str, str]:
+    texts = [decision, *options.values(), *scope.get("invariants", ())]
+    statements = {}
+    for text in texts:
+        previous = ""
+        for part in re.split(r"(?<=[.!?;])\s+|\n+", text):
+            part = part.strip()
+            if not part or part.endswith("?"):
+                continue
+            # Keep the named subject when a statement refers to the preceding sentence.
+            statement = previous + " " + part if previous and part.startswith(
+                ("It ", "Its ", "They ", "Their ", "This ", "These ", "That ", "Those ")) else part
+            statements.setdefault(statement, None)
+            previous = statement
+    return {f"claim_{index}": evidence.clip(statement, 1_000)
+            for index, statement in enumerate(list(statements)[:32])}
+
+
+def _decide_questions(options: dict[str, str], scope: dict | None = None,
+                      missing_facts: dict[str, str] | None = None) -> dict:
     questions = {
         "pick": {"type": "choice",
                  "instructions": "Using `evidence`, `facts` and `policy`, which option in `options` best serves "
@@ -217,6 +236,14 @@ def _decide_questions(options: dict[str, str], scope: dict | None = None) -> dic
                 "origin": "Corroborate the agent's necessary claims with independent observations."}},
         "owner": _owner_question("`decision`"),
     }
+    if missing_facts:
+        questions["missing_fact"] = {"type": "choice", "instructions":
+            "Assume a necessary fact for comparing `options` is missing: which supplied request statement "
+            "needs an observation or a required constraint value from `evidence`? Select the concrete "
+            "statement whose support is missing. Request statements are agent claims, not observations. "
+            "This diagnostic does not decide permission. Select not_identified if no statement names "
+            "the missing fact, or if the evidence already supports the relevant statements.",
+            "criteria": {**missing_facts, "not_identified": "No supplied statement identifies a missing necessary fact."}}
     for option_id, description in options.items():
         questions[f"follows_pattern_{option_id}"] = _noul(
             f"Assume current source shows a pattern applicable to `decision`: does this operation follow "
@@ -253,7 +280,8 @@ _NEXT = {
 
 
 def _verdict(action: str, decision: str, answers: dict, unverified: list[str], reasons: list[str],
-             refusals: int, over_cap: bool, receipt_id: str | None = None, observed: dict | None = None) -> str:
+             refusals: int, over_cap: bool, receipt_id: str | None = None, observed: dict | None = None,
+             missing_facts: dict[str, str] | None = None) -> str:
     pick = answers["pick"]["choice"]
     ranked = ", ".join(f"{o} {p:.2f}" for o, p in sorted(answers["pick"]["probabilities"].items(),
                                                           key=lambda item: -item[1]))
@@ -287,6 +315,7 @@ def _verdict(action: str, decision: str, answers: dict, unverified: list[str], r
                      f"unsupported={answers['unsupported']['noul']:.2f} (blocks at {STOP_AT:.2f}); "
                      f"omitted_requirement={answers['omitted_requirement']['noul']:.2f} (blocks at {STOP_AT:.2f})")
         target = answers.get("evidence_needed", {}).get("choice", "comparison")
+        missing = (missing_facts or {}).get(answers.get("missing_fact", {}).get("choice"))
         checks = {
             "requirements": "Identify the missing required constraint in captured instructions. "
                             "An engineering preference is not a required user constraint.",
@@ -294,7 +323,13 @@ def _verdict(action: str, decision: str, answers: dict, unverified: list[str], r
             "comparison": "Run a check comparing these options against the user's requirement and include the observed result.",
             "origin": "Corroborate the listed unverified claims with source files or the actual check, not printed assertions.",
         }
-        lines.append("check: " + checks[target])
+        if missing:
+            lines.append("missing evidence: " + json.dumps(missing, ensure_ascii=False))
+            lines.append("check: Corroborate the named statement with a source read or the relevant tool call. "
+                         "Include its path and the observed result in the next request.")
+        else:
+            lines.append("missing evidence: no specific missing fact was identified by Jev.")
+            lines.append("check: " + checks[target])
         paths = [source.get("path") for source in (observed or {}).get("source_files", ())
                  if isinstance(source.get("path"), str)]
         if target in {"implementation", "origin"} and paths:
@@ -324,6 +359,7 @@ def decide(raw: str, ctx: Context, ask: Ask) -> Outcome:
     verified, unverified = provenance.verify(facts, ctx.transcript)
     state = {"policy": POLICY, "decision": decision, "options": options, "facts": verified,
              "unverified_claims": unverified, "evidence": ctx.evidence}
+    missing_facts = _missing_fact_candidates(decision, options, scope)
     if scope:
         state["scope"] = scope
     record = {"gate": "decide", "decision": decision, "decision_key": key, "state": state}
@@ -344,7 +380,8 @@ def decide(raw: str, ctx: Context, ask: Ask) -> Outcome:
         observations = sorted({json.dumps({key: call.get(key) for key in ("tool", "input", "output", "trust", "execution")},
                                           sort_keys=True) for call in ctx.evidence.get("tool_calls_newest_first", ())})
         sources = sorted((json.dumps(source, sort_keys=True) for source in ctx.evidence.get("source_files", ())))
-        comparison = {"policy": POLICY, "gate_contract": policy.REVIEW_CONTRACT, "repo_id": ctx.repo_id,
+        comparison = {"policy": POLICY, "gate_contract": policy.REVIEW_CONTRACT,
+                      "diagnostic_contract": "missing-fact-1", "repo_id": ctx.repo_id,
                       "thresholds": [BIND_AT, STOP_AT, FOLLOW_AT, REFUSE_AT],
                       "options": options, "scope": scope, "facts": verified,
                       "model": policy.MODEL, "contracts": record.get("contracts", {}),
@@ -364,7 +401,7 @@ def decide(raw: str, ctx: Context, ask: Ask) -> Outcome:
             if not repairs_question:
                 return Outcome(prior["action"], prior["verdict"] + "\nreused: no changed options, constraints, or observations.")
     try:
-        answers = ask(state, _decide_questions(options, scope))
+        answers = ask(state, _decide_questions(options, scope, missing_facts))
     except jev.JevError as error:
         next_step = "Decide yourself and state the evidence for your choice." if policy.fail_open(ctx.host) else \
             "Required review is unavailable. Restore the service and consult again before choosing or writing."
@@ -419,7 +456,8 @@ def decide(raw: str, ctx: Context, ask: Ask) -> Outcome:
     else:
         action = "advisory"
     receipt_id = "review_" + uuid.uuid4().hex if action in {"advisory", "binding"} else None
-    message = _verdict(action, decision, answers, unverified, reasons, refusals, over_cap, receipt_id, ctx.evidence)
+    message = _verdict(action, decision, answers, unverified, reasons, refusals, over_cap,
+                       receipt_id, ctx.evidence, missing_facts)
     if action == "gather_evidence":
         pending = [f"{check}={answers[check]['noul']:.2f} (requires {BIND_AT:.2f})"
                    for check in invariant_checks.get(pick, ()) if answers[check]["noul"] < BIND_AT]

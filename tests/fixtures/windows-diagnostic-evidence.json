@@ -1,0 +1,83 @@
+{
+  "source": {
+    "second_request_call": "call_99db7353ad0145edac493b08811a0ee7",
+    "unchanged_probe_call": "call_cVlr2UBg4v32H01kV5wQMEUb",
+    "successful_followup_call": "call_26e70ca84c9447e68064a5fab5a260e7",
+    "sanitized": "Worktree, service/tag names and helper symbols are placeholders. Source output is limited to relevant excerpts. Historical AWS state is a request claim, not current evidence."
+  },
+  "observations": [
+    {
+      "type": "event_msg",
+      "payload": {
+        "type": "item_completed",
+        "item": {
+          "type": "CommandExecution",
+          "id": "exec-f2c0383f-45bb-4eff-85ef-85843c71000e",
+          "command": [
+            "/bin/zsh",
+            "-lc",
+            "sed -n '1,115p' ci/ec2-runner/common.sh"
+          ],
+          "cwd": "file://{worktree}",
+          "status": "completed",
+          "exit_code": 0,
+          "aggregated_output": "[Sanitized source excerpt]\nhelper_wait_for_ssm() {\n  instance_id=$1\n  attempt=1\n  while [ \"$attempt\" -le 60 ]; do\n    ping=$(aws ssm describe-instance-information \\\n      --region \"$AWS_REGION\" \\\n      --filters \"Key=InstanceIds,Values=$instance_id\" \\\n      --query 'InstanceInformationList[0].PingStatus' \\\n      --output text)\n    [ \"$ping\" = \"Online\" ] && return 0\n    sleep 10\n    attempt=$((attempt + 1))\n  done\n  helper_fail \"SSM did not become online for $instance_id within 10 minutes\"\n}\n\n"
+        }
+      }
+    },
+    {
+      "type": "event_msg",
+      "payload": {
+        "type": "item_completed",
+        "item": {
+          "type": "CommandExecution",
+          "id": "exec-5fdcf60b-5777-4ac4-940d-29513c0c5928",
+          "command": [
+            "/bin/zsh",
+            "-lc",
+            "/opt/homebrew/bin/rg -n 'Mode.*Prepare|Prepare|LeaseOwner|lease-owner|Start-Service|Stop-Service|Runner.Worker' ci/ec2-runner/control.ps1 ci/ec2-runner/common.sh"
+          ],
+          "cwd": "file://{worktree}",
+          "status": "completed",
+          "exit_code": 0,
+          "aggregated_output": "[Sanitized source excerpt]\nci/ec2-runner/common.sh:55:  actual_owner=$(helper_tag_value \"$instance_id\" project:lease-owner)\nci/ec2-runner/control.ps1:4:  [ValidateSet(\"Prepare\", \"MarkIdle\", \"Inspect\", \"Stop\")]\nci/ec2-runner/control.ps1:14:  [string]$LeaseOwner = \"\",\nci/ec2-runner/control.ps1:44:    Stop-Service -Name $ServiceName -Force\nci/ec2-runner/control.ps1:54:$leaseOwnerPath = \"C:\\ProgramData\\Project\\lease-owner.txt\"\nci/ec2-runner/control.ps1:77:  $localLeaseOwner = if (Test-Path -LiteralPath $leaseOwnerPath -PathType Leaf) {\nci/ec2-runner/control.ps1:85:    \"|lease_owner=$localLeaseOwner\")\nci/ec2-runner/control.ps1:89:if ([string]::IsNullOrWhiteSpace($LeaseOwner)) {\nci/ec2-runner/control.ps1:90:  throw \"LeaseOwner is required for $Mode\"\nci/ec2-runner/control.ps1:92:if ($Mode -eq \"Prepare\") {\nci/ec2-runner/control.ps1:93:  Set-Content -LiteralPath $leaseOwnerPath -Value $LeaseOwner -Encoding Ascii\nci/ec2-runner/control.ps1:100:  if ($activeOwner -cne $LeaseOwner) {\nci/ec2-runner/control.ps1:102:      \"RUNNER_CONTROL|mode=markidle|status=Skipped|expected_owner=$LeaseOwner\" +\nci/ec2-runner/control.ps1:108:# EC2 is configured to stop when Windows shuts down. Prepare arms the active\nci/ec2-runner/control.ps1:124:  Start-Service -Name $ServiceName\nci/ec2-runner/control.ps1:145:  \"|ttl_minutes=$LeaseTtlMinutes|lease_owner=$LeaseOwner\")\n"
+        }
+      }
+    },
+    {
+      "type": "event_msg",
+      "payload": {
+        "type": "item_completed",
+        "item": {
+          "type": "CommandExecution",
+          "id": "exec-981692d5-493d-4910-8ff9-41656dad227f",
+          "command": [
+            "/bin/zsh",
+            "-lc",
+            "sed -n '1,120p' app/observability/diagnostic_capture.cc"
+          ],
+          "cwd": "file://{worktree}",
+          "status": "completed",
+          "exit_code": 0,
+          "aggregated_output": "[Sanitized source excerpt]\n  const auto root =\n      QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);\n  return root.isEmpty()\n             ? QString{}\n             : QDir(root).filePath(QStringLiteral(\"observability/journal\"));\n}\n"
+        }
+      }
+    }
+  ],
+  "request": {
+    "decision": "Which bounded diagnostic step should identify the actual Windows trim Apply refusal before a product edit? The requested helper read is complete: {worktree}/ci/ec2-runner/start.sh checks ownership marker and active-lease owner/expiry before claiming, and uses control.ps1 Prepare; {worktree}/ci/ec2-runner/stop.sh stops only for matching expected owner; common.sh supplies bounded SSM waits. {worktree}/app/observability/diagnostic_capture.cc places enabled journals under AppLocalDataLocation/observability/journal. Current AWS read says stopped and no lease. Exact saved retry3 has contradictory=1/unplanned=0 but no gate or witness. Use a 45-minute owner lease and abort on Runner.Worker or ownership change; preserve all source, binaries and diagnostics; no rebuild, visual GUI, deployment or new tag.",
+    "options": [
+      {
+        "id": "inspect_retained_native_diagnostics",
+        "description": "Use the existing guarded runner helpers to inspect retained retry3 source, process state, execution records and diagnostic logs first, then release the owned lease."
+      },
+      {
+        "id": "run_retained_core_replay",
+        "description": "Use the existing guarded runner helpers to run only the retained Qt-free disjoint-envelope known-open replay first, recording typed diagnostics and then releasing the owned lease."
+      }
+    ],
+    "facts": [
+      "do everything you can except the parts where it needs visual GUI computer use assisted real human user similation QA."
+    ]
+  }
+}

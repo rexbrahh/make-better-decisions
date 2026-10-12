@@ -23,6 +23,67 @@ def run(fake, request=REQUEST, **ctx):
 
 
 class DecideTest(StateTestCase):
+    def test_peer_gather_names_the_claim_that_needs_an_observation(self):
+        fixture = json.loads((Path(__file__).parent / "fixtures" /
+                              "windows-diagnostic-evidence.json").read_text())
+        request = fixture["request"]
+        claim = "Current AWS read says stopped and no lease."
+
+        def ask(state, questions):
+            choices = questions["missing_fact"]["criteria"]
+            selected = next(key for key, text in choices.items() if text == claim)
+            fake = FakeJev(pick="inspect_retained_native_diagnostics", sufficient=.64,
+                           unsupported=.83, evidence_needed="implementation", missing_fact=selected,
+                           missing_option=.36, argued=.20, owner="agent")
+            return asker(fake)(state, questions)
+
+        t = Transcript(tuple(request["facts"]), (), ())
+        result = gates.decide(json.dumps(request), make_ctx(t), ask)
+
+        self.assertEqual(result.action, "gather_evidence")
+        self.assertIn("missing evidence: " + json.dumps(claim), result.message)
+        self.assertIn("unsupported=0.83", result.message)
+        self.assertIn("observed result", result.message)
+
+    def test_missing_fact_selection_has_no_authority_over_the_verdict(self):
+        fake = FakeJev(**CONFIDENT, missing_fact="not_identified")
+        result = run(fake)
+        self.assertEqual(result.action, "advisory")
+        self.assertNotIn("missing evidence:", result.message)
+        self.assertEqual(len(fake.requests), 1)
+        self.assertIn("missing_fact", fake.requests[0]["questions"])
+
+    def test_gather_does_not_repeat_the_route_question_as_a_missing_fact(self):
+        fixture = json.loads((Path(__file__).parent / "fixtures" /
+                              "windows-diagnostic-evidence.json").read_text())
+        request = fixture["request"]
+        fake = FakeJev(pick="inspect_retained_native_diagnostics", sufficient=.64, unsupported=.9)
+        t = Transcript(tuple(request["facts"]), (), ())
+        result = gates.decide(json.dumps(request), make_ctx(t), asker(fake))
+        self.assertEqual(result.action, "gather_evidence")
+        question = request["decision"].split("?", 1)[0] + "?"
+        self.assertNotIn(question, fake.requests[0]["questions"]["missing_fact"]["criteria"].values())
+        self.assertNotIn("missing evidence: " + json.dumps(question), result.message)
+
+    def test_unidentified_missing_fact_is_explicit_without_releasing_the_guard(self):
+        result = run(FakeJev(**CONFIDENT, unsupported=.9, missing_fact="not_identified"))
+        self.assertEqual(result.action, "gather_evidence")
+        self.assertIn("no specific missing fact was identified", result.message)
+
+    def test_missing_implementation_keeps_the_helper_named_by_its_previous_sentence(self):
+        request = {**REQUEST, "decision": "Which diagnostic route should run? "
+                   "The helper /unobserved/qualification-gate.ps1 implements a required gate. "
+                   "Its implementation and gate conditions have not been observed."}
+
+        def ask(state, questions):
+            selected = next(key for key, text in questions["missing_fact"]["criteria"].items()
+                            if "Its implementation" in text)
+            return asker(FakeJev(**CONFIDENT, unsupported=.9, missing_fact=selected))(state, questions)
+
+        result = gates.decide(json.dumps(request), make_ctx(), ask)
+        self.assertEqual(result.action, "gather_evidence")
+        self.assertIn("/unobserved/qualification-gate.ps1", result.message.split("missing evidence:", 1)[1])
+
     def test_source_backed_main_agent_comparison_returns_advice_without_a_user_tiebreak(self):
         result = run(FakeJev(**{**CONFIDENT, "sufficient": .68, "pattern_present": .76,
                                "follows_pattern_lfu": .72}))

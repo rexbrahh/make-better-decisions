@@ -190,13 +190,29 @@ def build(t: Transcript, secrets: tuple[str, ...] = (), *, query: str = "", cwd=
         else:
             source_omitted += 1
 
+    # Preserve cited native reads even when their cwd differs from the consultation root.
+    requested = set(_path_candidates((query,)))
+    names = {Path(path).name for path in requested}
+    for idx, call in sorted(selected_calls, key=lambda item: item[0], reverse=True):
+        if not call.output or not any(name in call.input for name in names):
+            continue
+        paths = set(_path_candidates((call.input,)))
+        hits = {wanted for wanted in requested if any(
+            wanted == path or wanted.endswith("/" + path) or path.endswith("/" + wanted)
+            for path in paths)}
+        if hits:
+            include_call(idx, call)
+        if len(chosen_calls) >= _MAX_SOURCE_FILES:
+            break
+
     # Source discovery ranks the requested helper first. Older history must not displace it.
     for item in source_items[:1]:
         include_source(item)
     used_chars = len(json.dumps(bundle, sort_keys=True))
     recent_calls = sorted(selected_calls, key=lambda item: item[0], reverse=True)[:2]
     for idx, item in recent_calls:
-        include_call(idx, item)
+        if idx not in chosen_calls:
+            include_call(idx, item)
     for item in source_items[1:]:
         include_source(item)
     metadata["source_files_included"] = len(bundle.get("source_files", []))
