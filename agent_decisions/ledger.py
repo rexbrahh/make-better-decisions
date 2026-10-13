@@ -9,6 +9,7 @@ import json
 import os
 import re
 import time
+from collections import deque
 from pathlib import Path
 
 from .policy import RETAIN_DAYS, state_dir
@@ -129,24 +130,36 @@ def append(entry: dict) -> None:
         os.close(fd)  # closing releases the lock
 
 
-def entries(session_id: str) -> list[dict]:
+def entries(session_id: str, *, cache_limit: int | None = None) -> list[dict]:
+    if cache_limit is not None and cache_limit < 0:
+        raise ValueError("cache_limit must be non-negative")
     key = _key(create=False)
     if key is None:
         return []
     try:
-        lines = _session_file(session_id).read_text(encoding="utf-8", errors="replace").splitlines()
+        stream = _session_file(session_id).open(encoding="utf-8", errors="replace")
     except FileNotFoundError:
         return []
     rows = []
-    for line in lines:
-        try:
-            row = json.loads(line)
-        except ValueError:
-            continue  # a line still being written
-        if isinstance(row, dict):
+    cached = deque()
+    with stream:
+        for line in stream:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue  # a line still being written
+            if not isinstance(row, dict):
+                continue
             entry = _verified_entry(row, session_id, key)
-            if entry is not None:
-                rows.append(entry)
+            if entry is None:
+                continue
+            rows.append(entry)
+            if cache_limit is not None and entry.get("gate") in {"edit", "question", "plan", "stop"}:
+                cached.append(entry)
+                if len(cached) > cache_limit:
+                    expired = cached.popleft()
+                    expired.pop("state", None)
+                    expired.pop("chunks", None)
     return rows
 
 

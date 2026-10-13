@@ -24,7 +24,8 @@ def handle(event: str, payload: dict, host: str, *, post=jev.post) -> dict | Non
         if not payload.get("agent_id") and payload.get("transcript_path"):
             try:
                 t = _load_transcript(payload, host)
-                _saved_users(payload, host, t, ledger.entries(payload.get("session_id") or "unknown"))
+                _saved_users(payload, host, t, ledger.entries(payload.get("session_id") or "unknown",
+                                                            cache_limit=policy.CACHED_REVIEWS))
             except OSError:
                 pass  # an empty startup transcript is normal
         root = Path(__file__).resolve().parent.parent
@@ -172,7 +173,7 @@ def _context(payload: dict, host: str, *, contracts=()) -> gates.Context:
     secrets = _secrets()
     session = canonical.get("session_id") or "unknown"
     ledger_started = time.perf_counter()
-    entries = ledger.entries(session)
+    entries = ledger.entries(session, cache_limit=policy.CACHED_REVIEWS)
     t = replace(t, user_messages=_saved_users(canonical, host, t, entries))
     metrics["ledger_ms"] = (time.perf_counter() - ledger_started) * 1_000
     repo_id = _repository_id(payload.get("cwd") or os.getcwd())

@@ -8,6 +8,7 @@ import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO, Iterable, Iterator
 
 from .policy import QUESTION_TOOLS
 
@@ -142,20 +143,33 @@ def is_decide(call: ToolCall) -> bool:
 
 
 def load(path: str | Path, host: str) -> Transcript:
-    parse = {"claude": _claude, "codex": _codex}[host]
-    records = []
-    with open(path, encoding="utf-8", errors="replace") as f:
-        for line in f:
-            try:
-                record = json.loads(line)
-            except ValueError:
-                continue  # a line still being written, or a damaged one
-            if isinstance(record, dict):
-                records.append(record)
-    parsed = parse(records)
+    with open(path, "rb") as stream:
+        # Both Codex passes use the same append-only snapshot.
+        stream.seek(0, 2)
+        end = stream.tell()
+        stream.seek(0)
+        if host == "codex":
+            identity = _codex_identity(_records(stream, end))
+            stream.seek(0)
+            parsed = _codex_records(_records(stream, end), identity)
+        else:
+            parsed = {"claude": _claude}[host](_records(stream, end))
     if not parsed.user_messages and not parsed.tool_calls and parsed.brief is None and parsed.identity is None:
         raise OSError("no usable transcript records")
     return parsed
+
+
+def _records(stream: BinaryIO, end: int) -> Iterator[dict]:
+    while stream.tell() < end:
+        line = stream.readline(end - stream.tell())
+        if not line:
+            break
+        try:
+            record = json.loads(line.decode("utf-8", errors="replace"))
+        except ValueError:
+            continue  # a line still being written, or a damaged one
+        if isinstance(record, dict):
+            yield record
 
 
 def _text(content) -> str:
@@ -217,7 +231,7 @@ class _Builder:
                           self.brief, tuple(self.user_keys), tuple(self.question_reply_keys))
 
 
-def _claude(records: list[dict]) -> Transcript:
+def _claude(records: Iterable[dict]) -> Transcript:
     b = _Builder()
     for r in records:
         content = (r.get("message") or {}).get("content")
@@ -247,8 +261,11 @@ def _claude(records: list[dict]) -> Transcript:
 
 
 def _codex(records: list[dict]) -> Transcript:
+    return _codex_records(records, _codex_identity(records))
+
+
+def _codex_records(records: Iterable[dict], identity: HostIdentity | None) -> Transcript:
     b = _Builder()
-    identity = _codex_identity(records)
     for r in records:
         if r.get("type") == "event_msg":
             p = r.get("payload") or {}
@@ -309,14 +326,12 @@ def _codex(records: list[dict]) -> Transcript:
                       built.question_reply_keys, identity)
 
 
-def _codex_identity(records: list[dict]) -> HostIdentity | None:
-    metadata = [record.get("payload") for record in records if record.get("type") == "session_meta"]
-    if not metadata:
-        return None
-    first = metadata[0]
+def _codex_identity(records: Iterable[dict]) -> HostIdentity | None:
+    metadata = (record.get("payload") for record in records if record.get("type") == "session_meta")
+    first = next(metadata, None)
     if not isinstance(first, dict) or "source" not in first:
         return None  # older host transcripts do not contain native identity
-    if any(item != first for item in metadata[1:]):
+    if any(item != first for item in metadata):
         raise OSError("conflicting host identity records")
     thread_id = first.get("id")
     session_id = first.get("session_id", thread_id)

@@ -101,3 +101,22 @@ The v1.0.2 native CLI session verified consultation, the full verdict receipt, c
 The initial native test failures came from test-only CLI overrides. Codex 0.162.1 treats quoted dotted-key segments literally. A partial override for a runtime-only HTTP server also lacks its required transport. Corrected fixture overrides passed.
 
 Inactive-hook reports from older chats are fallback evidence. They do not establish active Jev enforcement. Restart the hosts after an update. Final package identity and activation evidence are recorded in `probe/out/v1.0.3-verification.json`.
+
+## Hook memory correction (2026-10-12)
+
+Native Python hook processes reached several GiB of resident memory. The transcript loader retained every decoded raw record before extracting the required context. The ledger loader retained the file text, split lines, and all decoded optional review-cache payloads.
+
+The loaders now read records incrementally. Codex identity validation and context parsing use the same byte-length snapshot. Hook context retains the newest 16 optional edit, question, plan, or Stop cache payloads. Older cache misses require fresh review. Signature verification precedes cache projection. Complete decision entries, user history, receipt text, and tool observations remain intact.
+
+A 497.2 MiB native transcript produced these single-process measurements. Elapsed time includes parsing and result fingerprinting.
+
+| Runtime | Peak parsing RSS | Elapsed time | Tool calls |
+|---|---:|---:|---:|
+| Before correction | 1,159.6 MiB | 2.01 s | 14,923 |
+| Corrected installed runtime | 323.2 MiB | 2.92 s | 14,923 |
+
+All parsed fields had the same SHA-256 fingerprint before and after the correction. The parsing peak fell by approximately 72%. The extra Codex pass increased elapsed time in this sample. Post-activation native process snapshots ranged from 36.5 to 167.5 MiB RSS. These snapshots are observations, not a long-term memory bound.
+
+All 345 tests passed under both system Python and the Homebrew Python used by native hooks. The suite used `TMPDIR=/private/tmp` to avoid macOS temporary-directory aliases and ran outside the outer sandbox so its nested sandbox checks could execute. New regressions cover memory retention, concurrent append snapshots, late and conflicting identity metadata, retained authority, and fresh review after cache expiry.
+
+The four corrected modules are active in the installed Codex 1.1.2 cache. Their prior contents were backed up before replacement, and installed hashes match the working source. A native consultation returned a new ADVISORY receipt after activation. No release or marketplace update was published. A later package replacement can overwrite this local runtime correction.

@@ -4,7 +4,7 @@
 
 The goal is useful, enforceable review. Jev evaluates a material choice against observed evidence. Code checks receipt identity, scope, constraints, and failure policy. Exact instructions and routine operations need no invented choice.
 
-Version 1.1.6 reduces long historical tool inputs when the API rejects an oversized context. Current pending input and mandatory state remain intact. Required review remains the default. See the [release notes](docs/releases/v1.1.6.md) and [scoped review evidence](docs/validation/scoped-review-2026-10-12.md).
+Version 1.1.7 reduces hook memory use by reading transcript and signed ledger records incrementally and limiting optional review-cache payloads. Complete decisions, user history, and verdict receipts remain intact. Required review remains the default. See the [release notes](docs/releases/v1.1.7.md) and [memory verification](docs/probes.md#hook-memory-correction-2026-10-12).
 
 The hook builds the evidence. The agent cannot choose the source set by itself.
 
@@ -86,6 +86,8 @@ codex mcp list --help
 `agent-decisions-shell-prefix` is an execution wrapper. It is not a help-style CLI.
 
 ## Operation
+
+Hook context reads transcript and signed ledger records incrementally. It retains at most 16 optional edit, question, plan, or Stop cache payloads. An older cache miss requires fresh review. Complete decision entries, user history, transcript identity checks, and verdict receipts remain intact. Memory use still depends on retained authority, tool text, and the largest individual record.
 
 Run `ts-decide` only as its own shell call. Read the verdict before the dependent call.
 

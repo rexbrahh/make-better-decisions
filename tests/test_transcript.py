@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+import tracemalloc
 from unittest import mock
 
 from agent_decisions import transcript
@@ -9,6 +10,39 @@ from agent_decisions.transcript import ToolCall, Transcript
 from tests.helpers import (
     StateTestCase, assistant_text, codex_assistant, codex_call, codex_custom, codex_output,
     codex_user, human, peer, sidechain_user, tool_result, tool_use, write_jsonl)
+
+
+class TranscriptMemoryTest(StateTestCase):
+    def test_codex_passes_use_the_same_snapshot_when_the_file_grows(self):
+        path = write_jsonl(self.dir, "snapshot.jsonl", [codex_user("Original instruction.")])
+        identity = transcript._codex_identity
+
+        def grow(records):
+            result = identity(records)
+            with path.open("a") as stream:
+                stream.write(json.dumps(codex_user("Instruction appended between passes.")) + "\n")
+            return result
+
+        with mock.patch.object(transcript, "_codex_identity", side_effect=grow):
+            parsed = transcript.load(path, "codex")
+        self.assertEqual(parsed.user_messages, ("Original instruction.",))
+
+    def test_ignored_records_do_not_accumulate_in_memory(self):
+        for host, user in (("claude", human), ("codex", codex_user)):
+            with self.subTest(host=host):
+                path = self.dir / (host + ".jsonl")
+                with path.open("w") as stream:
+                    stream.write(json.dumps(user("Preserve the complete user instruction.")) + "\n")
+                    for _ in range(16):
+                        stream.write(json.dumps({"type": "ignored", "padding": "x" * 1_000_000}) + "\n")
+                tracemalloc.start()
+                try:
+                    parsed = transcript.load(path, host)
+                    peak = tracemalloc.get_traced_memory()[1]
+                finally:
+                    tracemalloc.stop()
+                self.assertEqual(parsed.user_messages, ("Preserve the complete user instruction.",))
+                self.assertLess(peak, 6_000_000)
 
 
 class ClaudeTranscriptTest(StateTestCase):
@@ -124,6 +158,21 @@ class DecideCommandTest(StateTestCase):
 
 
 class CodexTranscriptTest(StateTestCase):
+    def test_late_metadata_preserves_worker_brief_and_rejects_conflicts(self):
+        metadata = {"type": "session_meta", "payload": {
+            "id": "worker", "cwd": str(self.dir), "source": {"subagent": {"thread_spawn": {
+                "parent_thread_id": "parent", "agent_path": "/root/worker", "depth": 1}}}}}
+        brief = codex_user("Complete the assigned parser repair.")
+        brief["payload"]["origin"] = {"kind": "agent"}
+        path = write_jsonl(self.dir, "worker.jsonl", [brief, metadata, metadata])
+        parsed = transcript.load(path, "codex")
+        self.assertEqual(parsed.brief, "Complete the assigned parser repair.")
+        self.assertEqual(parsed.user_messages, ())
+        conflicting = {**metadata, "payload": {**metadata["payload"], "id": "other"}}
+        write_jsonl(self.dir, "worker.jsonl", [brief, metadata, conflicting])
+        with self.assertRaisesRegex(OSError, "conflicting host identity"):
+            transcript.load(path, "codex")
+
     def test_hook_feedback_is_not_user_authority_or_a_new_turn(self):
         feedback = codex_user('<hook_prompt hook_run_id="stop:14:/cache/codex/hooks.json">'
                               'missing hook.py</hook_prompt>')

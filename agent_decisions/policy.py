@@ -24,6 +24,7 @@ STOP_AT = 0.7
 FOLLOW_AT = 0.5
 REFUSAL_CAP = 2
 RETAIN_DAYS = 14
+CACHED_REVIEWS = 16
 
 SHELL_TOOLS = frozenset({"Bash", "exec_command", "shell", "local_shell"})
 EDIT_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch"})

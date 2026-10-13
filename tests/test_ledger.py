@@ -5,9 +5,10 @@ import multiprocessing
 import os
 import stat
 import time
+import tracemalloc
 
-from agent_decisions import ledger, policy
-from tests.helpers import StateTestCase
+from agent_decisions import gates, ledger, policy
+from tests.helpers import FakeJev, StateTestCase, asker, make_ctx
 
 
 def _append_many(worker):
@@ -16,6 +17,47 @@ def _append_many(worker):
 
 
 class LedgerTest(StateTestCase):
+    def test_expired_cache_requires_a_fresh_review(self):
+        ctx = make_ctx()
+        tool_input = {"file_path": "parser.py", "new_string": "read_chunks()"}
+        first = gates.edit_gate("Edit", tool_input, ctx, asker(FakeJev(needs_decision=0.0)))
+        ledger.append({"session_id": "s1", "host": "claude", "agent_id": None, **first.record})
+        cached = make_ctx(entries=ledger.entries("s1"))
+        fake = FakeJev(needs_decision=0.95)
+        self.assertEqual(gates.edit_gate("Edit", tool_input, cached, asker(fake)).action, "allow")
+        self.assertEqual(fake.requests, [])
+        expired = make_ctx(entries=ledger.entries("s1", cache_limit=0))
+        self.assertEqual(gates.edit_gate("Edit", tool_input, expired, asker(fake)).action, "deny")
+        self.assertEqual(len(fake.requests), 1)
+
+    def test_bounded_cache_preserves_authority_and_recent_complete_payloads(self):
+        decision = {"session_id": "s", "gate": "decide", "state": {"receipt": "complete"}}
+        users = {"session_id": "s", "gate": "user_context", "messages": ["Original instruction."]}
+        ledger.append(decision)
+        ledger.append(users)
+        for index, gate in enumerate(("edit", "question", "plan", "stop")):
+            ledger.append({"session_id": "s", "gate": gate, "state": {"index": index},
+                           "chunks": [{"state": {"index": index}}]})
+        rows = ledger.entries("s", cache_limit=2)
+        self.assertEqual(rows[:2], [decision, users])
+        self.assertTrue(all("state" not in row and "chunks" not in row for row in rows[2:4]))
+        self.assertEqual(rows[4:], ledger.entries("s")[4:])
+        self.assertTrue(all("state" not in row for row in ledger.entries("s", cache_limit=0)[2:]))
+
+    def test_optional_review_payloads_do_not_accumulate_in_memory(self):
+        for index in range(100):
+            ledger.append({"session_id": "s", "gate": "edit", "state": {"padding": "x" * 65_536},
+                           "tool_use_id": str(index)})
+        tracemalloc.start()
+        try:
+            rows = ledger.entries("s", cache_limit=2)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        self.assertEqual(len(rows), 100)
+        self.assertEqual([row["tool_use_id"] for row in rows if "state" in row], ["98", "99"])
+        self.assertLess(peak, 3_000_000)
+
     def test_round_trip_and_damaged_line_is_skipped(self):
         ledger.append({"session_id": "s1", "gate": "decide"})
         path = policy.state_dir() / "sessions" / "s1.jsonl"
@@ -54,6 +96,7 @@ class LedgerTest(StateTestCase):
         target["agent_id"] = "agent_b"
         path.write_text(json.dumps(row, sort_keys=True) + "\n", encoding="utf-8")
         self.assertEqual(ledger.entries("s1"), [])
+        self.assertEqual(ledger.entries("s1", cache_limit=0), [])
 
     def test_unsigned_entry_is_ignored(self):
         ledger.append({"session_id": "s1", "gate": "decide", "action": "advisory"})
