@@ -27,7 +27,8 @@ RETAIN_DAYS = 14
 CACHED_REVIEWS = 16
 
 SHELL_TOOLS = frozenset({"Bash", "exec_command", "shell", "local_shell"})
-EDIT_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch"})
+EDIT_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch",
+                        "mcp__filesystem__write_file", "mcp__filesystem__edit_file"})
 READ_TOOLS = frozenset({"Read", "Grep", "Glob"})
 QUESTION_TOOLS = frozenset({"AskUserQuestion", "request_user_input", "request_user_input_async"})
 
@@ -44,14 +45,24 @@ def state_dir() -> Path:
     return Path(override) if override else Path.home() / ".local" / "state" / "agent-decisions"
 
 
-def review_mode(host: str) -> str:
-    """Only the protected, signed installation policy can permit unchecked actions."""
+def installation_policy(host: str) -> dict:
+    """Return the latest verified owner policy for this host."""
     from . import ledger
     for entry in reversed(ledger.entries("installation")):
         spec = entry.get("spec")
         if entry.get("gate") == "installation" and isinstance(spec, dict) and spec.get("host") == host:
-            return "availability" if spec.get("review_mode") == "availability" else "required"
-    return "required"
+            return spec
+    return {}
+
+
+def review_mode(host: str) -> str:
+    """Only the protected, signed installation policy can permit unchecked actions."""
+    return "availability" if installation_policy(host).get("review_mode") == "availability" else "required"
+
+
+def session_review_exception(host: str, session_id: str) -> bool:
+    sessions = installation_policy(host).get("session_review_exceptions", [])
+    return isinstance(sessions, list) and all(isinstance(item, str) for item in sessions) and session_id in sessions
 
 
 def fail_open(host: str) -> bool:

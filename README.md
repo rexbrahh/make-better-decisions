@@ -1,10 +1,10 @@
 # make-better-decisions v1.1
 
-`agent-decisions` adds hook checks for Claude Code and Codex. The hooks ask TypeSafe Jev before an agent chooses an approach, changes files, asks the user a question, or finishes with an uncovered choice.
+`agent-decisions` supplements Claude Code and Codex with selective decision review. Agents consult TypeSafe Jev before a new material choice. Hooks enforce review on declared edit and patch tools, filesystem write/edit tools, and plan acceptance.
 
 The goal is useful, enforceable review. Jev evaluates a material choice against observed evidence. Code checks receipt identity, scope, constraints, and failure policy. Exact instructions and routine operations need no invented choice.
 
-Version 1.1.9 preserves native Codex, ChatGPT, and Adrafinil launchers and installs decision hooks and isolation entrypoints outside the removable plugin cache. It retains the 1.1.7 memory corrections. Required review remains the default. See the [release notes](docs/releases/v1.1.9.md) and [memory verification](docs/probes.md#hook-memory-correction-2026-10-12).
+Version 1.2.0 makes ordinary tool execution independent of Jev. It preserves native launchers, the protected runtime, and the 1.1.7 memory corrections. Required review remains the default on the declared sensitive surface. See the [release notes](docs/releases/v1.2.0.md).
 
 The hook builds the evidence. The agent cannot choose the source set by itself.
 
@@ -45,11 +45,9 @@ codex plugin add agent-decisions@make-better-decisions
 
 For a local checkout, pass the checkout path as the marketplace source.
 
-After the native plugin loads, trust the five hooks:
+After the native plugin loads, trust the three hooks:
 
 - `PreToolUse`
-- `Stop`
-- `SubagentStop`
 - `SessionStart`
 - `UserPromptSubmit`
 
@@ -171,7 +169,7 @@ Completed reviews with contract references produce compact signed architectural 
 
 Scoped receipts also require fresh hashes for retained source observations, even without declared contracts. Source changes can require fresh review for later material choices. Routine and exact operations still use the existing classifier. Hash checks remain bounded, so unchecked snapshots grant no coverage.
 
-A later user instruction overrides an earlier binding decision. The Stop gate highlights the latest user instruction when it checks final text.
+A later user instruction overrides an earlier binding decision.
 
 `REFUSED` and `GATHER EVIDENCE` do not authorize work. There is no retry-cap exemption.
 
@@ -179,23 +177,18 @@ A `PROCEED` verdict means Jev judged the operation routine or exactly specified.
 
 ## Gates
 
-- `PreToolUse` handles `ts-decide`, edit gates, question tools, plan checks, and ledger guards.
-- It also handles shell-write classification, MCP write gates, and opaque stdin checks.
-- `Stop` and `SubagentStop` block final messages that report an uncovered choice.
-- They also block final questions that the user already answered or that the agent owns.
+- `PreToolUse` handles explicit `ts-decide`, declared edit tools, plan acceptance, and the local private-state guard.
+- Ordinary shell commands, peer messaging, worker dispatch, questions, and unknown tools follow normal host controls. They need no transcript context or Jev API call.
+- Automatic Stop and SubagentStop review is removed. Previously loaded completion callbacks return without blocking.
 - `SessionStart` and `UserPromptSubmit` support pruning, path context, and signed user history.
-
-There is no prior-question-tool exemption. There is no active-Stop exemption.
-
-Stop accepts exact user-settled choices at `settled_choice >= 0.8`. It accepts a final choice only when `uncovered_choice <= 0.2`.
 
 For tool inputs up to 16,000 characters, the edit gate sends one API request. Larger complete fields are split into field-path chunks. The chunks keep original fields and proposed fields distinct. They share one three-second deadline. Inputs above 256,000 JSON characters are denied.
 
-Opaque commands that can accept future executable stdin are denied while the hook is healthy. Submit the complete command or code in one new shell call.
+Submit complete commands or code in one shell call. The deciding workflow does not permit future executable stdin.
 
 ## Review failures and recovery
 
-Required review is the default in this implementation. API errors, unreadable context, and hook exceptions block unchecked actions, questions, plans, and final reviews. Known read tools continue without Jev. Unknown tools and shell commands require classification.
+Required review is the default for explicit consultations and declared sensitive tools. Review failures block those operations. Other tools and completion continue without Jev. File changes through other interfaces remain subject to host permissions and approvals.
 
 An HTTP 400 with `max_tokens_exceeded` triggers one retry within the original three-second deadline. The retry shortens historical tool input, output, and source excerpts. Historical inputs retain omission markers and original lengths. It preserves human messages, rule files, contracts, current pending input, and completed decisions. The receipt records the exact redacted state sent to Jev. A failed retry still blocks execution. Other validation failures identify the question and failed check without displaying response contents.
 
@@ -211,6 +204,15 @@ python3 bin/agent-decisions-install --host codex --review-mode availability --in
 An operator adds `--apply` to the chosen command to change host configuration and signed policy. Availability permits actions after runtime review failures and shows a warning. It weakens enforcement. Healthy denials remain binding in both modes.
 
 Startup failures block reviewed operations because a missing interpreter cannot read signed policy. The launcher discards partial startup output and preserves healthy denial JSON. `AGENT_DECISIONS_OFF=1` is ignored and reported. Tool input and parent briefs cannot change review mode.
+
+The owner can grant a standing exception to one canonical session and its native workers. Preview the protected policy, then add `--apply` to activate it:
+
+```sh
+python3 bin/agent-decisions-install --host codex --session-review-exception SESSION_ID
+python3 bin/agent-decisions-install --host codex --clear-session-review-exception SESSION_ID
+```
+
+Exceptions persist across plugin updates until explicit owner revocation. They bypass sensitive execution review, including a false semantic denial. They do not create a Jev receipt. Explicit consultations, private-state protection, native identity checks, and host approvals remain active.
 
 For recovery, restore the key, service connection, readable host transcript, or installed package named in the diagnostic. Retry the original operation. An unverified result grants no reusable approach receipt. If service recovery is unavailable, the owner can explicitly apply availability policy.
 
@@ -250,7 +252,7 @@ Release verification uses the observed peer workflows. A successful consultation
 | SDK answer and direction | The exact host question reply is accepted. The save/export choice gets a usable verdict. |
 | E2E evidence follow-up | The requested helper reaches Jev. Reading it resolves the request or produces a different justified next step. |
 | Routine work | Reads, diagnostics, tests, and exact instructions proceed without unnecessary consultation. |
-| API failure | Required mode denies unchecked actions. Signed availability mode permits them with a warning. |
+| API failure | Required sensitive operations stop. Ordinary tools and completion continue. Owner session exceptions and signed availability policy control explicit exceptions. |
 
 Run unit tests with:
 

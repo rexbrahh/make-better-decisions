@@ -15,7 +15,7 @@ Use Jev to evaluate a concrete choice against current evidence. Code owns the wo
 
 Approach selection checks the plan against observed constraints. New implementation and execution checks can remain future work. Do not report proposed checks as completed proof. Necessary current prerequisites still need observations. If GATHER identifies no missing fact, inspect the displayed blockers and invariant text. Do not repeat a completed comparison.
 
-The hook checks edits and shell writes before execution. It denies writes that select an uncovered approach.
+The hook reviews declared edit and patch tools, filesystem write/edit tools, and Claude plan acceptance. It denies uncovered material choices on those surfaces. Ordinary shell commands, peer communication, worker dispatch, questions, and new tools use normal host controls without Jev. The local private-state guard still applies.
 
 ## Call format
 
@@ -90,27 +90,25 @@ Contract history is background evidence. It grants no new permission. Changed or
 Retained scoped source hashes must also stay current. Refresh the review before using changed source to support a later material choice.
 Routine operations still use the existing classifier.
 
-## Edit and final-message gates
+## Selective enforcement
 
 The edit gate can reuse relevant advisory and binding decisions across later turns in the same session.
 
 One consultation covers the selected approach and its routine implementation and test corrections. Several viable engineering options can meet the same requirement. The user need not provide a preference between them.
 
-The Stop gate separates selected choices from exact user-settled choices. It accepts exact user-settled choices at `settled_choice >= 0.8`. It accepts a final choice only when `uncovered_choice <= 0.2`.
+There is no automatic Stop or SubagentStop review. Final messages and worker completion do not depend on Jev. Consult before making a new material choice, including choices expressed in a final answer. The plugin enforces the declared tool surfaces and supplements the host's controls.
 
-The Stop gate highlights the latest user instruction. There is no prior-question-tool exemption. There is no active-Stop exemption.
-
-A final answer still needs a relevant completed decision or exact user instruction.
+An owner can grant a canonical-session review exception through the protected installer. The signed exception takes precedence over sensitive execution checks and includes native workers in that session. Explicit `ts-decide` remains reviewed. Private-state protection and native identity validation still apply. Reinstallation preserves the exception until the owner explicitly revokes it.
 
 ## Opaque stdin
 
 Do not start an interactive shell, interpreter, SQL session, or other command that can execute later stdin. Submit the complete code or command in one shell call.
 
-The hook denies opaque future executable stdin while it is healthy.
+Ordinary shell calls are outside automatic review and follow host controls. Submit complete commands so their code is available for inspection.
 
 ## Review failures
 
-Required review is the default. Failed review blocks unchecked writes and final choices. Known read tools continue.
+Required review is the default for explicit consultations and declared sensitive tools. A failed required review blocks those operations. Ordinary tools and completion continue without remote review.
 Restore the service, key, readable transcript, or installed package named by the diagnostic. Retry the original operation.
 
 The owner can select availability through protected signed installation policy. Runtime failures then permit execution with a warning.

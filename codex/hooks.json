@@ -11,28 +11,6 @@
         ]
       }
     ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "ad_runtime=\"$HOME/.local/share/agent-decisions/current\"; if [ -e \"$ad_runtime\" ] || [ -L \"$ad_runtime\" ]; then ad_hook=\"$ad_runtime/hooks/hook.py\"; else ad_hook=\"${PLUGIN_ROOT}/hooks/hook.py\"; fi; if ad_hook_output=$(python3 -I -B \"$ad_hook\" stop --host codex); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"decision\":\"block\",\"reason\":\"agent-decisions: hook startup failed; required review unavailable. Restore the plugin and retry.\"}'; fi",
-            "timeout": 15
-          }
-        ]
-      }
-    ],
-    "SubagentStop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "ad_runtime=\"$HOME/.local/share/agent-decisions/current\"; if [ -e \"$ad_runtime\" ] || [ -L \"$ad_runtime\" ]; then ad_hook=\"$ad_runtime/hooks/hook.py\"; else ad_hook=\"${PLUGIN_ROOT}/hooks/hook.py\"; fi; if ad_hook_output=$(python3 -I -B \"$ad_hook\" subagent_stop --host codex); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"decision\":\"block\",\"reason\":\"agent-decisions: hook startup failed; required review unavailable. Restore the plugin and retry.\"}'; fi",
-            "timeout": 15
-          }
-        ]
-      }
-    ],
     "SessionStart": [
       {
         "hooks": [

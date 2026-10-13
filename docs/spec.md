@@ -118,11 +118,11 @@ The hook handles these checks before the tool runs:
 
 - `ts-decide` parsing and verdict generation.
 - Direct ledger and verdict-file access denial.
-- Question gates and Claude plan checks.
-- Edit gates for write tools, shell commands, and MCP tools that can write.
-- Opaque stdin checks for shells and interpreters.
+- Declared edit/patch/file-write tools and Claude plan acceptance.
+- Ordinary operations use normal host controls without remote classification.
+- Explicit decision-command parsing rejects chained or opaque misuse.
 
-Read tools pass without Jev.
+The dispatcher uses a small sensitive-tool set. Ordinary and unknown tools pass through normal host controls without Jev.
 
 ### Edit gate
 
@@ -134,30 +134,23 @@ The hook denies inputs above 256,000 JSON characters.
 
 The edit gate allows exact instructions, tests, formatting, factual logs, and routine corrections using existing helpers or test setup. Regression coverage for selected behavior needs no separate consultation. Coverage uses 0.5 for main-agent advice and 0.8 for workers. The gate denies a new uncovered approach.
 
-The hook denies interactive or opaque commands that can accept future executable stdin. This deny applies while Jev and the hook are healthy.
+The deciding workflow requires complete commands. Ordinary shell calls are outside automatic review.
 
-### Question gate
+### Ordinary operations and completion
 
-Question requests are limited to 16 questions and 16,000 JSON characters.
-Oversized requests are rejected before Jev.
+The native dispatcher defaults to normal host execution after the local private-state guard. It does not classify ordinary shell commands, peer communication, worker dispatch, question tools, or unknown tools through Jev. It does not construct transcript context for those operations.
 
-The hook denies a question when the user's messages already answer it. It also denies a question that the agent should decide.
+Stop and SubagentStop are unregistered. Legacy callbacks return without API access or blocking. Agents still consult before new material choices.
 
-### Stop gate
+### Owner session exceptions
 
-The Stop gate checks the final message. It separates `made_choice` from `settled_choice`.
+An owner-signed installation policy can exempt an exact canonical session from sensitive execution review. Native workers share that canonical session. Codex identity comes from the protected native transcript, rather than the claimed payload ID. Direct private-state access remains denied. Explicit decision consultations remain reviewed.
 
-An exact user-settled choice passes at `settled_choice >= 0.8`. A final choice passes only when `uncovered_choice <= 0.2`.
-
-The Stop state highlights the latest user instruction. A later user instruction overrides an earlier binding decision.
-
-The Stop gate can block final questions that the user already answered or that the agent owns. There is no prior-question-tool exemption. There is no active-Stop exemption.
-
-User-question checks read prose outside fenced code. Choice and binding checks retain the full reply, including fenced code. Copied verdict questions do not become questions to the user.
+The installer preserves exceptions across upgrades. Explicit owner revocation restores required review. Agent environment variables and forged policy rows cannot create an exception.
 
 ## Review failure policy
 
-Required is the default. Jev errors, timeouts, malformed replies, missing keys, unreadable transcripts, and hook exceptions block unchecked operations. Known read tools remain available.
+Required is the default for explicit decisions and declared sensitive tools. Jev failures block those operations. Ordinary tools and completion do not depend on remote review.
 
 Only HTTP 400 with the exact `max_tokens_exceeded` validation code permits one retry. Both attempts share the original three-second deadline. The retry shortens historical tool input, output, and source text with explicit omission markers. Shortened historical inputs record their original lengths. Human messages, project rules, contracts, facts, options, scope, current pending input, decisions, and observation identities remain intact. Each receipt records the exact redacted state submitted to the API. A second size rejection or any other failure retains required-review denial.
 
@@ -167,7 +160,7 @@ Response validation retains finite numeric values, ranges, answer types, choice 
 
 The owner can select availability through signed installation policy. Runtime failures then permit execution with a warning. Healthy denials remain binding. An unverified result never creates an approach receipt.
 
-The launcher denies PreToolUse and blocks Stop/SubagentStop when startup fails. Metadata events show a warning. Partial startup output is discarded. A missing interpreter cannot verify availability policy. The environment disable flag is ignored and reported.
+The registered PreToolUse launcher denies invocation when startup fails. Metadata events show a warning. Partial startup output is discarded. A missing interpreter cannot verify availability policy. The environment disable flag is ignored and reported.
 
 ## Ledger
 
@@ -192,7 +185,7 @@ The native installer can build and apply host plans.
 
 The boundary helper is required for the stated tamper protection. Run it from the installed plugin root. If you run it from a checkout, pass `--install-root` with the installed root.
 
-For Codex, it registers an optional permission profile without selecting it as the default. It preserves sandbox and approval settings and wraps configured stdio MCP servers with `agent-decisions-isolate`. For Claude, it writes a shell prefix and wraps matching commands.
+For Codex, it registers an optional permission profile without selecting it as the default. It preserves sandbox and approval settings, leaves native launchers under host ownership, and isolates third-party stdio servers through the protected runtime. For Claude, it writes a shell prefix and wraps matching commands.
 
 Run the helper again after you change stdio MCP or plugin command configuration. A source value of `null` limits automatic refresh. Preserved recipes on repeat runs do not prove update tracking.
 

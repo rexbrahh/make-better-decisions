@@ -107,14 +107,14 @@ class EditHookTest(StateTestCase):
         self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
         self.assertEqual(fake.requests, [])
 
-    def test_shell_calls_reach_classifier_but_reads_do_not(self):
+    def test_ordinary_shell_and_reads_use_host_controls(self):
         fake = FakeJev(writes_files=0.95, needs_decision=0.95)
         out = hook.handle("pre_tool_use", self.payload("Bash", {"command": "sed -i '' s/old/new/ parser.py"}, "codex"),
                           "codex", post=fake)
-        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertIsNone(out)
         self.assertIsNone(hook.handle("pre_tool_use", self.payload("Read", {"file_path": "parser.py"}),
                                       "claude", post=fake))
-        self.assertEqual(len(fake.requests), 1)
+        self.assertEqual(len(fake.requests), 0)
 
     def test_unreadable_transcript_fails_open_in_availability_mode(self):
         self.availability()
@@ -133,9 +133,10 @@ class EditHookTest(StateTestCase):
                     self.assertIn("transcript unreadable", out.get("systemMessage", ""))
                     self.assertEqual(fake.requests, [])
 
-    def test_codex_question_tool_is_checked_before_sending(self):
+    def test_codex_question_tools_use_host_controls_without_jev(self):
         for name in ("request_user_input", "request_user_input_async"):
             payload = {**self.payload(name, {"questions": [{"question": "Which database?", "options": []}]}, "codex"),
                        "session_id": name}
-            out = hook.handle("pre_tool_use", payload, "codex", post=FakeJev(stated_0=0.95, owner_0="user"))
-            self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+            api = FakeJev(stated_0=0.95, owner_0="user")
+            self.assertIsNone(hook.handle("pre_tool_use", payload, "codex", post=api))
+            self.assertEqual(api.requests, [])

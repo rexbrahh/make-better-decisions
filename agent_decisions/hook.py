@@ -31,7 +31,7 @@ def handle(event: str, payload: dict, host: str, *, post=jev.post) -> dict | Non
         root = Path(__file__).resolve().parent.parent
         return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext":
             "Use the deciding skill before choosing an approach or asking the user to decide. "
-            "Jev checks each edit and shell write before execution. "
+            "Jev reviews declared edit tools and plan acceptance. Ordinary tools use normal host controls. "
             f"Run {shlex.quote(str(root / 'bin' / 'ts-decide'))} as a separate shell call. "
             f"Read {root / 'skills' / 'deciding' / 'SKILL.md'} for the request format. "
             "Read the verdict before executing a dependent call."}}
@@ -43,7 +43,7 @@ def handle(event: str, payload: dict, host: str, *, post=jev.post) -> dict | Non
     if event == "pre_tool_use":
         return _pre_tool_use(payload, host, post)
     if event in ("stop", "subagent_stop"):
-        return _stop(payload, host, post)
+        return None  # old loaded registrations must not block ordinary completion
     raise ValueError(f"unknown event {event!r}")
 
 
@@ -65,15 +65,13 @@ def _pre_tool_use(payload: dict, host: str, post) -> dict | None:
         except OSError:
             pass  # the denial must not depend on the ledger being writable
         return _deny(outcome.message)
-    if name in policy.QUESTION_TOOLS:
-        return _gate(payload, host, lambda ctx: gates.question_gate(tool_input, ctx, _asker(post, ctx.metrics)))
     if host == "claude" and name == "ExitPlanMode":
         plan = tool_input.get("plan")
         return _gate(payload, host, lambda ctx: gates.plan_gate(
             ctx, _asker(post, ctx.metrics), plan=plan if isinstance(plan, str) else None))
-    if name in policy.READ_TOOLS:
-        return None
-    return _gate(payload, host, lambda ctx: gates.edit_gate(name, tool_input, ctx, _asker(post, ctx.metrics)))
+    if name in policy.EDIT_TOOLS:
+        return _gate(payload, host, lambda ctx: gates.edit_gate(name, tool_input, ctx, _asker(post, ctx.metrics)))
+    return None
 
 
 def _decide(payload: dict, host: str, tool_input: dict, request: str, post) -> dict:
@@ -122,29 +120,15 @@ def _gate(payload: dict, host: str, run) -> dict | None:
             return _deny(f"Required review unavailable: transcript unreadable ({type(error).__name__}); "
                          "action not run. Restore readable host context and retry.")
         return _note(f"agent-decisions: gate skipped, transcript unreadable ({type(error).__name__})")
+    if host == "codex" and ctx.transcript.identity is not None and policy.session_review_exception(host, ctx.session_id):
+        _append(payload, host, ctx.transcript.turn_key,
+                gates.Outcome("allow", record={"gate": "owner_exception", "native_session_id": ctx.session_id}), ctx=ctx)
+        return None
     outcome = run(ctx)
     if outcome.record is not None:
         _append(payload, host, ctx.transcript.turn_key, outcome, ctx=ctx)
     if outcome.action == "deny":
         return _deny(outcome.message)
-    return _note(outcome.note) if outcome.note else None
-
-
-def _stop(payload: dict, host: str, post) -> dict | None:
-    try:
-        ctx = _context(payload, host)
-    except OSError as error:
-        if not policy.fail_open(host):
-            return {"decision": "block", "reason": f"Required final review unavailable: transcript unreadable "
-                    f"({type(error).__name__}). Restore readable host context and retry."}
-        return _note(f"agent-decisions: stop check skipped, transcript unreadable ({type(error).__name__})")
-    final = payload.get("last_assistant_message")
-    final = final if isinstance(final, str) else ctx.transcript.last_assistant_text
-    outcome = gates.stop_gate(final, bool(payload.get("stop_hook_active")), ctx, _asker(post, ctx.metrics))
-    if outcome.record is not None:
-        _append(payload, host, ctx.transcript.turn_key, outcome, ctx=ctx)
-    if outcome.action == "block":
-        return {"decision": "block", "reason": outcome.message}
     return _note(outcome.note) if outcome.note else None
 
 

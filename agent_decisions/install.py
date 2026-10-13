@@ -320,6 +320,7 @@ def build_codex_plan(servers: Iterable[Mapping[str, Any]], state_root: Any, inst
     protected = protected_write_paths("codex", root, home)
     edits = codex_config_edits(servers_list, state, root, current_config, home, previous_spec)
     entry = installation_entry("codex", state, recipes, [], None, protected)
+    configure_session_exceptions(entry, previous_spec)
     plan: Dict[str, Any] = {
         "host": "codex", "state_root": state, "install_root": root,
         "runtime_root": str(runtime.current(home)), "runtime_home": str(home) if home is not None else None,
@@ -505,6 +506,7 @@ def build_claude_plan(settings: Mapping[str, Any], state_root: Any, install_root
     merged, previous = merge_claude_settings(settings, prefix, state, protected, previous_spec)
     matchers = claude_matchers_from_servers(servers)
     entry = installation_entry("claude", state, servers, matchers, previous, protected)
+    configure_session_exceptions(entry, previous_spec)
     return {"host": "claude", "state_root": state, "install_root": root,
             "runtime_root": str(runtime.current(home)), "runtime_home": str(home) if home is not None else None,
             "protected_paths": protected,
@@ -529,6 +531,17 @@ def installation_entry(host: str, state_root: Any, servers: Mapping[str, Mapping
 
 def sign_installation(entry: Mapping[str, Any]) -> None:
     ledger.append(copy.deepcopy(dict(entry)))
+
+
+def configure_session_exceptions(entry: Dict[str, Any], previous_spec: Optional[Mapping[str, Any]] = None,
+                                 *, add: Iterable[str] = (), remove: Iterable[str] = ()) -> None:
+    sessions = (previous_spec or {}).get("session_review_exceptions", [])
+    additions, removals = list(add), list(remove)
+    if not isinstance(sessions, list) or any(not isinstance(item, str) or not item or len(item) > 128
+                                           for item in [*sessions, *additions, *removals]):
+        raise InstallError("session review exceptions must contain exact session IDs")
+    entry["spec"]["session_review_exceptions"] = [item for item in dict.fromkeys([*sessions, *additions])
+                                                 if item not in removals]
 
 
 def backup_file(path: Any) -> Optional[str]:
@@ -798,6 +811,10 @@ def cli(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--review-mode", choices=("required", "availability"), default="required",
                         help="Required blocks unchecked actions; availability permits them with a warning.")
+    parser.add_argument("--session-review-exception", action="append", default=[], metavar="SESSION_ID",
+                        help="Owner-authorized review exception for one canonical session and its native workers.")
+    parser.add_argument("--clear-session-review-exception", action="append", default=[], metavar="SESSION_ID",
+                        help="Revoke an owner-authorized session review exception.")
     parser.add_argument("--state-root", default=str(policy.state_dir()))
     parser.add_argument("--install-root", default=str(default_install_root()))
     parser.add_argument("--codex-binary", default=CODEX_BINARY)
@@ -808,6 +825,9 @@ def cli(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--claude-json", default=str(Path.home() / ".claude.json"))
     parser.add_argument("--claude-plugin-manifest", action="append", default=[])
     args = parser.parse_args(argv)
+
+    if (args.session_review_exception or args.clear_session_review_exception) and args.host != "codex":
+        parser.error("session review exceptions require --host codex")
 
     if args.apply and canonical_path(args.state_root) != canonical_path(policy.state_dir()):
         parser.error("--state-root must match AGENT_DECISIONS_STATE when --apply is used")
@@ -830,6 +850,8 @@ def cli(argv: Optional[List[str]] = None) -> int:
 
     for plan in plans:
         plan["installation_entry"]["spec"]["review_mode"] = args.review_mode
+        configure_session_exceptions(plan["installation_entry"], plan["installation_entry"]["spec"],
+                                     add=args.session_review_exception, remove=args.clear_session_review_exception)
     result: Dict[str, Any] = {"apply": args.apply, "plans": plans}
     if args.apply:
         applied = []

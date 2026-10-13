@@ -118,15 +118,13 @@ class HookTest(StateTestCase):
         read = {**self.payload("ls"), "tool_name": "Read", "tool_input": {"file_path": "/x"}}
         self.assertIsNone(hook.handle("pre_tool_use", read, "claude", post=FakeJev()))
 
-    def test_stop_block_shape_and_unreadable_context_denial(self):
+    def test_legacy_stop_does_not_block_or_require_context(self):
         payload = {"session_id": "s1", "transcript_path": str(self.transcript), "stop_hook_active": False,
                    "last_assistant_message": "I chose LRU over LFU."}
-        out = hook.handle("stop", payload, "claude", post=FakeJev(made_choice=0.9))
-        self.assertEqual(out["decision"], "block")
-        self.assertIn("without a relevant ts-decide", out["reason"])
-        out = hook.handle("stop", {**payload, "transcript_path": str(self.dir / "gone.jsonl")}, "claude", post=FakeJev())
-        self.assertEqual(out["decision"], "block")
-        self.assertIn("transcript unreadable", out["reason"])
+        api = FakeJev(made_choice=0.9)
+        self.assertIsNone(hook.handle("stop", payload, "claude", post=api))
+        self.assertIsNone(hook.handle("stop", {**payload, "transcript_path": str(self.dir / "gone.jsonl")}, "claude", post=api))
+        self.assertEqual(api.requests, [])
 
     def test_subagent_reads_its_own_transcript_and_the_users_words(self):
         write_jsonl(self.dir / "s1" / "subagents", "agent-a1.jsonl", [

@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from unittest import mock
 
 from agent_decisions import gates, hook, jev, ledger
 from tests.helpers import FakeJev, StateTestCase, asker, human, make_ctx, write_jsonl
@@ -14,6 +15,30 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class RequiredReviewTest(StateTestCase):
+    def test_ordinary_tools_default_to_host_execution_without_context_or_jev(self):
+        for name, arguments in (
+            ("exec_command", {"cmd": "git status --short"}),
+            ("mcp__codex_app__send_message_to_thread", {"threadId": "peer", "prompt": "status"}),
+            ("mcp__codex_app__wait_threads", {"targets": [], "timeoutMs": 0}),
+            ("spawn_agent", {"message": "continue approved work"}),
+            ("request_user_input_async", {"questions": [{"title": "Missing fact?"}]}),
+            ("future_tool", {"file_path": "parser.py"}),
+        ):
+            with self.subTest(name=name), mock.patch.object(hook, "_context", side_effect=AssertionError("unexpected context")):
+                api = FakeJev(raises=jev.JevError("unreachable"))
+                result = hook.handle("pre_tool_use", {"session_id": "s1", "tool_name": name,
+                    "tool_input": arguments, "transcript_path": str(self.dir / "missing.jsonl")}, "codex", post=api)
+                self.assertIsNone(result)
+                self.assertEqual(api.requests, [])
+
+    def test_legacy_completion_callbacks_do_not_review_or_block(self):
+        for host in ("claude", "codex"):
+            for event in ("stop", "subagent_stop"):
+                with self.subTest(host=host, event=event), mock.patch.object(hook, "_context", side_effect=AssertionError("unexpected context")):
+                    api = FakeJev(raises=jev.JevError("unreachable"))
+                    self.assertIsNone(hook.handle(event, {}, host, post=api))
+                    self.assertEqual(api.requests, [])
+
     def test_timeout_cannot_authorize_an_unchecked_write_by_default(self):
         result = gates.edit_gate("Edit", {"file_path": "parser.py", "new_string": "read_chunks()"},
                                  make_ctx(), asker(FakeJev(raises=jev.JevError("timeout"))))
