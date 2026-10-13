@@ -159,7 +159,7 @@ User-question checks read prose outside fenced code. Choice and binding checks r
 
 Required is the default. Jev errors, timeouts, malformed replies, missing keys, unreadable transcripts, and hook exceptions block unchecked operations. Known read tools remain available.
 
-Only HTTP 400 with the exact `max_tokens_exceeded` validation code permits one retry. Both attempts share the original three-second deadline. The retry shortens tool output and source text with explicit omission markers. Human messages, project rules, contracts, facts, options, scope, pending input, decisions, and observation identities remain intact. Each receipt records the exact redacted state submitted to the API. A second size rejection or any other failure retains required-review denial.
+Only HTTP 400 with the exact `max_tokens_exceeded` validation code permits one retry. Both attempts share the original three-second deadline. The retry shortens historical tool input, output, and source text with explicit omission markers. Shortened historical inputs record their original lengths. Human messages, project rules, contracts, facts, options, scope, current pending input, decisions, and observation identities remain intact. Each receipt records the exact redacted state submitted to the API. A second size rejection or any other failure retains required-review denial.
 
 The retry clips optional text to one sixteenth of its current length, with a 128-character minimum and a 1,000-character cap. If the size rejection remains, the diagnostic reports attempt count, request bytes, and aggregate context-section sizes. It omits contents.
 

@@ -103,23 +103,26 @@ def _clip_source(text: str, query: str, limit: int = _SOURCE_CHARS) -> str:
 
 
 def shorten_observations(bundle: dict, query: str, contracts=()) -> dict | None:
-    """Retry a rejected context without shortening authority or executable input."""
+    """Shorten optional history. The current executable input is outside this bundle."""
     result = {**bundle}
     cut = 0
     protected = set(contracts) | set(bundle.get("contract_observations", {}))
-    for field, text_key in (("tool_calls_newest_first", "output"), ("source_files", "text")):
+    for field, text_key in (("tool_calls_newest_first", "input"),
+                            ("tool_calls_newest_first", "output"), ("source_files", "text")):
         items = []
-        for item in bundle.get(field, ()):
+        for item in result.get(field, ()):
             text = item.get(text_key, "")
             path = item.get("path", "")
             if field == "source_files" and (path in protected or Path(path).name in _RULE_FILES):
                 items.append(item)
                 continue
             limit = max(128, min(CLIP_CHARS // 16, len(text) // 16))
-            shorter = _clip_source(text, query, limit) if field == "source_files" else clip(text, limit)
+            shorter = _clip_source(text, query, limit) if text_key in {"text", "input"} else clip(text, limit)
             cut += len(text) - len(shorter)
             items.append({**item, text_key: shorter, **({"truncated": True}
-                         if field == "source_files" and shorter != text else {})})
+                         if field == "source_files" and shorter != text else {}),
+                         **({"input_truncated": True, "input_original_chars": len(text)}
+                            if text_key == "input" and shorter != text else {})})
         if field in bundle:
             result[field] = items
     if cut <= 0:

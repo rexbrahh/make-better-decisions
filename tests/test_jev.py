@@ -156,6 +156,48 @@ class PostTest(StateTestCase):
 
 
 class ContextLimitTest(StateTestCase):
+    def test_peer_history_inputs_shrink_without_changing_current_dispatch_or_authority(self):
+        ctx = self.context()
+        ctx.evidence["user_messages"] = ["Preserve every required instruction.\n" * 1000]
+        ctx.evidence["source_files"] = [{"path": "AGENTS.md", "text": "Required contract.\n" * 1000,
+                                         "sha256": "rules-hash", "trust": "verified_file_observation"}]
+        ctx.evidence["tool_calls_newest_first"] = [
+            {"id": "peer-verdict", "tool": "mcp__codex_app__send_message_to_thread",
+             "input": "Previously observed planning verdict.\n" * 260, "output": "Delivered",
+             "trust": "unverified_tool_observation", "execution": {"cwd": "/other/worktree"}},
+            *[{"id": f"dispatch-{i}", "tool": "followup_task", "input": "Earlier factual dispatch.\n" * 80,
+               "output": "Completed", "trust": "unverified_tool_observation"} for i in range(7)]]
+        pending = {"target": "v45_preserve_mac_evidence", "message": "Record the factual journal checkpoint."}
+        state = {"pending_tool": "agentsfollowup_task", "pending_input": pending,
+                 "decisions": [{"selected_approach": "Completed scoped decision.\n" * 400}],
+                 "evidence": ctx.evidence}
+        original = copy.deepcopy(state)
+        requests = []
+        fake = FakeJev()
+
+        def post(body, key, timeout):
+            requests.append(json.loads(body))
+            if len(body) > 76000:
+                raise jev.JevError("http_400", "max_tokens_exceeded")
+            return fake(body, key, timeout)
+
+        jev.ask(state, QUESTIONS, key="k", post=post)
+        self.assertEqual(len(requests), 2)
+        second = requests[-1]["state"]
+        for field in ("pending_tool", "pending_input", "decisions"):
+            self.assertEqual(second[field], original[field])
+        for field in ("user_messages", "source_files", "brief", "contract_observations"):
+            self.assertEqual(second["evidence"][field], original["evidence"][field])
+        for before, after in zip(original["evidence"]["tool_calls_newest_first"],
+                                 second["evidence"]["tool_calls_newest_first"]):
+            self.assertEqual(after["id"], before["id"])
+            self.assertEqual(after["trust"], before["trust"])
+            self.assertEqual(after.get("execution"), before.get("execution"))
+            self.assertTrue(after["input_truncated"])
+            self.assertEqual(after["input_original_chars"], len(before["input"]))
+            self.assertIn("characters cut", after["input"])
+        self.assertEqual(ctx.evidence, original["evidence"])
+
     def context(self):
         ctx = make_ctx(host="codex")
         ctx.evidence.update({

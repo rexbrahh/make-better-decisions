@@ -4,7 +4,7 @@
 
 The goal is useful, enforceable review. Jev evaluates a material choice against observed evidence. Code checks receipt identity, scope, constraints, and failure policy. Exact instructions and routine operations need no invented choice.
 
-Version 1.1.5 distinguishes approach selection from execution proof and stops unidentified GATHER responses from repeating completed comparisons. Required review remains the default. See the [release notes](docs/releases/v1.1.5.md) and [scoped review evidence](docs/validation/scoped-review-2026-10-12.md).
+Version 1.1.6 reduces long historical tool inputs when the API rejects an oversized context. Current pending input and mandatory state remain intact. Required review remains the default. See the [release notes](docs/releases/v1.1.6.md) and [scoped review evidence](docs/validation/scoped-review-2026-10-12.md).
 
 The hook builds the evidence. The agent cannot choose the source set by itself.
 
@@ -191,7 +191,7 @@ Opaque commands that can accept future executable stdin are denied while the hoo
 
 Required review is the default in this implementation. API errors, unreadable context, and hook exceptions block unchecked actions, questions, plans, and final reviews. Known read tools continue without Jev. Unknown tools and shell commands require classification.
 
-An HTTP 400 with `max_tokens_exceeded` triggers one retry within the original three-second deadline. The retry shortens tool output and source excerpts. It preserves human messages, rule files, contracts, pending input, and completed decisions. The receipt records the exact redacted state sent to Jev. A failed retry still blocks execution. Other validation failures identify the question and failed check without displaying response contents.
+An HTTP 400 with `max_tokens_exceeded` triggers one retry within the original three-second deadline. The retry shortens historical tool input, output, and source excerpts. Historical inputs retain omission markers and original lengths. It preserves human messages, rule files, contracts, current pending input, and completed decisions. The receipt records the exact redacted state sent to Jev. A failed retry still blocks execution. Other validation failures identify the question and failed check without displaying response contents.
 
 The retry limits optional observation text to one sixteenth of its previous length, with a 128-character minimum and a 1,000-character cap. A remaining size rejection reports aggregate context-section sizes and attempt count. It does not display their contents.
 
