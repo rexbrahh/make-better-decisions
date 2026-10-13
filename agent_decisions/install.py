@@ -18,9 +18,10 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from . import evidence, ledger, policy
+from . import evidence, ledger, policy, runtime
 
 PROFILE_NAME = "agent-decisions-isolation"
+NATIVE_CODEX_SERVERS = frozenset({"codex_app", "adrafinil"})
 CODEX_BINARY = "/opt/homebrew/bin/codex"
 
 _SECRET_KEY_PARTS = ("api_key", "apikey", "access_token", "auth_token", "bearer_token", "credential", "password", "private_key", "secret", "token")
@@ -47,11 +48,11 @@ def canonical_path(value: Any) -> str:
 
 
 def shell_prefix_path(install_root: Any) -> str:
-    return canonical_path(Path(install_root) / "bin" / "agent-decisions-shell-prefix")
+    return str((Path(install_root).expanduser() / "bin" / "agent-decisions-shell-prefix").absolute())
 
 
 def isolate_path(install_root: Any) -> str:
-    return canonical_path(Path(install_root) / "bin" / "agent-decisions-isolate")
+    return str((Path(install_root).expanduser() / "bin" / "agent-decisions-isolate").absolute())
 
 
 def host_config_paths(host: str, home: Optional[Path] = None) -> List[str]:
@@ -88,7 +89,7 @@ def authority_code_root(install_root: Any) -> Optional[str]:
 
 
 def protected_write_paths(host: str, install_root: Any, home: Optional[Path] = None) -> List[str]:
-    paths: List[str] = []
+    paths: List[str] = [str(runtime.namespace(home))]
     code_root = authority_code_root(install_root)
     if code_root is not None:
         paths.append(code_root)
@@ -100,6 +101,8 @@ def protected_write_paths(host: str, install_root: Any, home: Optional[Path] = N
 def protected_path_reasons(host: str, state_root: Any, install_root: Any,
                            home: Optional[Path] = None) -> Dict[str, str]:
     reasons: Dict[str, str] = {canonical_path(state_root): "private_state_deny_read_write"}
+    for path in _dedupe([str(runtime.namespace(home))]):
+        reasons[path] = "installed_runtime_deny_write"
     code_root = authority_code_root(install_root)
     if code_root is not None:
         reasons[code_root] = "installed_authority_code_deny_write"
@@ -179,13 +182,14 @@ def codex_permission_profile_value(state_root: Any, install_root: Any,
 
 def codex_config_edits(servers: Iterable[Mapping[str, Any]], state_root: Any, install_root: Any,
                        current_config: Optional[Mapping[str, Any]] = None,
-                       home: Optional[Path] = None) -> List[Dict[str, Any]]:
+                       home: Optional[Path] = None,
+                       previous_spec: Optional[Mapping[str, Any]] = None) -> List[Dict[str, Any]]:
     edits: List[Dict[str, Any]] = [
         {"keyPath": _config_key_path("permissions", PROFILE_NAME), "mergeStrategy": "upsert",
          "value": codex_permission_profile_value(state_root, install_root, current_config, home)},
     ]
     for server in servers:
-        wrapped = codex_mcp_wrapper_config(server, install_root)
+        wrapped = codex_mcp_wrapper_config(server, runtime.current(home), previous_spec)
         if wrapped is not None:
             name, value = wrapped
             edits.append({"keyPath": _config_key_path("mcp_servers", name),
@@ -270,11 +274,15 @@ def server_recipe(server: Mapping[str, Any], install_root: Any,
             "env_vars": list(env_vars), "cwd": cwd, "source": _server_source(server)}
 
 
-def codex_mcp_wrapper_config(server: Mapping[str, Any], install_root: Any) -> Optional[Tuple[str, Dict[str, Any]]]:
+def codex_mcp_wrapper_config(server: Mapping[str, Any], install_root: Any,
+                             previous_spec: Optional[Mapping[str, Any]] = None) -> Optional[Tuple[str, Dict[str, Any]]]:
     transport = _transport(server)
     if transport.get("type") != "stdio":
         return None
     name = _server_name(server)
+    native = name in NATIVE_CODEX_SERVERS
+    if native and not _is_codex_wrapper_transport(transport, name):
+        return None
     value: Dict[str, Any] = {}
     for key, item in server.items():
         if key in _RUNTIME_SERVER_KEYS or key == "transport":
@@ -288,8 +296,13 @@ def codex_mcp_wrapper_config(server: Mapping[str, Any], install_root: Any) -> Op
         if item is None:
             continue
         value[key] = copy.deepcopy(item)
-    value["command"] = isolate_path(install_root)
-    value["args"] = ["--server", name, "--host", "codex"]
+    if native:
+        recipe = server_recipe(server, install_root, previous_spec)
+        for key in ("command", "args", "env", "env_vars", "cwd"):
+            value[key] = copy.deepcopy(recipe.get(key))
+    else:
+        value["command"] = isolate_path(install_root)
+        value["args"] = ["--server", name, "--host", "codex"]
     return name, value
 
 
@@ -302,10 +315,11 @@ def build_codex_plan(servers: Iterable[Mapping[str, Any]], state_root: Any, inst
     root = canonical_path(install_root)
     recipes = codex_mcp_recipes(servers_list, root, previous_spec)
     protected = protected_write_paths("codex", root, home)
-    edits = codex_config_edits(servers_list, state, root, current_config, home)
+    edits = codex_config_edits(servers_list, state, root, current_config, home, previous_spec)
     entry = installation_entry("codex", state, recipes, [], None, protected)
     plan: Dict[str, Any] = {
         "host": "codex", "state_root": state, "install_root": root,
+        "runtime_root": str(runtime.current(home)), "runtime_home": str(home) if home is not None else None,
         "protected_paths": protected,
         "protected_path_reasons": protected_path_reasons("codex", state, root, home),
         "servers": recipes, "config_rpc": codex_config_rpc(edits, config_path),
@@ -483,12 +497,13 @@ def build_claude_plan(settings: Mapping[str, Any], state_root: Any, install_root
     state = canonical_path(state_root)
     root = canonical_path(install_root)
     protected = protected_write_paths("claude", root, home)
-    prefix = shell_prefix_path(root)
+    prefix = shell_prefix_path(runtime.current(home))
     servers = claude_servers_from_sources(settings, claude_json, plugin_manifests)
     merged, previous = merge_claude_settings(settings, prefix, state, protected, previous_spec)
     matchers = claude_matchers_from_servers(servers)
     entry = installation_entry("claude", state, servers, matchers, previous, protected)
     return {"host": "claude", "state_root": state, "install_root": root,
+            "runtime_root": str(runtime.current(home)), "runtime_home": str(home) if home is not None else None,
             "protected_paths": protected,
             "protected_path_reasons": protected_path_reasons("claude", state, root, home),
             "servers": servers, "claude_matchers": matchers,
@@ -637,6 +652,7 @@ def apply_codex_plan(plan: Mapping[str, Any], writer: Optional[CodexRpcWriter] =
     backup = backup_file(params["filePath"]) if isinstance(params, dict) and params.get("filePath") else \
         backup_file(Path.home() / ".codex" / "config.toml")
     active_writer = writer or CodexRpcWriter()
+    runtime.publish(Path(plan["install_root"]), home=Path(plan["runtime_home"]) if plan.get("runtime_home") else None)
     sign_installation(plan["installation_entry"])
     response = active_writer.call(rpc["method"], rpc["params"])
     return {"backup": backup, "response": response}
@@ -644,6 +660,7 @@ def apply_codex_plan(plan: Mapping[str, Any], writer: Optional[CodexRpcWriter] =
 
 def apply_claude_plan(plan: Mapping[str, Any], settings_path: Any) -> Dict[str, Any]:
     backup = backup_file(settings_path)
+    runtime.publish(Path(plan["install_root"]), home=Path(plan["runtime_home"]) if plan.get("runtime_home") else None)
     sign_installation(plan["installation_entry"])
     write_json(settings_path, plan["merged_settings"])
     return {"backup": backup}

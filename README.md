@@ -4,7 +4,7 @@
 
 The goal is useful, enforceable review. Jev evaluates a material choice against observed evidence. Code checks receipt identity, scope, constraints, and failure policy. Exact instructions and routine operations need no invented choice.
 
-Version 1.1.7 reduces hook memory use by reading transcript and signed ledger records incrementally and limiting optional review-cache payloads. Complete decisions, user history, and verdict receipts remain intact. Required review remains the default. See the [release notes](docs/releases/v1.1.7.md) and [memory verification](docs/probes.md#hook-memory-correction-2026-10-12).
+Version 1.1.8 preserves Codex and Adrafinil native launchers and installs decision hooks and isolation entrypoints outside the removable plugin cache. It retains the 1.1.7 memory corrections. Required review remains the default. See the [release notes](docs/releases/v1.1.8.md) and [memory verification](docs/probes.md#hook-memory-correction-2026-10-12).
 
 The hook builds the evidence. The agent cannot choose the source set by itself.
 
@@ -70,7 +70,11 @@ Use per-host commands when you need separate evidence or rollback. The protected
 
 The Codex helper registers an optional isolation profile. It preserves the default sandbox, approval policy, and reviewer. Select the profile explicitly to apply its native filesystem restrictions.
 
-Run the helper again after you change stdio MCP or plugin command configuration. A source value of `null` limits automatic refresh. Repeat runs preserve signed recipes, so do not treat them as proof that every upstream command change was tracked.
+Run the helper again after each plugin upgrade or stdio MCP configuration change. The helper copies verified runtime files into `~/.local/share/agent-decisions/runtimes/` and atomically activates `current`. It retains earlier bundles for running processes. Plugin cache removal does not remove these entrypoints. Cache updates alone do not activate new runtime code.
+
+Hooks use the protected runtime after installation. Before installation, they use the plugin entrypoint. A broken installed runtime reports a startup failure. The runtime namespace, pointer, and bundles are write-protected by the configured boundary. Required decision review remains active.
+
+The Codex helper preserves native `codex_app` and `adrafinil` registrations. It restores legacy wrapped registrations from signed original recipes. Other stdio servers retain isolation. A source value of `null` limits automatic refresh. Repeat runs preserve signed recipes, so they do not prove that every upstream command change was tracked.
 
 Useful verified help commands:
 
@@ -226,11 +230,11 @@ Signed gate records retain context timings, initial and final request sizes, att
 
 The macOS native deny profile was verified with escalation. It denies reads and writes to the agent-decisions state root. It denies writes to protected host state and installed plugin code.
 
-Protection includes this plugin's version namespace and existing Codex profile files. Stdio launchers use Python isolated mode before reading signed recipes.
+Protection includes the durable runtime namespace, this plugin's cached version namespace, and existing Codex profile files. Stdio launchers use Python isolated mode before reading signed recipes.
 
 Linux uses bubblewrap when available. Linux bubblewrap behavior is not runtime verified in this repository.
 
-The boundary helpers wrap stdio MCP servers. They do not wrap HTTP MCP servers or trusted external services.
+The boundary helpers wrap third-party stdio MCP servers. Codex and Adrafinil retain their native launchers. The helpers do not wrap HTTP MCP servers or trusted external services.
 
 These hooks are not a universal proof boundary. They do not protect against a same-UID privileged process, an operator, or a trusted external host service that acts outside the hook path.
 

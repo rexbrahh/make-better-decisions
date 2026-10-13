@@ -19,7 +19,22 @@ class RegistrationTest(StateTestCase):
     def run_with_root(self, command, root, **env):
         command = command.replace("${CLAUDE_PLUGIN_ROOT}", str(root)).replace("${PLUGIN_ROOT}", str(root))
         return subprocess.run(["/bin/sh", "-c", command], input="{}", capture_output=True, text=True,
-                              timeout=30, env={**os.environ, **env})
+                              timeout=30, env={**os.environ, "HOME": str(self.dir), **env})
+
+    def test_installed_runtime_runs_after_cache_removal_and_broken_pointer_blocks(self):
+        namespace = self.dir / ".local/share/agent-decisions"
+        entry = namespace / "runtimes/fixture/hooks/hook.py"
+        entry.parent.mkdir(parents=True)
+        entry.write_text("import json; print(json.dumps({'decision':'block','reason':'protected runtime'}))\n")
+        (namespace / "current").symlink_to("runtimes/fixture", target_is_directory=True)
+        for registration in ("hooks/hooks.json", "codex/hooks.json"):
+            command = commands(registration)["PreToolUse"][0]
+            result = self.run_with_root(command, self.dir / "removed-cache")
+            self.assertEqual(json.loads(result.stdout)["reason"], "protected runtime", result.stderr)
+            entry.unlink()
+            result = self.run_with_root(command, ROOT)
+            self.assertEqual(json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"], "deny")
+            entry.write_text("import json; print(json.dumps({'decision':'block','reason':'protected runtime'}))\n")
 
     def test_startup_failures_block_reviewed_actions_without_invalid_stdout(self):
         for registration in ("hooks/hooks.json", "codex/hooks.json"):
@@ -60,7 +75,7 @@ class RegistrationTest(StateTestCase):
     def run_registered(self, command):
         command = command.replace("${CLAUDE_PLUGIN_ROOT}", str(ROOT)).replace("${PLUGIN_ROOT}", str(ROOT))
         return subprocess.run(["sh", "-c", command], input="{}", capture_output=True, text=True, timeout=30,
-                              env={**os.environ, "AGENT_DECISIONS_OFF": "1"})
+                              env={**os.environ, "HOME": str(self.dir), "AGENT_DECISIONS_OFF": "1"})
 
     def test_claude_registrations_cover_every_gate_and_run(self):
         registered = commands("hooks/hooks.json")

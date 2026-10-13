@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if ad_hook_output=$(python3 -I -B \"${CLAUDE_PLUGIN_ROOT}/hooks/hook.py\" pre_tool_use --host claude); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"agent-decisions: hook startup failed; required review unavailable. Restore the plugin and retry.\"}}'; fi",
+            "command": "ad_runtime=\"$HOME/.local/share/agent-decisions/current\"; if [ -e \"$ad_runtime\" ] || [ -L \"$ad_runtime\" ]; then ad_hook=\"$ad_runtime/hooks/hook.py\"; else ad_hook=\"${CLAUDE_PLUGIN_ROOT}/hooks/hook.py\"; fi; if ad_hook_output=$(python3 -I -B \"$ad_hook\" pre_tool_use --host claude); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"agent-decisions: hook startup failed; required review unavailable. Restore the plugin and retry.\"}}'; fi",
             "timeout": 15
           }
         ]
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if ad_hook_output=$(python3 -I -B \"${CLAUDE_PLUGIN_ROOT}/hooks/hook.py\" stop --host claude); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"decision\":\"block\",\"reason\":\"agent-decisions: hook startup failed; required review unavailable. Restore the plugin and retry.\"}'; fi",
+            "command": "ad_runtime=\"$HOME/.local/share/agent-decisions/current\"; if [ -e \"$ad_runtime\" ] || [ -L \"$ad_runtime\" ]; then ad_hook=\"$ad_runtime/hooks/hook.py\"; else ad_hook=\"${CLAUDE_PLUGIN_ROOT}/hooks/hook.py\"; fi; if ad_hook_output=$(python3 -I -B \"$ad_hook\" stop --host claude); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"decision\":\"block\",\"reason\":\"agent-decisions: hook startup failed; required review unavailable. Restore the plugin and retry.\"}'; fi",
             "timeout": 15
           }
         ]
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if ad_hook_output=$(python3 -I -B \"${CLAUDE_PLUGIN_ROOT}/hooks/hook.py\" subagent_stop --host claude); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"decision\":\"block\",\"reason\":\"agent-decisions: hook startup failed; required review unavailable. Restore the plugin and retry.\"}'; fi",
+            "command": "ad_runtime=\"$HOME/.local/share/agent-decisions/current\"; if [ -e \"$ad_runtime\" ] || [ -L \"$ad_runtime\" ]; then ad_hook=\"$ad_runtime/hooks/hook.py\"; else ad_hook=\"${CLAUDE_PLUGIN_ROOT}/hooks/hook.py\"; fi; if ad_hook_output=$(python3 -I -B \"$ad_hook\" subagent_stop --host claude); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"decision\":\"block\",\"reason\":\"agent-decisions: hook startup failed; required review unavailable. Restore the plugin and retry.\"}'; fi",
             "timeout": 15
           }
         ]
@@ -38,7 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if ad_hook_output=$(python3 -I -B \"${CLAUDE_PLUGIN_ROOT}/hooks/hook.py\" session_start --host claude); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"systemMessage\":\"agent-decisions: hook startup failed; required review unavailable. Restore the plugin and retry.\"}'; fi",
+            "command": "ad_runtime=\"$HOME/.local/share/agent-decisions/current\"; if [ -e \"$ad_runtime\" ] || [ -L \"$ad_runtime\" ]; then ad_hook=\"$ad_runtime/hooks/hook.py\"; else ad_hook=\"${CLAUDE_PLUGIN_ROOT}/hooks/hook.py\"; fi; if ad_hook_output=$(python3 -I -B \"$ad_hook\" session_start --host claude); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"systemMessage\":\"agent-decisions: hook startup failed; required review unavailable. Restore the plugin and retry.\"}'; fi",
             "timeout": 10
           }
         ]
@@ -49,7 +49,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if ad_hook_output=$(python3 -I -B \"${CLAUDE_PLUGIN_ROOT}/hooks/hook.py\" user_prompt_submit --host claude); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"systemMessage\":\"agent-decisions: hook startup failed; required review unavailable. Restore the plugin and retry.\"}'; fi",
+            "command": "ad_runtime=\"$HOME/.local/share/agent-decisions/current\"; if [ -e \"$ad_runtime\" ] || [ -L \"$ad_runtime\" ]; then ad_hook=\"$ad_runtime/hooks/hook.py\"; else ad_hook=\"${CLAUDE_PLUGIN_ROOT}/hooks/hook.py\"; fi; if ad_hook_output=$(python3 -I -B \"$ad_hook\" user_prompt_submit --host claude); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"systemMessage\":\"agent-decisions: hook startup failed; required review unavailable. Restore the plugin and retry.\"}'; fi",
             "timeout": 5
           }
         ]

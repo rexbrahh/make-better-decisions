@@ -8,11 +8,32 @@ import threading
 from pathlib import Path
 from unittest import mock
 
-from agent_decisions import install, isolation, ledger, policy
+from agent_decisions import install, isolation, ledger, policy, runtime
 from tests.helpers import StateTestCase
 
 
 class InstallPlanningTest(StateTestCase):
+    def test_native_launchers_are_preserved_and_legacy_wrappers_restore_signed_transport(self):
+        for name in ("codex_app", "adrafinil"):
+            original = {"type": "stdio", "command": "/native/launcher", "args": ["native"],
+                        "cwd": "/native", "env": {"NATIVE": "1"}, "env_vars": ["NATIVE_PIPE"]}
+            server = {"name": name, "enabled": True, "startup_timeout_sec": 10,
+                      "tool_timeout_sec": 3600, "transport": original}
+            native = install.build_codex_plan([server], self.dir / "state", self.dir / "package", home=self.dir)
+            self.assertFalse(any(e["keyPath"].startswith("mcp_servers.") for e in native["config_rpc"]["params"]["edits"]))
+            wrapped = {**server, "transport": {**original, "command": "/old/bin/agent-decisions-isolate",
+                       "args": ["--server", name, "--host", "codex"]}}
+            previous = {"servers": {name: {k: v for k, v in original.items() if k != "type"}}}
+            migrated = install.build_codex_plan([wrapped], self.dir / "state", self.dir / "package",
+                                                home=self.dir, previous_spec=previous)
+            edit = next(e for e in migrated["config_rpc"]["params"]["edits"] if e["keyPath"] == "mcp_servers." + name)
+            for key, value in original.items():
+                if key != "type":
+                    self.assertEqual(edit["value"][key], value)
+            self.assertEqual(edit["value"]["tool_timeout_sec"], 3600)
+            self.assertEqual(migrated["servers"][name]["command"], "/native/launcher")
+            self.assertEqual(migrated["installation_entry"]["spec"]["review_mode"], "required")
+
     def test_codex_install_preserves_default_sandbox_and_approval_settings(self):
         edits = install.codex_config_edits([], self.dir / "state", self.dir / "installed",
                                            {"sandbox_mode": "workspace-write"})
@@ -74,7 +95,7 @@ class InstallPlanningTest(StateTestCase):
         edits = plan["config_rpc"]["params"]["edits"]
         local_edit = next(item for item in edits if item["keyPath"] == "mcp_servers.local")
         self.assertEqual(local_edit["mergeStrategy"], "upsert")
-        self.assertEqual(local_edit["value"]["command"], str(root / "bin" / "agent-decisions-isolate"))
+        self.assertEqual(local_edit["value"]["command"], str(runtime.current() / "bin" / "agent-decisions-isolate"))
         self.assertEqual(local_edit["value"]["args"], ["--server", "local", "--host", "codex"])
         self.assertEqual(local_edit["value"]["startup_timeout_sec"], 3)
         self.assertEqual(local_edit["value"]["tool_timeout_sec"], 4)
@@ -134,7 +155,7 @@ class InstallPlanningTest(StateTestCase):
 
         self.assertEqual(plan["servers"]["local"]["command"], "/original/server")
         edit = next(item for item in plan["config_rpc"]["params"]["edits"] if item["keyPath"] == "mcp_servers.local")
-        self.assertEqual(edit["value"]["command"], str(root / "bin" / "agent-decisions-isolate"))
+        self.assertEqual(edit["value"]["command"], str(runtime.current() / "bin" / "agent-decisions-isolate"))
 
     def test_codex_mcp_edit_omits_nullable_options_and_quotes_dotted_names(self):
         root = self.dir / "installed"
@@ -357,7 +378,8 @@ network_access = true # comment
     def test_apply_codex_uses_config_rpc_without_rewriting_toml(self):
         config = self.dir / "config.toml"
         config.write_text("default_permissions = \":workspace\"\n", encoding="utf-8")
-        plan = install.build_codex_plan([], self.dir / "state", self.dir / "installed", {}, config_path=config)
+        plan = install.build_codex_plan([], self.dir / "state", Path(__file__).resolve().parent.parent,
+                                        {}, config_path=config, home=self.dir)
         writer = mock.Mock()
         def call(method, params):
             self.assertEqual(isolation.latest_installation_spec("codex")["host"], "codex")
@@ -374,8 +396,8 @@ network_access = true # comment
                                                        "args": ["ok"]}}]
         config = self.dir / "config.toml"
         config.write_text("", encoding="utf-8")
-        plan = install.build_codex_plan(servers, self.dir / "state", self.dir / "installed", {},
-                                        config_path=config)
+        plan = install.build_codex_plan(servers, self.dir / "state", Path(__file__).resolve().parent.parent, {},
+                                        config_path=config, home=self.dir)
         writer = mock.Mock()
         writer.call.side_effect = install.InstallError("config write failed")
 
