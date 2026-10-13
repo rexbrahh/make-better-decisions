@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+from unittest import mock
 
-from agent_decisions import gates
+from agent_decisions import gates, policy
 from tests.helpers import FakeJev, StateTestCase, asker, make_ctx
 
 
@@ -26,6 +27,52 @@ def answers(*, tie=False, invariant_lfu=.95):
 
 
 class ReviewProgressTest(StateTestCase):
+    def test_previous_question_contract_cannot_reuse_a_scoped_gather(self):
+        fake = FakeJev(pick="lfu", sufficient=.83, unsupported=.82,
+                       missing_fact="not_identified", invariant_0_lru=.60, invariant_0_lfu=.40)
+        with mock.patch.object(policy, "REVIEW_CONTRACT", "scoped-review-1"):
+            first = gates.decide(json.dumps(REQUEST), make_ctx(), asker(fake))
+        entry = {**first.record, "host": "claude", "agent_id": None,
+                 "action": first.action, "verdict": first.message}
+        second = gates.decide(json.dumps(REQUEST), make_ctx(entries=(entry,)), asker(fake))
+        self.assertEqual(len(fake.requests), 2)
+        self.assertNotIn("reused:", second.message)
+        self.assertNotEqual(first.record["evidence_fingerprint"], second.record["evidence_fingerprint"])
+
+    def test_peer_unidentified_gather_names_invariants_without_repeating_comparison(self):
+        # bbce7c returned these predicates after the peer completed the named comparison.
+        request = {"decision": "Which isolated Windows build route should capture the trim refusal cause first?",
+                   "options": [{"id": "single_tu_diagnostic_relink", "description": "Prepare a private diagnostic relink."},
+                               {"id": "fresh_isolated_complete_build", "description": "Prepare a fresh isolated build."}],
+                   "scope": {"paths": ["app/shell/"], "invariants": [
+                       "Preserve the retained source and build artifacts unchanged.",
+                       "Keep all diagnostic outputs in a separate campaign root."]}}
+        fake = FakeJev(pick="single_tu_diagnostic_relink", sufficient=.83, unsupported=.82,
+                       missing_fact="not_identified", evidence_needed="comparison",
+                       invariant_0_single_tu_diagnostic_relink=.40,
+                       invariant_1_single_tu_diagnostic_relink=.60)
+        result = gates.decide(json.dumps(request), make_ctx(), asker(fake))
+        self.assertEqual(result.action, "gather_evidence")
+        self.assertNotIn("receipt_id", result.record)
+        for invariant in request["scope"]["invariants"]:
+            self.assertIn(invariant, result.message)
+        self.assertIn("Do not repeat a completed comparison", result.message)
+        self.assertNotIn("Run a check comparing these options", result.message)
+
+    def test_recorded_stage_comparison_preserves_negative_cases(self):
+        # Native 8354e2: the clarified questions judged a proposed guard, an
+        # explicit overwrite, and reliance on an uninspected existing helper.
+        for unsupported, invariant, expected in ((.31, .80, "advisory"),
+                                                 (.44, .05, "refused"),
+                                                 (.82, .09, "refused")):
+            with self.subTest(unsupported=unsupported, invariant=invariant):
+                fake = FakeJev(pick="lfu", sufficient=.95, unsupported=unsupported,
+                               invariant_0_lru=.95, invariant_0_lfu=invariant)
+                result = gates.decide(json.dumps(REQUEST), make_ctx(), asker(fake))
+                self.assertEqual(result.action, expected)
+                if expected != "advisory":
+                    self.assertNotIn("receipt_id", result.record)
+
     def test_neutral_repair_of_an_argued_question_keeps_identity_and_rechecks(self):
         first = gates.decide(json.dumps(REQUEST), make_ctx(), asker(FakeJev(argued=.95, argued_field="decision")))
         self.assertEqual(first.action, "refused")

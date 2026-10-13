@@ -13,6 +13,8 @@ Routine corrections include test setup/reset helpers and regression coverage for
 
 Use Jev to evaluate a concrete choice against current evidence. Code owns the workflow. For an evidence request, check the statement named by `missing evidence` and include the helper path and observed result in the next decision question. If Jev identifies no specific missing fact, use the displayed blocker and observed sources to diagnose the incomplete review.
 
+Approach selection checks the plan against observed constraints. New implementation and execution checks can remain future work. Do not report proposed checks as completed proof. Necessary current prerequisites still need observations. If GATHER identifies no missing fact, inspect the displayed blockers and invariant text. Do not repeat a completed comparison.
+
 The hook checks edits and shell writes before execution. It denies writes that select an uncovered approach.
 
 ## Call format

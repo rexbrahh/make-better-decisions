@@ -90,6 +90,8 @@ New receipts carry a hook-owned id. Native execution-id changes do not invalidat
 
 Optional scopes permit 32 repository-relative paths and 32 invariants. Each option/invariant pair gets an independent check, capped at 256 checks. Clear invariant violations refuse selection. Uncertain compliance requests evidence. Worker binding requires preference confidence of at least 0.8.
 
+The unsupported-fact and invariant questions evaluate the stage requested by the decision. Selecting a preparation approach does not require its new implementation or future execution checks to be complete. Proposed checks are not execution proof. Selection still requires necessary current feasibility facts. The question contract advances when these semantics change, so cached earlier scoped answers cannot satisfy the new review.
+
 Parent inheritance requires a completed host dispatch with an explicit scoped receipt reference, verified ancestry, and the same repository. The accepted option binds the worker. Accepting a non-picked advisory option requires successful invariant checks and completed evidence references. Nested Claude inheritance is unsupported.
 
 Up to eight contract paths can accompany a request. Contract hashes come from verified current file observations. Missing observations require evidence. Changed, unavailable, or unchecked hashes invalidate approach coverage.
@@ -105,6 +107,8 @@ The edit, plan, and stop gates can reuse relevant advisory and binding decisions
 Decision questions use separate conditions for observed selection grounds, unsupported implementation facts, missing constraints, omitted named alternatives, exact user instructions, and routine work. Code combines these answers. A no-fit answer caused by missing context requests evidence. It does not demand a new option list.
 
 One diagnostic Choice selects the missing request statement from at most 32 candidates. Each candidate retains at most 1,000 characters plus omission markers. The question shares the existing API call. A `GATHER` response quotes the selected statement or explicitly reports that no specific missing fact was identified. The selection does not control authorization. The updated diagnostic contract refreshes older scoped responses once. Unchanged requests then retain the existing reuse rules.
+
+An unidentified comparison GATHER reports an unresolved review. It directs the agent to inspect the blocking predicates and full invariant text. It does not direct the agent to repeat a completed comparison or grant work permission.
 
 ## Gates
 

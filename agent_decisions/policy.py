@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 MODEL = "jev-1.13.0"
-REVIEW_CONTRACT = "scoped-review-1"
+REVIEW_CONTRACT = "scoped-review-2"
 URL = "https://api.typesafe.ai/v1/systemone"
 TIMEOUT_S = 3.0
 KEY_FILE = Path.home() / ".config" / "sops-nix" / "secrets" / "typesafe_api_key"

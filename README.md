@@ -4,7 +4,7 @@
 
 The goal is useful, enforceable review. Jev evaluates a material choice against observed evidence. Code checks receipt identity, scope, constraints, and failure policy. Exact instructions and routine operations need no invented choice.
 
-Version 1.1.4 corrects a Python 3.9 guard error on ordinary read commands. Required review remains the default. See the [release notes](docs/releases/v1.1.4.md) and [scoped review evidence](docs/validation/scoped-review-2026-10-12.md).
+Version 1.1.5 distinguishes approach selection from execution proof and stops unidentified GATHER responses from repeating completed comparisons. Required review remains the default. See the [release notes](docs/releases/v1.1.5.md) and [scoped review evidence](docs/validation/scoped-review-2026-10-12.md).
 
 The hook builds the evidence. The agent cannot choose the source set by itself.
 
@@ -144,6 +144,8 @@ Add optional `scope` and `contracts` fields to a decision request:
 Paths are repository-relative files or directory prefixes ending in `/`. Globs, absolute paths, and parent traversal are rejected. Scope permits at most 32 paths and 32 invariants. A request permits at most 256 option/invariant checks and eight contract files.
 
 Jev checks each option against each invariant. A clear violation refuses the pick. Uncertain support requests evidence. Worker binding also requires preference confidence of at least 0.8. A weaker worker preference produces `PARENT REVIEW`, without a receipt. Main-agent preferences remain advisory. [TypeSafe confidence measures the distribution](https://docs.typesafe.ai/confidence), so it does not certify correctness.
+
+For approach selection, the questions assess compatibility with observed constraints. New implementation and execution checks can remain future work. A proposed check is not completed proof. Necessary current prerequisites still require observations. If GATHER identifies no missing fact, inspect its displayed blockers and invariant text. Do not repeat a completed comparison.
 
 A parent assigns a completed scoped receipt in its dispatch message:
 
