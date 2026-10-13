@@ -4,7 +4,7 @@
 
 The goal is useful, enforceable review. Jev evaluates a material choice against observed evidence. Code checks receipt identity, scope, constraints, and failure policy. Exact instructions and routine operations need no invented choice.
 
-Version 1.1.8 preserves Codex and Adrafinil native launchers and installs decision hooks and isolation entrypoints outside the removable plugin cache. It retains the 1.1.7 memory corrections. Required review remains the default. See the [release notes](docs/releases/v1.1.8.md) and [memory verification](docs/probes.md#hook-memory-correction-2026-10-12).
+Version 1.1.9 preserves native Codex, ChatGPT, and Adrafinil launchers and installs decision hooks and isolation entrypoints outside the removable plugin cache. It retains the 1.1.7 memory corrections. Required review remains the default. See the [release notes](docs/releases/v1.1.9.md) and [memory verification](docs/probes.md#hook-memory-correction-2026-10-12).
 
 The hook builds the evidence. The agent cannot choose the source set by itself.
 
@@ -74,7 +74,7 @@ Run the helper again after each plugin upgrade or stdio MCP configuration change
 
 Hooks use the protected runtime after installation. Before installation, they use the plugin entrypoint. A broken installed runtime reports a startup failure. The runtime namespace, pointer, and bundles are write-protected by the configured boundary. Required decision review remains active.
 
-The Codex helper preserves native `codex_app` and `adrafinil` registrations. It restores legacy wrapped registrations from signed original recipes. Other stdio servers retain isolation. A source value of `null` limits automatic refresh. Repeat runs preserve signed recipes, so they do not prove that every upstream command change was tracked.
+The Codex helper preserves native `codex_app`, `adrafinil`, `node_repl`, and `cua_repl` registrations. It also preserves the bundled computer-history, computer-use, event-stream, mcp-search, and messages launchers. It restores legacy wrapped registrations from signed original recipes. Other stdio servers retain isolation. A source value of `null` limits automatic refresh. Repeat runs preserve signed recipes, so they do not prove that every upstream command change was tracked.
 
 Useful verified help commands:
 

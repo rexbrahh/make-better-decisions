@@ -14,7 +14,8 @@ from tests.helpers import StateTestCase
 
 class InstallPlanningTest(StateTestCase):
     def test_native_launchers_are_preserved_and_legacy_wrappers_restore_signed_transport(self):
-        for name in ("codex_app", "adrafinil"):
+        for name in ("codex_app", "adrafinil", "node_repl", "cua_repl", "computer-history",
+                     "computer-use", "event-stream", "mcp-search", "messages"):
             original = {"type": "stdio", "command": "/native/launcher", "args": ["native"],
                         "cwd": "/native", "env": {"NATIVE": "1"}, "env_vars": ["NATIVE_PIPE"]}
             server = {"name": name, "enabled": True, "startup_timeout_sec": 10,

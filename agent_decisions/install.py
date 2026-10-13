@@ -21,7 +21,10 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from . import evidence, ledger, policy, runtime
 
 PROFILE_NAME = "agent-decisions-isolation"
-NATIVE_CODEX_SERVERS = frozenset({"codex_app", "adrafinil"})
+NATIVE_CODEX_SERVERS = frozenset({
+    "codex_app", "adrafinil", "node_repl", "cua_repl", "computer-history",
+    "computer-use", "event-stream", "mcp-search", "messages",
+})
 CODEX_BINARY = "/opt/homebrew/bin/codex"
 
 _SECRET_KEY_PARTS = ("api_key", "apikey", "access_token", "auth_token", "bearer_token", "credential", "password", "private_key", "secret", "token")
