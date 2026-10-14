@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import fnmatch
+import io
 import json
 import os
 import re
@@ -485,7 +486,63 @@ def decide(raw: str, ctx: Context, ask: Ask) -> Outcome:
 MISUSE = ("ts-decide must be the whole command, not part of a pipeline, a compound command, or a redirect.\n"
           + USAGE)
 _HEREDOC = re.compile(r"\s*(?:\S*/)?ts-decide\s*<<-?\s*(['\"]?)(\w+)\1[ \t]*\n(.*?)\n[ \t]*\2\s*", re.S)
-_PUNCTUATION = set("();<>|&")
+_DATA_HEREDOC = re.compile(r"([^\n]*?)<<(-?)[ \t]*(['\"])(\w+)\3[ \t]*")
+_PUNCTUATION = set("();<>|&\n")
+_STDIN_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ash", "ksh", "csh", "tcsh", "fish", "pwsh", "powershell"})
+_ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*", re.S)
+_EXECUTION_WRAPPERS = {
+    "env": {"-u", "--unset", "-C", "--chdir", "-P"},
+    "command": set(), "exec": {"-a"}, "time": {"-f", "--format", "-o", "--output"},
+    "xargs": {"-a", "--arg-file", "-E", "-I", "-J", "-L", "-n", "-P", "-R", "-s", "-S",
+              "--max-args", "--max-procs", "--max-chars"},
+}
+
+
+class _CommandInput(io.StringIO):
+    def readline(self, size=-1):
+        line = super().readline(size)
+        if line.endswith("\n"):
+            self.seek(self.tell() - 1)  # shlex must retain the separator after a comment.
+        return line
+
+
+def _execution_head(argv: list[str], start: int = 0) -> str:
+    # shortcut: Recognize literal wrappers; extend when a native trace needs more shell syntax.
+    index = start
+    while index < len(argv):
+        arg = argv[index]
+        if _ENV_ASSIGNMENT.fullmatch(arg):
+            index += 1
+            continue
+        wrapper = os.path.basename(arg)
+        if wrapper not in _EXECUTION_WRAPPERS:
+            return wrapper
+        index += 1
+        options = True
+        while index < len(argv):
+            arg = argv[index]
+            if options and arg == "--":
+                options = False
+                index += 1
+            elif wrapper == "env" and _ENV_ASSIGNMENT.fullmatch(arg):
+                index += 1
+            elif options and wrapper == "command" and arg.startswith("-") and set(arg[1:]) & {"v", "V"}:
+                return ""  # These modes locate the command without executing it.
+            elif options and wrapper == "env" and (arg.startswith("-S") or arg == "--split-string"
+                                                    or arg.startswith("--split-string=")):
+                separate = arg in {"-S", "--split-string"}
+                if separate and index + 1 >= len(argv):
+                    return ""
+                text = argv[index + 1] if separate else arg[2:] if arg.startswith("-S") else arg.partition("=")[2]
+                try:
+                    argv = argv[:index] + shlex.split(text) + argv[index + (2 if separate else 1):]
+                except ValueError:
+                    return ""
+            elif options and arg.startswith("-"):
+                index += 2 if arg in _EXECUTION_WRAPPERS[wrapper] else 1
+            else:
+                break
+    return ""
 
 
 def command_of(tool_input: dict) -> str:
@@ -500,17 +557,37 @@ def classify(command: str) -> tuple[str, str]:
     heredoc = _HEREDOC.fullmatch(command.replace("\r\n", "\n"))
     if heredoc:
         return "decide", heredoc[3]
+    lines = command.strip().splitlines()
+    while lines and (not lines[0].strip() or lines[0].lstrip().startswith("#")):
+        lines.pop(0)
+    header = _DATA_HEREDOC.fullmatch(lines[0]) if lines else None
+    if header:
+        try:
+            lexer = shlex.shlex(header[1], posix=True, punctuation_chars=True)
+            lexer.whitespace_split = True
+            argv = list(lexer)
+        except ValueError:
+            argv = []
+        shells = _STDIN_SHELLS | {"ts-decide"}
+        if argv and _execution_head(argv) not in shells and not any(arg and set(arg) <= _PUNCTUATION for arg in argv):
+            # A complete quoted heredoc supplies data; shells still execute their stdin.
+            end = next((index for index, line in enumerate(lines[1:], 1)
+                        if (line.lstrip("\t") if header[2] else line) == header[4]), None)
+            if end is not None and not any(line.strip() and not line.lstrip().startswith("#")
+                                           for line in lines[end + 1:]):
+                command = header[1]
     tokens = []
     quote_error = False
     try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer = shlex.shlex(_CommandInput(command.strip()), posix=True, punctuation_chars="();<>|&\n")
+        lexer.whitespace = " \t\r"
         lexer.whitespace_split = True
         for token in lexer:
             tokens.append(token)
     except ValueError:  # unbalanced quotes
         quote_error = True  # interpreter data can use quoting that is not shell syntax
     starts = [i for i in range(len(tokens)) if i == 0 or set(tokens[i - 1]) <= _PUNCTUATION]
-    if not any(os.path.basename(tokens[i]) == "ts-decide" for i in starts):
+    if not any(_execution_head(tokens, i) == "ts-decide" for i in starts):
         return "other", ""
     if not quote_error and len(tokens) == 2 and os.path.basename(tokens[0]) == "ts-decide":
         return "decide", tokens[1]

@@ -226,9 +226,10 @@ def build(t: Transcript, secrets: tuple[str, ...] = (), *, query: str = "", cwd=
     # Required contracts must survive optional observations or the preflight
     # asks for a file the hook has already read. Keep each source only once.
     required_paths = {Path(path).as_posix() for path in contracts}
-    for item in source_items:
-        if item["path"] in required_paths:
-            include_source(item)
+    if "source_files" in bundle:
+        bundle["source_files"] = [item for item in source_items if item["path"] in required_paths]
+    _trim_to_budget(bundle, contracts=contracts, query=query, reserved_chars=_CONTEXT_METADATA_CHARS)
+    used_chars = len(json.dumps(bundle, sort_keys=True))
     source_items = [item for item in source_items if item["path"] not in required_paths]
 
     # Preserve cited native reads even when their cwd differs from the consultation root.
@@ -274,7 +275,7 @@ def build(t: Transcript, secrets: tuple[str, ...] = (), *, query: str = "", cwd=
             include_call(_idx, item)
     metadata["tool_calls_included"] = len(bundle["tool_calls_newest_first"])
     metadata["tool_calls_omitted"] = max(0, len(usable_calls) - len(bundle["tool_calls_newest_first"]))
-    _trim_to_budget(bundle)
+    _trim_to_budget(bundle, contracts=contracts, query=query)
     return bundle
 
 
@@ -282,22 +283,47 @@ def _fits(bundle: dict, *, reserved_chars: int = 0) -> bool:
     return len(json.dumps(bundle, sort_keys=True)) + reserved_chars <= EVIDENCE_CHARS
 
 
-def _trim_to_budget(bundle: dict) -> None:
+def _trim_to_budget(bundle: dict, *, contracts=(), query: str = "", reserved_chars: int = 0) -> None:
     metadata = bundle.get("metadata", {})
-    while not _fits(bundle) and bundle.get("architecture_history"):
+    required = {Path(path).as_posix() for path in contracts}
+
+    def fits() -> bool:
+        return _fits(bundle, reserved_chars=reserved_chars)
+
+    while not fits() and bundle.get("architecture_history"):
         bundle["architecture_history"].pop()
-    while not _fits(bundle) and bundle.get("tool_calls_newest_first"):
+    while not fits() and bundle.get("tool_calls_newest_first"):
         bundle["tool_calls_newest_first"].pop()
         metadata["tool_calls_included"] = len(bundle["tool_calls_newest_first"])
         metadata["tool_calls_omitted"] = metadata.get("tool_calls_omitted", 0) + 1
-    while not _fits(bundle) and bundle.get("source_files"):
-        bundle["source_files"].pop()
+    while not fits() and bundle.get("source_files"):
+        sources = bundle["source_files"]
+        optional = next((index for index in reversed(range(len(sources))) if sources[index]["path"] not in required), None)
+        if optional is not None:
+            sources.pop(optional)
+            metadata["source_files_omitted"] = metadata.get("source_files_omitted", 0) + 1
+            continue
+        item = max(sources, key=lambda source: len(source.get("text", "")))
+        text = item.get("text", "")
+        if not text:
+            break
+        shorter = _clip_source(text, query, max(128, len(text) // 2)) if len(text) > 256 else ""
+        item.update(text=shorter if len(shorter) < len(text) else "", truncated=True)
+    if "source_files" in bundle:
         metadata["source_files_included"] = len(bundle["source_files"])
-        metadata["source_files_omitted"] = metadata.get("source_files_omitted", 0) + 1
-    while not _fits(bundle) and len(bundle.get("user_messages", [])) > 1:
+        metadata["source_files_truncated"] = sum(bool(item.get("truncated")) for item in bundle["source_files"])
+    while not fits() and len(bundle.get("user_messages", [])) > 1:
         bundle["user_messages"].pop()
         metadata["user_messages_included"] = len(bundle["user_messages"])
         metadata["user_messages_omitted"] = metadata.get("user_messages_omitted", 0) + 1
+    while not fits() and bundle.get("user_messages"):
+        text = bundle["user_messages"][0]
+        shorter = clip(text, max(128, len(text) // 2)) if len(text) > 256 else ""
+        bundle["user_messages"][0] = shorter if len(shorter) < len(text) else ""
+        if not bundle["user_messages"][0]:
+            bundle["user_messages"].pop()
+            metadata["user_messages_included"] = 0
+            metadata["user_messages_omitted"] = metadata.get("user_messages_omitted", 0) + 1
 
 
 def _terms(text: str) -> set[str]:

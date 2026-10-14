@@ -118,6 +118,12 @@ class HookTest(StateTestCase):
         read = {**self.payload("ls"), "tool_name": "Read", "tool_input": {"file_path": "/x"}}
         self.assertIsNone(hook.handle("pre_tool_use", read, "claude", post=FakeJev()))
 
+    def test_heredoc_diagnostic_needs_no_transcript_or_remote_review(self):
+        payload = self.payload("python3 - <<'PY'\nprint('ts-decide')\nPY\n")
+        payload["transcript_path"] = str(self.dir / "missing.jsonl")
+        api = FakeJev(raises=RuntimeError("Ordinary diagnostic reached remote review"))
+        self.assertIsNone(hook.handle("pre_tool_use", payload, "claude", post=api))
+
     def test_legacy_stop_does_not_block_or_require_context(self):
         payload = {"session_id": "s1", "transcript_path": str(self.transcript), "stop_hook_active": False,
                    "last_assistant_message": "I chose LRU over LFU."}
@@ -166,7 +172,8 @@ class ScriptTest(StateTestCase):
         self.assertEqual(response["hookSpecificOutput"]["permissionDecision"], "deny")
         self.assertIn("AGENT_DECISIONS_OFF ignored", response["systemMessage"])
 
-    def test_stub_reports_an_inactive_hook(self):
+    def test_stub_reports_an_unintercepted_call_without_approving_it(self):
         result = subprocess.run([str(ROOT / "bin" / "ts-decide"), "{}"], capture_output=True, text=True)
         self.assertEqual(result.returncode, 3)
-        self.assertIn("agent-decisions hook inactive: decision unverified", result.stdout + result.stderr)
+        self.assertIn("did not intercept this call: decision unverified", result.stderr)
+        self.assertIn("separate shell call", result.stderr)

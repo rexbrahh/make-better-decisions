@@ -1,4 +1,5 @@
 #!/bin/sh
 # Runs only when no agent-decisions hook intercepted the call.
-echo "agent-decisions hook inactive: decision unverified" >&2
+echo "agent-decisions did not intercept this call: decision unverified" >&2
+echo "Run ts-decide as a separate shell call. If exit 3 continues, check native hook registration and trust." >&2
 exit 3

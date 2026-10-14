@@ -4,7 +4,7 @@
 
 The goal is useful, enforceable review. Jev evaluates a material choice against observed evidence. Code checks receipt identity, scope, constraints, and failure policy. Exact instructions and routine operations need no invented choice.
 
-Version 1.2.0 makes ordinary tool execution independent of Jev. It preserves native launchers, the protected runtime, and the 1.1.7 memory corrections. Required review remains the default on the declared sensitive surface. See the [release notes](docs/releases/v1.2.0.md).
+Version 1.2.1 preserves required source records within the evidence budget and fixes consultation detection in diagnostic heredocs. Ordinary tools remain independent of Jev. Required review remains the default on the declared sensitive surface. See the [release notes](docs/releases/v1.2.1.md).
 
 The hook builds the evidence. The agent cannot choose the source set by itself.
 

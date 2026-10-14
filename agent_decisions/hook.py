@@ -163,12 +163,12 @@ def _context(payload: dict, host: str, *, contracts=()) -> gates.Context:
     repo_id = _repository_id(payload.get("cwd") or os.getcwd())
     _record_identity(canonical, host, t, entries, repo_id)
     evidence_started = time.perf_counter()
-    bundle = evidence.build(t, secrets,
-        query=json.dumps(payload.get("tool_input") or payload.get("last_assistant_message") or ""),
+    query = json.dumps(payload.get("tool_input") or payload.get("last_assistant_message") or "")
+    bundle = evidence.build(t, secrets, query=query,
         cwd=payload.get("cwd") or os.getcwd(), contracts=contracts)
     bundle["metadata"]["user_history_source"] = "signed_host_context"
     bundle["metadata"]["source_root"] = str(Path(payload.get("cwd") or os.getcwd()).resolve())
-    evidence._trim_to_budget(bundle)
+    evidence._trim_to_budget(bundle, contracts=contracts, query=query)
     inherited = _inherited_decisions(t, entries, host, session, repo_id, secrets, canonical)
     ctx = gates.Context(host=host, session_id=session, agent_id=canonical.get("agent_id"),
                          tool_use_id=payload["tool_use_id"], transcript=t,
@@ -193,7 +193,7 @@ def _context(payload: dict, host: str, *, contracts=()) -> gates.Context:
                                            if path in current_files}
     if history:
         bundle["architecture_history"] = evidence.architecture_history(history, bundle.get("contract_observations", {}))
-    evidence._trim_to_budget(bundle)
+    evidence._trim_to_budget(bundle, contracts=contracts, query=query)
     metrics["evidence_ms"] = (time.perf_counter() - evidence_started) * 1_000
     metrics["context_ms"] = (time.perf_counter() - started) * 1_000
     return ctx

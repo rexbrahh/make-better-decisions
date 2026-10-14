@@ -51,6 +51,7 @@ class EditGateTest(StateTestCase):
 
     def test_unread_or_inactive_verdict_cannot_authorize_an_edit(self):
         for output in ("", "agent-decisions hook inactive: decision unverified",
+                       "agent-decisions did not intercept this call: decision unverified",
                        "ts-decide verdict: ASK USER"):
             with self.subTest(output=output):
                 ctx = self.context()

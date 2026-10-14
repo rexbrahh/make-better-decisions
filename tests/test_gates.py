@@ -15,6 +15,58 @@ REQUEST = {"decision": "Bob's café: which cache?", "options": [
 
 
 class ClassifyTest(StateTestCase):
+    def test_complete_non_shell_heredocs_keep_command_mentions_as_data(self):
+        commands = (
+            "python3 - <<'PY'\nif ('ts-decide' in text):\n    print(text)\nPY\n",
+            "python3 - <<'PY'\nprint('ts-decide')\nPY\n",
+            "node - <<'JS'\nconsole.log('ts-decide');\nJS\n",
+            "cat <<'LOG'\n(ts-decide) is the diagnostic subject\nLOG\n",
+            "# diagnostic\npython3 - <<'PY'\nprint('ts-decide')\nPY\n# finished\n",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertEqual(gates.classify(command), ("other", ""))
+
+    def test_newline_and_shell_heredoc_consultations_remain_misuse(self):
+        commands = (
+            "echo status\nts-decide '{}'",
+            "echo status # comment\nts-decide '{}'",
+            "bash <<'SH'\nts-decide '{}'\nSH\n",
+            "env -S 'bash -' <<'SH'\nts-decide '{}'\nSH\n",
+            "python3 - <<'PY'\nprint('diagnostic')\nPY\nts-decide '{}'\n",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertEqual(gates.classify(command), ("misuse", ""))
+
+    def test_shell_comments_and_quoted_or_escaped_newlines_are_data(self):
+        for command in ("# (ts-decide) is the subject\nls", "echo 'literal\nts-decide'",
+                        "echo foo \\\nts-decide '{}'"):
+            with self.subTest(command=command):
+                self.assertEqual(gates.classify(command), ("other", ""))
+
+    def test_wrapped_consultations_are_misuse(self):
+        commands = ("env ts-decide '{}'", "command ts-decide '{}'", "exec ts-decide '{}'",
+                    "time ts-decide '{}'", "xargs ts-decide <<'EOF'\n{}\nEOF\n",
+                    "env -S'bash -' <<'SH'\nts-decide '{}'\nSH\n",
+                    "env --split-string='bash -' <<'SH'\nts-decide '{}'\nSH\n",
+                    "env -i FLAG=1 command -p ts-decide '{}'", "FLAG=1 ts-decide '{}'",
+                    "env -P /usr/bin ts-decide '{}'")
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertEqual(gates.classify(command), ("misuse", ""))
+
+    def test_wrapped_lookups_mentions_and_data_heredocs_are_other(self):
+        commands = ("command -v ts-decide", "command -V ts-decide", "command -pv ts-decide", "env echo ts-decide",
+                    "exec -a ts-decide echo status", "time -o ts-decide echo status",
+                    "xargs -I ts-decide echo ts-decide", "xargs -J ts-decide echo ts-decide",
+                    "env -- FLAG=1 echo ts-decide",
+                    "env python3 - <<'PY'\nprint('ts-decide')\nPY\n",
+                    "env -S'python3 -' <<'PY'\nprint('ts-decide')\nPY\n")
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertEqual(gates.classify(command), ("other", ""))
+
     def test_python_heredoc_can_mention_the_consultation_command_as_data(self):
         body = "print('the user\\'s ts-decide history')\n"
         compile(body, "diagnostic", "exec")

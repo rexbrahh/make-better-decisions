@@ -13,6 +13,32 @@ from tests.helpers import StateTestCase
 
 
 class SourceObservationTest(StateTestCase):
+    def test_all_requested_contracts_survive_a_full_evidence_budget(self):
+        names = ("docs/architecture.md", "docs/distribution.md", "app/CMakeLists.txt",
+                 "ci/package-windows.ps1", "ci/test-installer-contract.ps1", "tests/shader.cmake")
+        hashes = {}
+        for name in names:
+            path = self.dir / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            text = f"Contract: {name}\n" + "Preserve the existing behavior.\n" * 900
+            path.write_text(text)
+            hashes[name] = hashlib.sha256(text.encode()).hexdigest()
+        request = json.dumps({"decision": "Choose the shader producer wiring.", "contracts": names})
+        users = ("Preserve source and outputs. " + "u" * 13_000,
+                 "Choose the existing producer wiring. " + "v" * 13_000)
+        bundle = evidence.build(Transcript(users, (), ()), query=request, cwd=self.dir, contracts=names)
+
+        self.assertEqual({item["path"]: item["sha256"] for item in bundle["source_files"]}, hashes)
+        self.assertTrue(all(item["trust"] == "verified_file_observation" for item in bundle["source_files"]))
+        self.assertLessEqual(len(json.dumps(bundle, sort_keys=True)), policy.EVIDENCE_CHARS)
+
+        # Freshness metadata is added after the initial evidence build.
+        bundle["contract_observations"] = {path: {"sha256": digest} for path, digest in hashes.items()}
+        bundle["file_observations"] = bundle["contract_observations"].copy()
+        evidence._trim_to_budget(bundle, contracts=names, query=request)
+        self.assertEqual({item["path"]: item["sha256"] for item in bundle["source_files"]}, hashes)
+        self.assertLessEqual(len(json.dumps(bundle, sort_keys=True)), policy.EVIDENCE_CHARS)
+
     def test_requested_contract_precedes_candidate_limit_and_helper_observations(self):
         contract = "Preserve every required interface.\n" * 800
         (self.dir / "review-contract.md").write_text(contract)

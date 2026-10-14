@@ -72,7 +72,7 @@ class StateTestCase(unittest.TestCase):
     """Gives each test its own temporary directory and agent-decisions state directory."""
 
     def setUp(self):
-        self.dir = Path(tempfile.mkdtemp())
+        self.dir = Path(tempfile.mkdtemp()).resolve()
         self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
         self._saved = {k: os.environ.get(k) for k in ("AGENT_DECISIONS_STATE", "TYPESAFE_API_KEY", "AGENT_DECISIONS_OFF")}
         os.environ["AGENT_DECISIONS_STATE"] = str(self.dir / "state")
