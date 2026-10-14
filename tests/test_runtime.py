@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import shutil
 import subprocess
 import sys
+import unittest
 from pathlib import Path
 from unittest import mock
 
@@ -40,6 +42,22 @@ class RuntimeTest(StateTestCase):
                                 env={**os.environ, "HOME": str(self.dir)})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "protocol")
+
+    @unittest.skipIf(sys.pycache_prefix, "this python3 keeps bytecode outside the bundle")
+    def test_bundle_ships_checked_bytecode_for_every_module(self):
+        active = runtime.publish(self.package(), home=self.dir)
+        for source in (active / "agent_decisions").glob("*.py"):
+            with self.subTest(module=source.name):
+                bytecode = Path(importlib.util.cache_from_source(str(source))).read_bytes()
+                self.assertEqual(int.from_bytes(bytecode[4:8], "little"), 0b11)  # PEP 552: hash-based, checked
+
+    def test_hook_import_skips_urllib(self):
+        active = runtime.publish(self.package(), home=self.dir)
+        result = subprocess.run([sys.executable, "-I", "-B", "-c",
+                                 "import sys; sys.path.insert(0, sys.argv[1]); import agent_decisions.hook; "
+                                 "print('urllib.request' in sys.modules)", str(active)],
+                                capture_output=True, text=True)
+        self.assertEqual((result.returncode, result.stdout), (0, "False\n"), result.stderr)
 
     def test_changed_source_is_rejected_before_activation(self):
         source = self.package()

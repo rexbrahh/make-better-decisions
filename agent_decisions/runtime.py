@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import py_compile
 import shutil
+import sys
 import tempfile
 import uuid
 from pathlib import Path
@@ -67,6 +69,16 @@ def publish(source: Path, home: Path | None = None) -> Path:
         if _files(source) != files or any((source / relative).read_bytes() != data
                                           for relative, data in contents.items()):
             raise RuntimeError("runtime source changed during publication")
+        # Hooks run python3 -B on every call, which reads bytecode but never writes it. A checked hash
+        # costs 2 ms per call and never runs stale bytecode. Other Python versions compile at import.
+        # An interpreter with a pycache_prefix (Apple's python3) would write outside the bundle.
+        for relative in files if sys.pycache_prefix is None else ():
+            if relative.suffix == ".py" and relative.parts[0] == "agent_decisions":
+                try:
+                    py_compile.compile(str(stage / relative), doraise=True,
+                                       invalidation_mode=py_compile.PycInvalidationMode.CHECKED_HASH)
+                except py_compile.PyCompileError as error:
+                    raise RuntimeError(f"runtime bytecode compilation failed: {error.msg}") from None
         bundle = bundles / uuid.uuid4().hex
         stage.rename(bundle)
         pointer.symlink_to(bundle.relative_to(root), target_is_directory=True)

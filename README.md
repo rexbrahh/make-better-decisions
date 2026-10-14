@@ -4,7 +4,7 @@
 
 The goal is useful, enforceable review. Jev evaluates a material choice against observed evidence. Code checks receipt identity, scope, constraints, and failure policy. Exact instructions and routine operations need no invented choice.
 
-Version 1.2.7 checks brace spellings in linear time. Version 1.2.6 denies glob, `~`, `$HOME`, and `{a,b}` spellings of the private state path, and reads bad UTF-8 or a lone surrogate in hook input as a replacement character instead of failing. Version 1.2.5 lets Claude agents quote two more kinds of user text to Jev: answers that the user picks or types in a question box, and messages that the user types while the agent works. Ordinary tools remain independent of Jev. Required review remains the default on the declared sensitive surface. See the [release notes](docs/releases/v1.2.7.md).
+Version 1.2.8 ships precompiled bytecode in the runtime bundle, so each hook call starts about 33 ms faster. Version 1.2.7 checks brace spellings in linear time. Version 1.2.6 denies glob, `~`, `$HOME`, and `{a,b}` spellings of the private state path, and reads bad UTF-8 or a lone surrogate in hook input as a replacement character instead of failing. Version 1.2.5 lets Claude agents quote two more kinds of user text to Jev: answers that the user picks or types in a question box, and messages that the user types while the agent works. Ordinary tools remain independent of Jev. Required review remains the default on the declared sensitive surface. See the [release notes](docs/releases/v1.2.8.md).
 
 The hook builds the evidence. The agent cannot choose the source set by itself.
 

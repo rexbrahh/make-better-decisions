@@ -7,8 +7,6 @@ import math
 import os
 import socket
 import time
-import urllib.error
-import urllib.request
 from concurrent.futures import Future, TimeoutError as FutureTimeout
 from threading import Thread
 
@@ -52,6 +50,8 @@ def post(body: bytes, key: str, timeout: float) -> bytes:
 
 
 def _post(body: bytes, key: str, timeout: float) -> bytes:
+    import urllib.error, urllib.request  # 12 ms that every hook call would pay; only Jev requests need it
+
     request = urllib.request.Request(
         policy.URL, data=body,
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
