@@ -78,9 +78,10 @@ Verdicts:
 | `PROCEED` | The operation is routine or exactly specified. It does not authorize later choices. |
 | `GATHER EVIDENCE` | The agent must inspect or test more, then call again. |
 | `ASK USER` | The user owns the choice. Ask the user. |
-| `REFUSED` | Repair options or facts, then call again. |
+| `REFUSED` | Apply the printed `repair` lines and failed invariants to options or facts, then call again. |
 | `PARENT REVIEW` | The worker preference is uncertain. The parent must accept an eligible reviewed option. No receipt is minted. |
 | `decision unverified` | Review failed. Required mode grants no permission. Availability mode permits execution with a warning. |
+| `did not intercept` (exit 3) | No hook handled the call. A standalone retry separates a malformed call from a session without a loaded hook. The result mints no receipt. The agent decides with stated evidence and asks the user to restart the session. |
 
 `REFUSED` and `GATHER EVIDENCE` never authorize work. The refusal cap only marks repeated bad requests. It does not create an exemption.
 

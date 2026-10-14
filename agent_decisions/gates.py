@@ -282,6 +282,17 @@ _NEXT = {
                "List every viable option and use neutral descriptions with source excerpts.",
 }
 
+_REPAIRS = {
+    "missing_option": "Evidence names an applicable alternative that no option lists. "
+                      "Add the alternative that the user or the observed source names.",
+    "missing_existing_helper": "Evidence names an existing helper (helper_present {helper_present:.2f}) that no "
+                               "option reuses (helper_in_options {helper_in_options:.2f}). Add an option that "
+                               "reuses the helper. If the helper does not apply, state why in that option's description.",
+    "pick_conflicts_with_instruction": "Captured user instructions prescribe {prescribed}. "
+                                       "Follow the instruction or ask the user to change it.",
+    "none_fit": "No listed option fits the evidence. Add the option that the evidence supports.",
+}
+
 
 def _verdict(action: str, decision: str, answers: dict, unverified: list[str], reasons: list[str],
              refusals: int, over_cap: bool, receipt_id: str | None = None, observed: dict | None = None,
@@ -306,6 +317,11 @@ def _verdict(action: str, decision: str, answers: dict, unverified: list[str], r
         if field_name.startswith("option_"):
             field_name = "options." + field_name[len("option_"):] + ".description"
         lines.append("repair field: " + field_name + ". Use neutral wording and retain the same requirements.")
+    prescribed = ", ".join(key[len("specified_"):] for key, answer in answers.items()
+                           if key.startswith("specified_") and answer["noul"] >= BIND_AT)
+    lines.extend("repair: " + _REPAIRS[reason].format(
+        prescribed=prescribed, helper_present=answers["helper_present"]["noul"],
+        helper_in_options=answers["helper_in_options"]["noul"]) for reason in reasons if reason in _REPAIRS)
     if "pattern_present" in answers:
         lines.append(f"observed_pattern {answers['pattern_present']['noul']:.2f}  "
                      f"pick_follows_pattern {answers.get(f'follows_pattern_{pick}', {}).get('noul', 0.0):.2f}")
@@ -469,7 +485,7 @@ def decide(raw: str, ctx: Context, ask: Ask) -> Outcome:
     receipt_id = "review_" + uuid.uuid4().hex if action in {"advisory", "binding"} else None
     message = _verdict(action, decision, answers, unverified, reasons, refusals, over_cap,
                        receipt_id, ctx.evidence, missing_facts)
-    if action == "gather_evidence":
+    if action in {"gather_evidence", "refused"}:
         pending = [f"{check}={answers[check]['noul']:.2f} (requires {BIND_AT:.2f}): "
                    + json.dumps(scope["invariants"][index], ensure_ascii=False)
                    for index, check in enumerate(invariant_checks.get(pick, ()))

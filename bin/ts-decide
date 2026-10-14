@@ -1,5 +1,7 @@
 #!/bin/sh
 # Runs only when no agent-decisions hook intercepted the call.
 echo "agent-decisions did not intercept this call: decision unverified" >&2
-echo "Run ts-decide as a separate shell call. If exit 3 continues, check native hook registration and trust." >&2
+echo "Run ts-decide as its own shell command. Do not wrap, nest, or join it with another command." >&2
+echo "If a standalone call also exits 3, this session did not load the review hook. If registration is enabled and trusted, this session probably started before the hook became active." >&2
+echo "Until a restart, no review runs in this session. Decide yourself and state the evidence for your choice. Ask the user to restart or resume this session." >&2
 exit 3

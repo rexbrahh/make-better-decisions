@@ -95,6 +95,23 @@ class ReviewProgressTest(StateTestCase):
         result = gates.decide(json.dumps(REQUEST), make_ctx(), answers(invariant_lfu=.01))
         self.assertEqual(result.action, "refused")
         self.assertIn("invariant_0_lfu", result.message)
+        self.assertIn(REQUEST["scope"]["invariants"][0], result.message)
+
+    def test_each_refusal_reason_names_its_repair(self):
+        # Native 2026-10-14 02:23Z: a missing_existing_helper refusal printed only the generic next step.
+        cases = (({"missing_option": .9}, "missing_option", "Add the alternative"),
+                 ({"helper_present": .9}, "missing_existing_helper", "helper_present 0.90"),
+                 ({"specified_lru": .9}, "pick_conflicts_with_instruction", "prescribe lru"),
+                 ({"pick": "none_fit"}, "none_fit", "Add the option that the evidence supports"))
+        for overrides, reason, repair in cases:
+            with self.subTest(reason=reason):
+                fake = FakeJev(**{"pick": "lfu", "sufficient": .95, "owner": "agent", **overrides})
+                result = gates.decide(json.dumps({"decision": REQUEST["decision"], "options": REQUEST["options"]}),
+                                      make_ctx(), asker(fake))
+                self.assertEqual(result.action, "refused")
+                self.assertIn(f"Refused ({reason})", result.message)
+                self.assertIn("repair: ", result.message)
+                self.assertIn(repair, result.message)
 
     def test_worker_near_tie_requires_parent_review_without_a_receipt(self):
         result = gates.decide(json.dumps(REQUEST), make_ctx(agent_id="worker"), answers(tie=True))

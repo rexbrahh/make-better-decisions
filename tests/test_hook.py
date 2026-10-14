@@ -176,4 +176,6 @@ class ScriptTest(StateTestCase):
         result = subprocess.run([str(ROOT / "bin" / "ts-decide"), "{}"], capture_output=True, text=True)
         self.assertEqual(result.returncode, 3)
         self.assertIn("did not intercept this call: decision unverified", result.stderr)
-        self.assertIn("separate shell call", result.stderr)
+        self.assertIn("as its own shell command", result.stderr)
+        self.assertIn("restart or resume", result.stderr)
+        self.assertIn("Decide yourself", result.stderr)
