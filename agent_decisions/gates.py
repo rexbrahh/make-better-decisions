@@ -15,8 +15,9 @@ import uuid
 from concurrent.futures import Future, TimeoutError as FutureTimeout
 from threading import Thread
 from dataclasses import dataclass, field
+from itertools import islice
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterator
 
 from . import evidence, jev, policy, provenance
 from .policy import (
@@ -610,6 +611,36 @@ def classify(command: str) -> tuple[str, str]:
     return "misuse", ""
 
 
+_BRACE = re.compile(r"\{([^{}]*,[^{}]*)\}")
+_HOME_VARIABLE = re.compile(r"\$(?:\{HOME\}|HOME\b)")
+_GLOB = re.compile(r"[*?[]")
+
+
+def _braces(word: str) -> Iterator[str]:
+    """Expand shell comma braces, innermost first, so a {a,b} spelling of a path still names it."""
+    match = _BRACE.search(word)
+    if not match:
+        yield word
+        return
+    for part in match[1].split(","):
+        yield from _braces(word[:match.start()] + part + word[match.end():])
+
+
+def _glob_reaches(pattern: tuple[str, ...], root: tuple[str, ...]) -> bool:
+    """Whether glob path components can name root or a path below it. ** spans directories."""
+    if not root:
+        return True
+    if not pattern:
+        return False  # an ancestor of root, allowed as a literal ancestor is
+    if pattern[0] == "**":
+        return _glob_reaches(pattern[1:], root) or _glob_reaches(pattern, root[1:])
+    try:
+        matched = fnmatch.fnmatchcase(root[0], pattern[0])
+    except re.error:  # Python 3.9 rejects some bracket ranges that later versions accept
+        matched = root[0] == pattern[0]
+    return matched and _glob_reaches(pattern[1:], root[1:])
+
+
 def guard(tool_input: dict, cwd: str | None = None) -> Outcome | None:
     """Give a clear error for direct private-path access. OS isolation handles computed paths."""
     private = (state_dir().resolve(), (Path.home() / ".local/state/agent-decisions").resolve())
@@ -636,19 +667,22 @@ def guard(tool_input: dict, cwd: str | None = None) -> Outcome | None:
             lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
             lexer.whitespace_split = True
             tokens = list(lexer)
+            home = str(Path.home())
             for i, token in enumerate(tokens):
-                if "\n" in token or not ("/" in token or token.startswith(("./", "../"))):
-                    continue
-                candidate = Path(token).expanduser()
-                if not candidate.is_absolute():
-                    candidate = base / candidate
-                paths.append(str(candidate))
-                if i and tokens[i - 1] == "cd":
-                    base = candidate
+                # ponytail: 64 brace expansions per word; OS isolation covers longer spellings
+                for word in islice(_braces(_HOME_VARIABLE.sub(lambda _: home, token)), 64):
+                    if "\n" in word or not ("/" in word or word.startswith(("./", "../", "~"))):
+                        continue
+                    candidate = Path(os.path.expanduser(word))
+                    if not candidate.is_absolute():
+                        candidate = base / candidate
+                    paths.append(str(candidate))
+                    if i and tokens[i - 1] == "cd":
+                        base = candidate
         except ValueError:
             pass  # the host diagnoses invalid shell syntax
     for value in paths:
-        path = Path(value).expanduser()
+        path = Path(os.path.expanduser(value))
         if not path.is_absolute():
             path = Path(cwd or os.getcwd()) / path
         path = path.resolve()
@@ -656,13 +690,8 @@ def guard(tool_input: dict, cwd: str | None = None) -> Outcome | None:
         roots = [str(root).casefold() if sys.platform == "darwin" else str(root) for root in private]
         if any(text == root or text.startswith(root + os.sep) for root in roots):
             break
-        try:
-            if any(fnmatch.fnmatchcase(root, text) for root in roots):
-                break
-        except re.error:
-            # Interpreter fragments can resemble invalid globs on Python 3.9.
-            # Continue checking paths; the ordinary tool review still follows.
-            continue
+        if _GLOB.search(text) and any(_glob_reaches(Path(text).parts, Path(root).parts) for root in roots):
+            break
     else:
         return None
     if paths:

@@ -172,6 +172,13 @@ class ScriptTest(StateTestCase):
         self.assertEqual(response["hookSpecificOutput"]["permissionDecision"], "deny")
         self.assertIn("AGENT_DECISIONS_OFF ignored", response["systemMessage"])
 
+    def test_bad_utf8_and_lone_surrogates_in_stdin_become_replacement_characters(self):
+        stdin = b'{"session_id": "s1", "tool_use_id": "t1", "prompt": "Keep \\ud800 the \xff cache."}'
+        result = subprocess.run([sys.executable, "-B", str(ROOT / "hooks" / "hook.py"), "user_prompt_submit",
+                                 "--host", "claude"], input=stdin, capture_output=True, timeout=30)
+        self.assertEqual((result.returncode, result.stdout), (0, b""))
+        self.assertEqual([entry["prompt"] for entry in ledger.entries("s1")], ["Keep � the � cache."])
+
     def test_stub_reports_an_unintercepted_call_without_approving_it(self):
         result = subprocess.run([str(ROOT / "bin" / "ts-decide"), "{}"], capture_output=True, text=True)
         self.assertEqual(result.returncode, 3)

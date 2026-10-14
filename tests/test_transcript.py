@@ -99,6 +99,12 @@ class ClaudeTranscriptTest(StateTestCase):
         self.assertEqual(a.turn_key, b.turn_key)
         self.assertNotEqual(a.turn_key, c.turn_key)
 
+    def test_lone_surrogate_escape_becomes_a_replacement_character(self):
+        path = write_jsonl(self.dir, "surrogate.jsonl", [human("Keep \ud800 the cache.")])
+        t = transcript.load(path, "claude")
+        self.assertEqual(t.user_messages, ("Keep � the cache.",))
+        self.assertEqual(len(t.turn_key), 16)
+
     def test_large_transcript_loads_in_under_two_seconds(self):
         records = []
         for i in range(25_000):

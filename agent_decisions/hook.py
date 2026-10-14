@@ -403,7 +403,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--host", required=True, choices=("claude", "codex"))
     args = parser.parse_args(argv)
     try:
-        out = handle(args.event, json.load(sys.stdin), args.host)
+        out = handle(args.event, transcript.loads(sys.stdin.buffer.read()), args.host)
     except Exception as error:
         try:
             availability = policy.fail_open(args.host)

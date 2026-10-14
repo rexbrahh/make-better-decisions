@@ -159,13 +159,33 @@ def load(path: str | Path, host: str) -> Transcript:
     return parsed
 
 
+_SURROGATE = re.compile(r"[\ud800-\udfff]")
+_SURROGATE_ESCAPE = re.compile(rb"\\u[dD][89a-fA-F]")
+
+
+def _without_surrogates(value):
+    if isinstance(value, str):
+        return _SURROGATE.sub("�", value)
+    if isinstance(value, list):
+        return [_without_surrogates(item) for item in value]
+    if isinstance(value, dict):
+        return {_without_surrogates(key): _without_surrogates(item) for key, item in value.items()}
+    return value
+
+
+def loads(data: bytes):
+    """Parse JSON into text that always encodes: bad UTF-8 and lone surrogate escapes both become U+FFFD."""
+    value = json.loads(data.decode("utf-8", errors="replace"))
+    return _without_surrogates(value) if _SURROGATE_ESCAPE.search(data) else value
+
+
 def _records(stream: BinaryIO, end: int) -> Iterator[dict]:
     while stream.tell() < end:
         line = stream.readline(end - stream.tell())
         if not line:
             break
         try:
-            record = json.loads(line.decode("utf-8", errors="replace"))
+            record = loads(line)
         except ValueError:
             continue  # a line still being written, or a damaged one
         if isinstance(record, dict):

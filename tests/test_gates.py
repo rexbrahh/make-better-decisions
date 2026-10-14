@@ -143,6 +143,29 @@ PY
                 self.assertEqual(outcome.action, "deny")
                 self.assertEqual(outcome.record, {"gate": "guard"})
 
+    def test_glob_and_shell_spellings_of_the_state_path_are_denied(self):
+        state = str(policy.state_dir())
+        for command in (f"cat {state[:-3]}*/sessions/s.jsonl",
+                        "cat ~/.local/state/agent-d*/ledger.key", "cat ~/.local/state/*/ledger.key",
+                        "cat ~/.local/**/ledger.key", "cat ~/.local/sta?e/agent-decisions/ledger.key",
+                        "cd ~ && cat .local/state/agent-decisions/ledger.key",
+                        "cat $HOME/.local/state/agent-decisions/ledger.key",
+                        "cat ${HOME}/.local/state/agent-decisions/ledger.key",
+                        "cat ~/.local/state/agent-{decisions,x}/ledger.key"):
+            with self.subTest(command=command):
+                self.assertEqual(gates.guard({"command": command}).action, "deny")
+
+    def test_globs_that_stop_above_the_state_path_are_allowed_like_literal_ancestors(self):
+        users = os.path.dirname(os.path.expanduser("~"))
+        for command in ("ls ~/*", f"du -sh {users}/*", "ls ~/.local/*", "ls ~/.local/state",
+                        "echo $HOME_DIR/x", "ls ~/agent-decisions/{README,SECURITY}.md"):
+            with self.subTest(command=command):
+                self.assertIsNone(gates.guard({"command": command}))
+
+    def test_tilde_words_for_unknown_users_do_not_raise(self):
+        self.assertIsNone(gates.guard({"command": "echo ~5% faster; ls ~nosuchuser/x"}))
+        self.assertIsNone(gates.guard({"file_path": "~nosuchuser/x"}))
+
     def test_allows_the_repository_and_everything_else(self):
         self.assertIsNone(gates.guard({"command": "cd ~/agent-decisions && git status"}))
         self.assertIsNone(gates.guard({"file_path": os.path.expanduser("~/agent-decisions/README.md")}))

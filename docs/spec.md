@@ -181,8 +181,11 @@ The ledger stores full states, answers, actions, signed user context, installati
 
 Gate records retain timings and API model/usage metadata outside model state. Exact gate caches also match actor, repository, model, thresholds, review contract, and operator policy. Evidence, source hashes, user constraints, and approach receipts remain part of the cache state.
 
-The guard denies tool calls that name the state directory.
-Invalid glob syntax in interpreter fragments does not stop path inspection. Literal private paths and valid wildcard matches remain denied. Ordinary tool review still follows.
+The guard denies tool calls that name the state directory or a path below it.
+In a shell command, the guard expands `~`, `$HOME`, `${HOME}`, and comma braces such as `{a,b}` before it checks a word. It checks the first 64 brace expansions of each word.
+The guard compares a glob path with the state directory one component at a time. A `**` component matches any number of directories. The guard denies a glob path when its components can match the state directory or a path below it. It does not read the state directory to find out whether a match exists.
+A glob that ends above the state directory, such as `ls ~/*`, is allowed, as a literal parent directory is. An invalid bracket range compares as literal text, so the result is the same on every Python version.
+The guard does not find a path that a program computes at run time. OS isolation protects that path. Ordinary tool review still follows.
 
 ## Native boundaries
 
