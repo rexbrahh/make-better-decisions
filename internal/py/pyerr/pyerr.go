@@ -104,6 +104,15 @@ func NewOSError(err error, filenames ...string) *OSError {
 	return &OSError{Class: ErrnoClass(errno), Msg: msg, Err: err}
 }
 
+// Class returns the Python class name of err, or "" for an error outside the Python model.
+func Class(err error) string {
+	var typed interface{ PyType() string }
+	if errors.As(err, &typed) {
+		return typed.PyType()
+	}
+	return ""
+}
+
 // EncodeUTF8 returns s.encode() with the strict error handler: a lone surrogate is a UnicodeEncodeError.
 //
 // py: Objects/unicodeobject.c unicode_encode_utf8 (Python 3.15)
@@ -118,6 +127,28 @@ func EncodeUTF8(s string) (string, error) {
 // py: Objects/unicodeobject.c unicode_encode_utf8 (Python 3.15)
 func Fsencode(s string) (string, error) {
 	return encode(s, true)
+}
+
+// EncodeBackslashReplace returns s.encode(errors="backslashreplace"), the encoding of sys.stderr: a lone
+// surrogate becomes its \udXXX escape. An undecodable byte stands for U+DC00 plus the byte, so it becomes
+// \udcXX.
+//
+// py: Python/codecs.c PyCodec_BackslashReplaceErrors (Python 3.15)
+func EncodeBackslashReplace(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+	var out strings.Builder
+	for rest := s; rest != ""; {
+		r, size := str.DecodeRune(rest)
+		if r >= 0xD800 && r <= 0xDFFF {
+			fmt.Fprintf(&out, `\u%04x`, r)
+		} else {
+			out.WriteString(rest[:size])
+		}
+		rest = rest[size:]
+	}
+	return out.String()
 }
 
 func encode(s string, escape bool) (string, error) {

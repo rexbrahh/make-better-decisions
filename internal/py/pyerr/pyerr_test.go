@@ -75,8 +75,8 @@ func TestErrnosMatchPython(t *testing.T) {
 	t.Logf("%d errnos compared", len(want))
 }
 
-// TestEncodeMatchesPython compares EncodeUTF8 and Fsencode with str.encode("utf-8") under the strict and
-// surrogateescape handlers, on strings of lone surrogates (WTF-8), raw bytes and ordinary characters.
+// TestEncodeMatchesPython compares EncodeUTF8, Fsencode and EncodeBackslashReplace with str.encode("utf-8")
+// under the strict, surrogateescape and backslashreplace handlers, on strings of lone surrogates (WTF-8), raw bytes and ordinary characters.
 func TestEncodeMatchesPython(t *testing.T) {
 	python := os.Getenv("AGENT_DECISIONS_PYTHON")
 	if python == "" {
@@ -115,7 +115,7 @@ out = []
 for codes in json.load(sys.stdin):
     s = "".join(map(chr, codes))
     row = []
-    for handler in ("strict", "surrogateescape"):
+    for handler in ("strict", "surrogateescape", "backslashreplace"):
         try:
             row.append(["ok", s.encode("utf-8", handler).hex()])
         except UnicodeEncodeError as error:
@@ -128,12 +128,13 @@ print(json.dumps(out))`
 	if err != nil {
 		t.Fatal(err)
 	}
-	var want [][2][2]string
+	var want [][3][2]string
 	if err := stdjson.Unmarshal(output, &want); err != nil {
 		t.Fatal(err)
 	}
 	for i, c := range cases {
-		for j, encode := range []func(string) (string, error){EncodeUTF8, Fsencode} {
+		backslashReplace := func(s string) (string, error) { return EncodeBackslashReplace(s), nil }
+		for j, encode := range []func(string) (string, error){EncodeUTF8, Fsencode, backslashReplace} {
 			got := [2]string{"ok", ""}
 			if encoded, err := encode(c[0].(string)); err != nil {
 				got = [2]string{"error", err.Error()}

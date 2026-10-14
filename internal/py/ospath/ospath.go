@@ -160,3 +160,19 @@ func Realpath(filename string, strict bool) (string, error) {
 	}
 	return path, nil
 }
+
+// Exists returns os.path.exists(path), which follows symlinks and is false on any error.
+//
+// py: Lib/genericpath.py exists (Python 3.15)
+func Exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// IsFile returns os.path.isfile(path), which follows symlinks and is false on any error.
+//
+// py: Lib/genericpath.py isfile (Python 3.15)
+func IsFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
+}

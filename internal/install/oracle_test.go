@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/rexbrahh/make-better-decisions/internal/py/json"
+	"github.com/rexbrahh/make-better-decisions/internal/py/pyerr"
 )
 
 // oracleDriver runs install operations with the Python module and prints one outcome per operation:
@@ -187,7 +188,7 @@ func runOracleOp(t *testing.T, op []any) []any {
 	result, err := oracleResult(op)
 	if err != nil {
 		msg := err.Error()
-		return []any{pyClass(err), msg}
+		return []any{pyerr.Class(err), msg}
 	}
 	text, err := json.Dumps(result, json.Options{SortKeys: true})
 	if err != nil {

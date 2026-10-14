@@ -836,7 +836,7 @@ func TrimToBudget(bundle *json.Object, contracts []string, query string, reserve
 	pop := func(key string) ([]any, error) {
 		list, ok := bundle.Value(key).([]any)
 		if !ok {
-			return nil, &pyerr.Error{Class: "AttributeError", Msg: fmt.Sprintf("'%s' object has no attribute 'pop'", typeName(bundle.Value(key)))}
+			return nil, &pyerr.Error{Class: "AttributeError", Msg: fmt.Sprintf("'%s' object has no attribute 'pop'", json.TypeName(bundle.Value(key)))}
 		}
 		list = list[:len(list)-1]
 		bundle.Set(key, list)
@@ -956,7 +956,7 @@ func TrimToBudget(bundle *json.Object, contracts []string, query string, reserve
 		messages := bundle.Value("user_messages").([]any)
 		text, ok := messages[0].(string)
 		if !ok {
-			return &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf("object of type '%s' has no len()", typeName(messages[0]))}
+			return &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf("object of type '%s' has no len()", json.TypeName(messages[0]))}
 		}
 		length := pystr.Len(text)
 		shorter := ""
@@ -997,7 +997,7 @@ func increment(metadata *json.Object, key string) error {
 		}
 	default:
 		return &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf(
-			"unsupported operand type(s) for +: '%s' and 'int'", typeName(value))}
+			"unsupported operand type(s) for +: '%s' and 'int'", json.TypeName(value))}
 	}
 	metadata.Set(key, json.Int(n.Add(&n, big.NewInt(1)).String()))
 	return nil
@@ -1212,7 +1212,7 @@ func sourceFiles(t transcript.Transcript, query string, cwd *string, secrets, co
 	}
 	for _, name := range ruleFiles {
 		path := pathlib.Join(root, name)
-		if _, ok := prioritized.Get(name); !ok && isFile(path) {
+		if _, ok := prioritized.Get(name); !ok && ospath.IsFile(path) {
 			prioritized.Set(name, path)
 		}
 	}
@@ -1722,7 +1722,7 @@ var resolveSource = func(root, raw string) (path string, ok bool, err error) {
 		}
 		return "", false, err
 	}
-	if !isRelativeTo(resolved, root) || !isFile(resolved) {
+	if !isRelativeTo(resolved, root) || !ospath.IsFile(resolved) {
 		return "", false, nil
 	}
 	private, err := isPrivate(relativeTo(resolved, root), resolved)
@@ -1738,12 +1738,6 @@ func join(base, rel string) string {
 		return base
 	}
 	return pathlib.Join(base, rel)
-}
-
-// isFile returns Path(path).is_file().
-func isFile(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.Mode().IsRegular()
 }
 
 // isRelativeTo returns Path(path).is_relative_to(root) for two absolute paths that realpath returned.
@@ -1929,7 +1923,7 @@ func objectValue(bundle *json.Object, key, attr string) (*json.Object, error) {
 	object, ok := value.(*json.Object)
 	if !ok {
 		return nil, &pyerr.Error{Class: "AttributeError",
-			Msg: fmt.Sprintf("'%s' object has no attribute '%s'", typeName(value), attr)}
+			Msg: fmt.Sprintf("'%s' object has no attribute '%s'", json.TypeName(value), attr)}
 	}
 	return object, nil
 }
@@ -1942,12 +1936,12 @@ func objectList(bundle *json.Object, key string) ([]*json.Object, error) {
 	}
 	list, ok := value.([]any)
 	if !ok {
-		return nil, &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf("'%s' object is not iterable", typeName(value))}
+		return nil, &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf("'%s' object is not iterable", json.TypeName(value))}
 	}
 	objects := make([]*json.Object, len(list))
 	for i, item := range list {
 		if objects[i], ok = item.(*json.Object); !ok {
-			return nil, &pyerr.Error{Class: "AttributeError", Msg: fmt.Sprintf("'%s' object has no attribute 'get'", typeName(item))}
+			return nil, &pyerr.Error{Class: "AttributeError", Msg: fmt.Sprintf("'%s' object has no attribute 'get'", json.TypeName(item))}
 		}
 	}
 	return objects, nil
@@ -1961,26 +1955,7 @@ func stringValue(item *json.Object, key string) (string, error) {
 	}
 	text, ok := value.(string)
 	if !ok {
-		return "", &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf("object of type '%s' has no len()", typeName(value))}
+		return "", &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf("object of type '%s' has no len()", json.TypeName(value))}
 	}
 	return text, nil
-}
-
-// typeName returns type(v).__name__ for a decoded JSON value.
-func typeName(v any) string {
-	switch v.(type) {
-	case nil:
-		return "NoneType"
-	case bool:
-		return "bool"
-	case json.Int:
-		return "int"
-	case float64:
-		return "float"
-	case string:
-		return "str"
-	case []any:
-		return "list"
-	}
-	return "dict"
 }

@@ -68,14 +68,6 @@ func get(v any, key string, fallback any) (any, error) {
 	return fallback, nil
 }
 
-// item returns d[key], with the KeyError Python raises for a missing key.
-func item(d *json.Object, key string) (any, error) {
-	if value, present := d.Get(key); present {
-		return value, nil
-	}
-	return nil, &pyerr.Error{Class: "KeyError", Msg: str.Repr(key)}
-}
-
 // head returns v[:n] for n >= 0, with the errors Python raises when v is not a str or list.
 func head(v any, n int) (any, error) {
 	switch v := v.(type) {
@@ -102,49 +94,6 @@ func iterate(v any) []any {
 		return chars
 	case []any:
 		return v
-	}
-	return nil
-}
-
-// backslashReplace returns s.encode("utf-8", errors="backslashreplace"): a lone surrogate becomes \udXXX.
-func backslashReplace(s string) []byte {
-	var out []byte
-	for s != "" {
-		r, width := str.DecodeRune(s)
-		if r >= 0xD800 && r <= 0xDFFF {
-			out = fmt.Appendf(out, `\u%04x`, r)
-		} else {
-			out = append(out, s[:width]...)
-		}
-		s = s[width:]
-	}
-	return out
-}
-
-// openFD ports os.open: the descriptor is close-on-exec and EINTR retries.
-func openFD(path string, flags int, mode uint32) (int, error) {
-	for {
-		fd, err := syscall.Open(path, flags|syscall.O_CLOEXEC, mode)
-		if err == nil {
-			return fd, nil
-		}
-		if err != syscall.EINTR {
-			return -1, pyerr.NewOSError(err, path)
-		}
-	}
-}
-
-// writeAll ports the `while view: view = view[os.write(fd, view):]` loop.
-func writeAll(fd int, data []byte) error {
-	for len(data) > 0 {
-		n, err := syscall.Write(fd, data)
-		if err == syscall.EINTR {
-			continue
-		}
-		if err != nil {
-			return pyerr.NewOSError(err)
-		}
-		data = data[n:]
 	}
 	return nil
 }

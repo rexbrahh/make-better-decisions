@@ -24,6 +24,7 @@ import (
 
 	"github.com/rexbrahh/make-better-decisions/internal/policy"
 	"github.com/rexbrahh/make-better-decisions/internal/py/json"
+	pyos "github.com/rexbrahh/make-better-decisions/internal/py/os"
 	"github.com/rexbrahh/make-better-decisions/internal/py/pathlib"
 	"github.com/rexbrahh/make-better-decisions/internal/py/pyerr"
 	"github.com/rexbrahh/make-better-decisions/internal/py/str"
@@ -115,11 +116,11 @@ func writeNewKey(path string) ([]byte, error) {
 //
 // py: agent_decisions/ledger.py _write_new_key
 func installKey(temporary, path string, key []byte) error {
-	fd, err := openFD(temporary, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL, 0o600)
+	fd, err := pyos.Open(temporary, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}
-	err = writeAll(fd, key)
+	err = pyos.WriteAll(fd, key)
 	if err == nil {
 		err = fsync(fd)
 	}
@@ -158,7 +159,7 @@ func key(create bool) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	lockFD, err := openFD(lockPath, syscall.O_RDWR|syscall.O_CREAT, 0o600)
+	lockFD, err := pyos.Open(lockPath, syscall.O_RDWR|syscall.O_CREAT, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +257,7 @@ func Append(entry *json.Object) error {
 	if key == nil {
 		return &pyerr.OSError{Class: "OSError", Msg: "missing ledger key"}
 	}
-	sessionValue, err := item(entry, "session_id")
+	sessionValue, err := entry.Item("session_id")
 	if err != nil {
 		return err
 	}
@@ -280,13 +281,13 @@ func Append(entry *json.Object) error {
 		return err
 	}
 	data += "\n"
-	fd, err := openFD(path, syscall.O_WRONLY|syscall.O_APPEND|syscall.O_CREAT, 0o600)
+	fd, err := pyos.Open(path, syscall.O_WRONLY|syscall.O_APPEND|syscall.O_CREAT, 0o600)
 	if err != nil {
 		return err
 	}
 	err = flock(fd, syscall.LOCK_EX)
 	if err == nil {
-		err = writeAll(fd, []byte(data))
+		err = pyos.WriteAll(fd, []byte(data))
 	}
 	if closeErr := closeFD(fd); closeErr != nil { // closing releases the lock
 		return closeErr
@@ -372,7 +373,7 @@ func Entries(sessionID string, cacheLimit *int) ([]*json.Object, error) {
 
 // openText opens path for reading as open() does: a directory is an IsADirectoryError.
 func openText(path string) (*os.File, error) {
-	fd, err := openFD(path, syscall.O_RDONLY, 0)
+	fd, err := pyos.Open(path, syscall.O_RDONLY, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -433,11 +434,11 @@ func WriteVerdict(toolUseID, text string) (string, error) {
 		return "", err
 	}
 	temporary := pathlib.Join(directory, safe(toolUseID)+".tmp")
-	fd, err := openFD(temporary, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_TRUNC, 0o666)
+	fd, err := pyos.Open(temporary, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_TRUNC, 0o666)
 	if err != nil {
 		return "", err
 	}
-	err = writeAll(fd, backslashReplace(text))
+	err = pyos.WriteAll(fd, []byte(pyerr.EncodeBackslashReplace(text)))
 	if closeErr := closeFD(fd); closeErr != nil {
 		return "", closeErr
 	}
@@ -565,7 +566,7 @@ func observation(session, repoID string, entry *json.Object) (*json.Object, erro
 	if err != nil {
 		return nil, err
 	}
-	pick, err := item(entry, "pick")
+	pick, err := entry.Item("pick")
 	if err != nil {
 		return nil, err
 	}

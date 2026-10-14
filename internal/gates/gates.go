@@ -617,7 +617,7 @@ func (e *expr) lookup(m map[string]string, key any) string {
 	}
 	value, ok := m[name]
 	if !found || !ok {
-		e.fail("KeyError", "%s", repr(key))
+		e.fail("KeyError", "%s", json.Repr(key))
 	}
 	return value
 }
@@ -666,7 +666,7 @@ func verdict(action, decision string, answers *json.Object, unverified, reasons 
 		field := e.get(e.get(answers, "argued_field", &json.Object{}), "choice", "decision or option descriptions")
 		name, ok := field.(string)
 		if !ok && e.err == nil {
-			e.fail("AttributeError", "'%s' object has no attribute 'startswith'", typeName(field))
+			e.fail("AttributeError", "'%s' object has no attribute 'startswith'", json.TypeName(field))
 		}
 		if strings.HasPrefix(name, "option_") {
 			name = "options." + name[len("option_"):] + ".description"
@@ -2130,7 +2130,7 @@ func interactive(command string) (bool, error) {
 	for !suppliedStdin {
 		token, ok, err := redirects.GetToken()
 		if err != nil {
-			return false, &pyerr.Error{Class: "ValueError", Msg: err.Error()}
+			return false, err
 		}
 		if !ok {
 			break
@@ -2354,7 +2354,7 @@ func scopeMatches(scope *json.Object, subject string, root any, frame int) (bool
 			text, ok := root.(string)
 			if !ok {
 				return false, &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf(
-					"argument should be a str or an os.PathLike object where __fspath__ returns a str, not '%s'", typeName(root))}
+					"argument should be a str or an os.PathLike object where __fspath__ returns a str, not '%s'", json.TypeName(root))}
 			}
 			base, err := resolve(text)
 			if err != nil {
@@ -2376,7 +2376,7 @@ func scopeMatches(scope *json.Object, subject string, root any, frame int) (bool
 		for _, item := range e.iter(e.item(scope, "paths")) {
 			allowed, ok := item.(string)
 			if !ok {
-				e.fail("AttributeError", "'%s' object has no attribute 'rstrip'", typeName(item))
+				e.fail("AttributeError", "'%s' object has no attribute 'rstrip'", json.TypeName(item))
 				break
 			}
 			if candidate == strings.TrimRight(allowed, "/") || strings.HasSuffix(allowed, "/") && strings.HasPrefix(candidate, allowed) {
@@ -2986,7 +2986,7 @@ func StopGate(final string, stopHookActive bool, ctx Context, ask Ask, frame int
 		}
 	}
 	if binding != nil && e.lt(noulOf("settled_choice"), bindAt) && e.lt(noulOf("follows_pick"), followAt) {
-		reasons = append(reasons, "The binding pick for "+repr(e.get(binding, "decision", ""))+" is `"+
+		reasons = append(reasons, "The binding pick for "+json.Repr(e.get(binding, "decision", ""))+" is `"+
 			display(e.get(binding, "pick", ""))+"`. Your reply does not follow it. Follow it.")
 	}
 	if e.err != nil {

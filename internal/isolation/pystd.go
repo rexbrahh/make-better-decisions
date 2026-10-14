@@ -6,14 +6,12 @@ package isolation
 import (
 	"errors"
 	"fmt"
-	"io"
 	"math/rand/v2"
 	"os"
 	"os/signal"
 	"runtime"
 	"strings"
 	"syscall"
-	"unsafe"
 
 	"github.com/rexbrahh/make-better-decisions/internal/py/json"
 	"github.com/rexbrahh/make-better-decisions/internal/py/ospath"
@@ -24,43 +22,8 @@ import (
 
 // isValueError reports whether Python's `except ValueError` catches err.
 func isValueError(err error) bool {
-	class := pyClass(err)
+	class := pyerr.Class(err)
 	return class == "ValueError" || class == "UnicodeEncodeError"
-}
-
-// pathHome returns str(Path.home()).
-//
-// py: Lib/pathlib/__init__.py Path.home (Python 3.15)
-func pathHome() (string, error) {
-	home, err := ospath.ExpandUser("~")
-	if err != nil {
-		return "", err
-	}
-	if home == "~" {
-		return "", &pyerr.Error{Class: "RuntimeError", Msg: "Could not determine home directory."}
-	}
-	return pathlib.Str(home), nil
-}
-
-// pathExpanduser returns str(Path(p).expanduser()) for a p that pathlib.Str normalized.
-//
-// py: Lib/pathlib/__init__.py Path.expanduser (Python 3.15)
-func pathExpanduser(p string) (string, error) {
-	if strings.HasPrefix(p, "/") || !strings.HasPrefix(p, "~") {
-		return p, nil
-	}
-	first, rest, _ := strings.Cut(p, "/")
-	home, err := ospath.ExpandUser(first)
-	if err != nil {
-		return "", err
-	}
-	if strings.HasPrefix(home, "~") {
-		return "", &pyerr.Error{Class: "RuntimeError", Msg: "Could not determine home directory."}
-	}
-	if rest == "" {
-		return pathlib.Str(home), nil
-	}
-	return pathlib.Join(pathlib.Str(home), rest), nil
 }
 
 // pathAbsolute returns str(Path(p).absolute()) for a p that pathlib.Str normalized.
@@ -78,12 +41,6 @@ func pathAbsolute(p string) (string, error) {
 		return cwd, nil
 	}
 	return pathlib.Join(cwd, p), nil
-}
-
-// exists returns os.path.exists(p), which follows symlinks and is false on any error.
-func exists(p string) bool {
-	_, err := os.Stat(p)
-	return err == nil
 }
 
 // globSuffix returns Path(dir).glob("*" + suffix) for a dir that pathlib.Str normalized and an ASCII
@@ -174,7 +131,7 @@ func knownLocale(env *json.Object, name string) bool {
 	if dir == "" {
 		dir = "/usr/share/locale"
 	}
-	return exists(dir + "/" + name + "/LC_CTYPE")
+	return ospath.Exists(dir + "/" + name + "/LC_CTYPE")
 }
 
 // osExecvpe ports os.execvpe(file, args, env): a file without "/" is searched in the PATH of env.
@@ -428,79 +385,4 @@ func normpath(p string) string {
 		}
 	}
 	return root + strings.Join(parts, "/")
-}
-
-// pyWrite writes s as sys.stderr writes a str: UTF-8 with the backslashreplace error handler, so a lone
-// surrogate or an undecodable byte (which stands for U+DC00 plus the byte) appears as its \udXXX escape.
-// Like argparse's _print_message, it ignores write errors.
-func pyWrite(w io.Writer, s string) {
-	var out strings.Builder
-	for rest := s; rest != ""; {
-		r, size := str.DecodeRune(rest)
-		if r >= 0xD800 && r <= 0xDFFF {
-			fmt.Fprintf(&out, `\u%04x`, r)
-		} else {
-			out.WriteString(rest[:size])
-		}
-		rest = rest[size:]
-	}
-	io.WriteString(w, out.String())
-}
-
-// terminalColumns ports shutil.get_terminal_size().columns: $COLUMNS when it is a positive int, else the
-// width of the terminal on file descriptor 1, else 80.
-//
-// py: Lib/shutil.py get_terminal_size (Python 3.15)
-func terminalColumns() int {
-	if columns, ok := pyInt(os.Getenv("COLUMNS")); ok && columns > 0 {
-		return columns
-	}
-	if columns, ok := winsizeColumns(1); ok && columns > 0 {
-		return columns
-	}
-	return 80
-}
-
-// pyInt ports int(s) for a str s, saturating far beyond any terminal width.
-// ponytail: only ASCII digits; int() also accepts other Unicode decimal digits.
-func pyInt(s string) (int, bool) {
-	s = str.Strip(s)
-	negative := false
-	if s != "" && (s[0] == '-' || s[0] == '+') {
-		negative, s = s[0] == '-', s[1:]
-	}
-	if s == "" || s[0] == '_' || s[len(s)-1] == '_' || strings.Contains(s, "__") {
-		return 0, false
-	}
-	n := 0
-	for i := range len(s) {
-		switch c := s[i]; {
-		case c == '_':
-		case c >= '0' && c <= '9':
-			n = min(n*10+int(c-'0'), 1<<40)
-		default:
-			return 0, false
-		}
-	}
-	if negative {
-		n = -n
-	}
-	return n, true
-}
-
-// winsizeColumns returns the terminal width on fd, as os.get_terminal_size(fd) does.
-func winsizeColumns(fd uintptr) (int, bool) {
-	var size struct{ rows, columns, xpixels, ypixels uint16 }
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, uintptr(syscall.TIOCGWINSZ), uintptr(unsafe.Pointer(&size)))
-	return int(size.columns), errno == 0
-}
-
-// isatty ports os.isatty(file.fileno()) for a writer: false for a writer without a file descriptor.
-func isatty(w io.Writer) bool {
-	file, ok := w.(*os.File)
-	if !ok {
-		return false
-	}
-	_, isTerminal := winsizeColumns(file.Fd())
-	return isTerminal
 }

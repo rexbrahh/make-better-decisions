@@ -15,6 +15,8 @@ import (
 	"github.com/rexbrahh/make-better-decisions/internal/ledger"
 	"github.com/rexbrahh/make-better-decisions/internal/policy"
 	"github.com/rexbrahh/make-better-decisions/internal/py/json"
+	"github.com/rexbrahh/make-better-decisions/internal/py/ospath"
+	"github.com/rexbrahh/make-better-decisions/internal/py/pyerr"
 	"github.com/rexbrahh/make-better-decisions/internal/py/shlex"
 )
 
@@ -216,7 +218,7 @@ func mkdir(t *testing.T, path string) {
 // already runs inside a sandbox, where sandbox_apply fails with EPERM.
 func requireSandbox(t *testing.T) {
 	t.Helper()
-	if runtime.GOOS != "darwin" || !exists("/usr/bin/sandbox-exec") {
+	if runtime.GOOS != "darwin" || !ospath.Exists("/usr/bin/sandbox-exec") {
 		t.Skip("live sandbox proof needs macOS sandbox-exec")
 	}
 	probe := exec.Command("/usr/bin/sandbox-exec", "-p", "(version 1)\n(allow default)", "/usr/bin/true")
@@ -286,7 +288,7 @@ func TestStdioBootstrapIgnoresPythonpathBeforeReadingSignedRecipe(t *testing.T) 
 	if result.stdout != "protocol" {
 		t.Errorf("stdout = %q", result.stdout)
 	}
-	if exists(marker) {
+	if ospath.Exists(marker) {
 		t.Error("startup code read private state before isolation")
 	}
 }
@@ -335,7 +337,7 @@ func TestLinuxWithoutSupportedSandboxRaisesInsteadOfRunningUnconfined(t *testing
 	mkdir(t, empty)
 	t.Setenv("PATH", empty)
 	_, err := WrapArgv([]string{"/bin/echo", "ok"}, filepath.Join(dir, "state"), true, false)
-	if pyClass(err) != unsupportedErrorClass {
+	if pyerr.Class(err) != unsupportedErrorClass {
 		t.Fatalf("err = %v, want UnsupportedIsolationError", err)
 	}
 }
@@ -395,7 +397,7 @@ func TestReadOnlyModeBlocksPublicWritesForInteractiveExec(t *testing.T) {
 	if result.code == 0 {
 		t.Errorf("the read-only write succeeded: %+v", result)
 	}
-	if exists(filepath.Join(public, "x")) {
+	if ospath.Exists(filepath.Join(public, "x")) {
 		t.Error("the read-only sandbox let a public write through")
 	}
 }
@@ -416,7 +418,7 @@ func TestExecCommandModeDerivesPrivateRootFromSignedSpec(t *testing.T) {
 	if result.code == 0 {
 		t.Errorf("the read-only command succeeded: %+v", result)
 	}
-	if exists(filepath.Join(public, "x")) {
+	if ospath.Exists(filepath.Join(public, "x")) {
 		t.Error("the read-only exec let a public write through")
 	}
 }
@@ -562,17 +564,5 @@ func TestExecvpeSearchErrors(t *testing.T) {
 	}
 	if got := bytesRepr("it's \"\\\t\xff"); got != `b'it\'s "\\\t\xff'` {
 		t.Errorf("bytesRepr = %s", got)
-	}
-}
-
-// Python's argparse suggests the closest choice through difflib.get_close_matches.
-func TestCloseMatch(t *testing.T) {
-	for _, c := range []struct{ word, want string }{
-		{"exce", "exec"}, {"exe", "exec"}, {"clade", "claude"}, {"codec", "codex"}, {"c", ""}, {"xyz", ""},
-		{"cod", "codex"}, {"claud", "claude"},
-	} {
-		if got := closeMatch(c.word, []string{"claude", "codex", "exec"}); got != c.want {
-			t.Errorf("closeMatch(%q) = %q, want %q", c.word, got, c.want)
-		}
 	}
 }

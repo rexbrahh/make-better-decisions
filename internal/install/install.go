@@ -28,7 +28,9 @@ import (
 	"github.com/rexbrahh/make-better-decisions/internal/isolation"
 	"github.com/rexbrahh/make-better-decisions/internal/ledger"
 	"github.com/rexbrahh/make-better-decisions/internal/policy"
+	"github.com/rexbrahh/make-better-decisions/internal/py/argparse"
 	"github.com/rexbrahh/make-better-decisions/internal/py/json"
+	pyos "github.com/rexbrahh/make-better-decisions/internal/py/os"
 	"github.com/rexbrahh/make-better-decisions/internal/py/ospath"
 	"github.com/rexbrahh/make-better-decisions/internal/py/pathlib"
 	"github.com/rexbrahh/make-better-decisions/internal/py/pyerr"
@@ -119,7 +121,7 @@ func CanonicalPath(value string) (string, error) {
 	if value == "" {
 		return "", installError("path must be a non-empty string")
 	}
-	expanded, err := expandUser(value)
+	expanded, err := pathlib.ExpandUser(value)
 	if err != nil {
 		return "", err
 	}
@@ -141,7 +143,7 @@ func IsolatePath(installRoot string) (string, error) {
 }
 
 func launcherPath(installRoot, relative string) (string, error) {
-	root, err := expandUser(installRoot)
+	root, err := pathlib.ExpandUser(installRoot)
 	if err != nil {
 		return "", err
 	}
@@ -164,7 +166,7 @@ func ClaudeConfigRoots(home string) ([][2]string, error) {
 		dirs = append(dirs, pathlib.Parent(config))
 	}
 	if selected := os.Getenv("CLAUDE_CONFIG_DIR"); selected != "" {
-		dir, err := expandUser(selected)
+		dir, err := pathlib.ExpandUser(selected)
 		if err != nil {
 			return nil, err
 		}
@@ -263,7 +265,7 @@ func AuthorityCodeRoot(installRoot string) (string, error) {
 	if pathlib.Name(parent) == "agent-decisions" && pathlib.Name(pathlib.Parent(pathlib.Parent(parent))) == "cache" {
 		return parent, nil // running chats can still invoke earlier cached versions
 	}
-	if exists(pathlib.Join(root, ".git")) {
+	if ospath.Exists(pathlib.Join(root, ".git")) {
 		return "", nil
 	}
 	return root, nil
@@ -389,7 +391,7 @@ func ParseCodexConfigSummary(text string) *json.Object {
 func ReadCodexConfigSummary(path *string) (*json.Object, error) {
 	var target string
 	if path == nil {
-		home, err := homeDir()
+		home, err := pathlib.Home()
 		if err != nil {
 			return nil, err
 		}
@@ -609,9 +611,9 @@ func ServerRecipe(server *json.Object, installRoot string, previousSpec *json.Ob
 	if !ok || command == "" {
 		return nil, nil
 	}
-	args := valueOr(transport, "args", []any{})
-	env := valueOr(transport, "env", json.NewObject())
-	envVars := valueOr(transport, "env_vars", []any{})
+	args := transport.ValueOr("args", []any{})
+	env := transport.ValueOr("env", json.NewObject())
+	envVars := transport.ValueOr("env_vars", []any{})
 	cwd := transport.Value("cwd")
 	if args == nil {
 		args = []any{}
@@ -767,7 +769,7 @@ func hostPlan(host, state, root, home string, protected []string, servers *json.
 // py: agent_decisions/install.py claude_servers_from_settings
 func ClaudeServersFromSettings(settings *json.Object, source string) (*json.Object, error) {
 	servers := json.NewObject()
-	raw, ok := valueOr(settings, "mcpServers", json.NewObject()).(*json.Object)
+	raw, ok := settings.ValueOr("mcpServers", json.NewObject()).(*json.Object)
 	if !ok {
 		return servers, nil
 	}
@@ -780,9 +782,9 @@ func ClaudeServersFromSettings(settings *json.Object, source string) (*json.Obje
 		if !ok || command == "" {
 			continue
 		}
-		args := orDefault(valueOr(config, "args", []any{}), []any{})
-		env := orDefault(valueOr(config, "env", json.NewObject()), json.NewObject())
-		envVars := orDefault(valueOr(config, "env_vars", valueOr(config, "envVars", []any{})), []any{})
+		args := orDefault(config.ValueOr("args", []any{}), []any{})
+		env := orDefault(config.ValueOr("env", json.NewObject()), json.NewObject())
+		envVars := orDefault(config.ValueOr("env_vars", config.ValueOr("envVars", []any{})), []any{})
 		cwd := config.Value("cwd")
 		argList, ok := stringList(args)
 		if !ok {
@@ -871,7 +873,7 @@ func DiscoverClaudePluginManifests(home string) ([]string, error) {
 		if installPath == "" || claudePluginDisabled(entry) {
 			continue
 		}
-		if manifest := pathlib.Join(installPath, ".mcp.json"); isFile(manifest) {
+		if manifest := pathlib.Join(installPath, ".mcp.json"); ospath.IsFile(manifest) {
 			manifests = append(manifests, manifest)
 		}
 	}
@@ -931,7 +933,7 @@ func claudePluginInstallPath(entry any) (string, error) {
 	if !ok || value == "" {
 		return "", nil
 	}
-	return expandUser(value)
+	return pathlib.ExpandUser(value)
 }
 
 // py: agent_decisions/install.py _claude_plugin_disabled
@@ -985,7 +987,7 @@ func ClaudeMatchersFromServers(servers *json.Object, ownerSources []string) ([]a
 			continue
 		}
 		command, ok := recipe.Value("command").(string)
-		args, isList := valueOr(recipe, "args", []any{}).([]any)
+		args, isList := recipe.ValueOr("args", []any{}).([]any)
 		if !ok || !isList {
 			continue
 		}
@@ -1048,7 +1050,7 @@ func MergeClaudeSettings(settings *json.Object, shellPrefix, stateRoot string, p
 	}
 
 	permissions := setDefaultObject(merged, "permissions")
-	deny, ok := valueOr(permissions, "deny", nil).([]any)
+	deny, ok := permissions.ValueOr("deny", nil).([]any)
 	if !ok {
 		deny = []any{}
 	}
@@ -1174,7 +1176,7 @@ func SignInstallation(entry *json.Object) error {
 func ConfigureSessionExceptions(entry, previousSpec *json.Object, add, remove []string) error {
 	var sessions any = []any{}
 	if previousSpec != nil {
-		sessions = valueOr(previousSpec, "session_review_exceptions", []any{})
+		sessions = previousSpec.ValueOr("session_review_exceptions", []any{})
 	}
 	list, ok := sessions.([]any)
 	valid := ok
@@ -1208,7 +1210,7 @@ func BackupFile(path string) (*string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !exists(source) {
+	if !ospath.Exists(source) {
 		return nil, nil
 	}
 	suffix := now().UTC().Format("20060102T150405Z") + "." + strconv.FormatInt(now().UnixNano(), 10)
@@ -1271,12 +1273,12 @@ func (w *CodexRpcWriter) Call(method string, params *json.Object) (*json.Object,
 
 // py: agent_decisions/install.py _default_app_server_socket
 func appServerSocket() (*string, error) {
-	home, err := homeDir()
+	home, err := pathlib.Home()
 	if err != nil {
 		return nil, err
 	}
 	path := pathlib.Join(home, ".codex/app-server-control/app-server-control.sock")
-	if !exists(path) {
+	if !ospath.Exists(path) {
 		return nil, nil
 	}
 	return &path, nil
@@ -1564,7 +1566,7 @@ func drainFirst(items *lineQueue) string {
 //
 // py: agent_decisions/install.py apply_codex_plan
 func ApplyCodexPlan(plan *json.Object, writer Writer) (*json.Object, error) {
-	rpcValue, err := item(plan, "config_rpc")
+	rpcValue, err := plan.Item("config_rpc")
 	if err != nil {
 		return nil, err
 	}
@@ -1573,7 +1575,7 @@ func ApplyCodexPlan(plan *json.Object, writer Writer) (*json.Object, error) {
 		return nil, installError("codex plan needs config_rpc")
 	}
 	var backup *string
-	params, isObject := valueOr(rpc, "params", json.NewObject()).(*json.Object)
+	params, isObject := rpc.ValueOr("params", json.NewObject()).(*json.Object)
 	if isObject && json.Truthy(params.Value("filePath")) {
 		path, ok := params.Value("filePath").(string)
 		if !ok {
@@ -1582,7 +1584,7 @@ func ApplyCodexPlan(plan *json.Object, writer Writer) (*json.Object, error) {
 		backup, err = BackupFile(path)
 	} else {
 		var home string
-		if home, err = homeDir(); err == nil {
+		if home, err = pathlib.Home(); err == nil {
 			backup, err = BackupFile(pathlib.Join(home, ".codex/config.toml"))
 		}
 	}
@@ -1597,18 +1599,18 @@ func ApplyCodexPlan(plan *json.Object, writer Writer) (*json.Object, error) {
 	if err := publish(plan); err != nil {
 		return nil, err
 	}
-	entry, err := item(plan, "installation_entry")
+	entry, err := plan.Item("installation_entry")
 	if err != nil {
 		return nil, err
 	}
 	if err := signEntry(entry); err != nil {
 		return nil, err
 	}
-	methodValue, err := item(rpc, "method")
+	methodValue, err := rpc.Item("method")
 	if err != nil {
 		return nil, err
 	}
-	paramsValue, err := item(rpc, "params")
+	paramsValue, err := rpc.Item("params")
 	if err != nil {
 		return nil, err
 	}
@@ -1634,14 +1636,14 @@ func ApplyClaudePlan(plan *json.Object, settingsPath string) (*json.Object, erro
 	if err := publish(plan); err != nil {
 		return nil, err
 	}
-	entry, err := item(plan, "installation_entry")
+	entry, err := plan.Item("installation_entry")
 	if err != nil {
 		return nil, err
 	}
 	if err := signEntry(entry); err != nil {
 		return nil, err
 	}
-	merged, err := item(plan, "merged_settings")
+	merged, err := plan.Item("merged_settings")
 	if err != nil {
 		return nil, err
 	}
@@ -1657,7 +1659,7 @@ func ApplyClaudePlan(plan *json.Object, settingsPath string) (*json.Object, erro
 
 // publish ports runtime.publish(Path(plan["install_root"]), home=...) in the apply functions.
 func publish(plan *json.Object) error {
-	rootValue, err := item(plan, "install_root")
+	rootValue, err := plan.Item("install_root")
 	if err != nil {
 		return err
 	}
@@ -1724,11 +1726,11 @@ func WriteJSON(path string, value *json.Object) (err error) {
 			}
 		}
 	}()
-	fd, err := openFD(temporary, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL, 0o600)
+	fd, err := pyos.Open(temporary, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}
-	err = writeAll(fd, data)
+	err = pyos.WriteAll(fd, data)
 	if err == nil {
 		if syncErr := syscall.Fsync(fd); syncErr != nil {
 			err = pyerr.NewOSError(syncErr)
@@ -1914,6 +1916,83 @@ type cliArgs struct {
 	codexSock, codexMCPJSON                                                               *string
 }
 
+// newParser builds the parser of cli. Python evaluates the defaults as it adds the arguments, so their
+// errors escape even --help. The launcher runs python3 without -I, so PYTHON_COLORS applies.
+//
+// py: agent_decisions/install.py cli
+func newParser(stdout, stderr io.Writer) (*argparse.Parser, error) {
+	stateDir, err := policy.StateDir()
+	if err != nil {
+		return nil, err
+	}
+	installRoot, err := DefaultInstallRoot()
+	if err != nil {
+		return nil, err
+	}
+	home, err := pathlib.Home()
+	if err != nil {
+		return nil, err
+	}
+	store := func(option string, fallback any) *argparse.Action {
+		return &argparse.Action{Kind: argparse.Store, Options: []string{option}, Dest: dest(option), Default: fallback}
+	}
+	appendTo := func(option, metavar, help string) *argparse.Action {
+		return &argparse.Action{Kind: argparse.Append, Options: []string{option}, Dest: dest(option), Metavar: metavar,
+			Help: help, Default: []string{}}
+	}
+	return &argparse.Parser{Prog: "agent-decisions-install", Stdout: stdout, Stderr: stderr, Actions: []*argparse.Action{
+		argparse.HelpAction(),
+		{Kind: argparse.Store, Options: []string{"--host"}, Dest: "host", Choices: []string{"codex", "claude", "both"},
+			Default: "both"},
+		{Kind: argparse.StoreTrue, Options: []string{"--apply"}, Dest: "apply"},
+		{Kind: argparse.Store, Options: []string{"--review-mode"}, Dest: "review_mode",
+			Choices: []string{"required", "availability"}, Default: "required",
+			Help: "Required blocks unchecked actions; availability permits them with a warning."},
+		appendTo("--session-review-exception", "SESSION_ID",
+			"Owner-authorized review exception for one canonical session and its native workers."),
+		appendTo("--clear-session-review-exception", "SESSION_ID", "Revoke an owner-authorized session review exception."),
+		store("--state-root", stateDir),
+		store("--install-root", installRoot),
+		store("--codex-binary", CodexBinary),
+		store("--codex-sock", nil),
+		store("--codex-config", pathlib.Join(home, ".codex/config.toml")),
+		store("--codex-mcp-json", nil),
+		store("--claude-settings", pathlib.Join(home, ".claude/settings.json")),
+		appendTo("--claude-json", "", ""),
+		appendTo("--claude-plugin-manifest", "", ""),
+	}}, nil
+}
+
+// dest returns the dest argparse derives from a long option: "--state-root" is "state_root".
+func dest(option string) string {
+	return strings.ReplaceAll(option[2:], "-", "_") // ASCII option strings
+}
+
+// parseArgs returns the parsed arguments, or the exit status after argparse printed help or an error.
+func parseArgs(parser *argparse.Parser, argv []string) (*cliArgs, int, bool) {
+	ns, err := parser.ParseArgs(argv)
+	if err != nil {
+		return nil, err.(*argparse.Exit).Code, true
+	}
+	text := func(key string) string { return ns[key].(string) }
+	optional := func(key string) *string {
+		if value, ok := ns[key].(string); ok {
+			return &value
+		}
+		return nil
+	}
+	return &cliArgs{
+		host: text("host"), reviewMode: text("review_mode"), stateRoot: text("state_root"),
+		installRoot: text("install_root"), codexBinary: text("codex_binary"), codexConfig: text("codex_config"),
+		claudeSettings: text("claude_settings"), apply: ns["apply"].(bool),
+		sessionReviewException:      ns["session_review_exception"].([]string),
+		clearSessionReviewException: ns["clear_session_review_exception"].([]string),
+		claudeJSON:                  ns["claude_json"].([]string),
+		claudePluginManifest:        ns["claude_plugin_manifest"].([]string),
+		codexSock:                   optional("codex_sock"), codexMCPJSON: optional("codex_mcp_json"),
+	}, 0, false
+}
+
 // Main runs the installer CLI with args (sys.argv[1:]) and returns its exit status. An exception that
 // escapes Python's cli prints a traceback; Main prints its last line, "Class: message", and returns 1.
 //
@@ -1921,7 +2000,7 @@ type cliArgs struct {
 func Main(args []string, stdout, stderr io.Writer) int {
 	status, err := cli(args, stdout, stderr)
 	if err != nil {
-		line := pyClass(err)
+		line := pyerr.Class(err)
 		if msg := err.Error(); msg != "" {
 			line += ": " + msg
 		}
@@ -1936,13 +2015,13 @@ func cli(argv []string, stdout, stderr io.Writer) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	args, status, exited := parser.parseArgs(argv)
+	args, status, exited := parseArgs(parser, argv)
 	if exited {
 		return status, nil
 	}
 
 	if (len(args.sessionReviewException) > 0 || len(args.clearSessionReviewException) > 0) && args.host != "codex" {
-		return parser.error("session review exceptions require --host codex"), nil
+		return parser.Error("session review exceptions require --host codex").Code, nil
 	}
 
 	if args.apply {
@@ -1957,7 +2036,7 @@ func cli(argv []string, stdout, stderr io.Writer) (int, error) {
 		if want, err := CanonicalPath(policyState); err != nil {
 			return 0, err
 		} else if state != want {
-			return parser.error("--state-root must match AGENT_DECISIONS_STATE when --apply is used"), nil
+			return parser.Error("--state-root must match AGENT_DECISIONS_STATE when --apply is used").Code, nil
 		}
 	}
 
@@ -2173,7 +2252,7 @@ func transport(server *json.Object) *json.Object {
 	if raw, ok := server.Value("transport").(*json.Object); ok {
 		return deepCopy(raw).(*json.Object)
 	}
-	transport := json.NewObject("type", valueOr(server, "type", "stdio"))
+	transport := json.NewObject("type", server.ValueOr("type", "stdio"))
 	for _, key := range []string{"command", "args", "cwd", "env", "env_vars", "url", "headers", "http_headers",
 		"env_http_headers", "http_headers_helper", "bearer_token_env_var"} {
 		if value, present := server.Get(key); present {
@@ -2186,7 +2265,7 @@ func transport(server *json.Object) *json.Object {
 // py: agent_decisions/install.py _is_codex_wrapper_transport
 func isCodexWrapperTransport(transport *json.Object, name string) bool {
 	command, ok := transport.Value("command").(string)
-	args, isList := valueOr(transport, "args", []any{}).([]any)
+	args, isList := transport.ValueOr("args", []any{}).([]any)
 	if !ok || !isList {
 		return false
 	}
@@ -2454,7 +2533,7 @@ func dedupe(paths []string) ([]string, error) {
 	seen := map[string]bool{}
 	out := []string{}
 	for _, path := range paths {
-		expanded, err := expandUser(path)
+		expanded, err := pathlib.ExpandUser(path)
 		if err != nil {
 			return nil, err
 		}

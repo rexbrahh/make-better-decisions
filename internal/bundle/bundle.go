@@ -66,7 +66,7 @@ func runtimeError(format string, args ...any) error {
 func Namespace(home string) (string, error) {
 	if home == "" {
 		var err error
-		if home, err = homeDir(); err != nil {
+		if home, err = pathlib.Home(); err != nil {
 			return "", err
 		}
 	}
@@ -114,7 +114,7 @@ func files(source string) ([]origin, error) {
 				break
 			}
 		}
-		if !isFile(path) {
+		if !ospath.IsFile(path) {
 			return nil, runtimeError("runtime source file is missing: %s", relative)
 		}
 		out = append(out, origin{relative, path})
@@ -122,7 +122,7 @@ func files(source string) ([]origin, error) {
 			out = append(out, origin{Binary, binary})
 		}
 	}
-	if !isFile(binary) {
+	if !ospath.IsFile(binary) {
 		return nil, runtimeError("runtime source file is missing: %s", Binary)
 	}
 	return out, nil
@@ -316,26 +316,6 @@ func readBytes(path string) ([]byte, error) {
 func isSymlink(path string) bool {
 	info, err := os.Lstat(path)
 	return err == nil && info.Mode()&os.ModeSymlink != 0
-}
-
-// isFile ports Path.is_file: it follows symlinks, and any stat error reads as false.
-func isFile(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.Mode().IsRegular()
-}
-
-// homeDir ports Path.home.
-//
-// py: Lib/pathlib/__init__.py Path.home (Python 3.15)
-func homeDir() (string, error) {
-	dir, err := ospath.ExpandUser("~")
-	if err != nil {
-		return "", err
-	}
-	if dir == "~" {
-		return "", &pyerr.Error{Class: "RuntimeError", Msg: "Could not determine home directory."}
-	}
-	return pathlib.Str(dir), nil
 }
 
 // absolute ports Path.absolute for a normalized path: a relative path joins the kernel's working

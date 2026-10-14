@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"slices"
@@ -16,33 +15,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/rexbrahh/make-better-decisions/internal/py/json"
-	"github.com/rexbrahh/make-better-decisions/internal/py/ospath"
 	"github.com/rexbrahh/make-better-decisions/internal/py/pathlib"
 	"github.com/rexbrahh/make-better-decisions/internal/py/pyerr"
 	"github.com/rexbrahh/make-better-decisions/internal/py/str"
 )
-
-// expandUser returns str(Path(p).expanduser()): only a leading "~" part expands.
-//
-// py: Lib/pathlib/_local.py Path.expanduser (Python 3.15)
-func expandUser(p string) (string, error) {
-	path := pathlib.Str(p)
-	if !strings.HasPrefix(path, "~") {
-		return path, nil
-	}
-	first, rest, _ := strings.Cut(path, "/")
-	home, err := ospath.ExpandUser(first)
-	if err != nil {
-		return "", err
-	}
-	if strings.HasPrefix(home, "~") {
-		return "", &pyerr.Error{Class: "RuntimeError", Msg: "Could not determine home directory."}
-	}
-	if rest == "" {
-		return pathlib.Str(home), nil
-	}
-	return pathlib.Join(pathlib.Str(home), rest), nil
-}
 
 // absolute returns str(Path(p).absolute()) for a normalized p: a relative path joins the kernel's working
 // directory.
@@ -62,24 +38,10 @@ func absolute(p string) (string, error) {
 	return pathlib.Str(cwd + "/" + p), nil
 }
 
-// homeDir returns str(Path.home()).
-//
-// py: Lib/pathlib/_local.py Path.home (Python 3.15)
-func homeDir() (string, error) {
-	home, err := ospath.ExpandUser("~")
-	if err != nil {
-		return "", err
-	}
-	if home == "~" {
-		return "", &pyerr.Error{Class: "RuntimeError", Msg: "Could not determine home directory."}
-	}
-	return pathlib.Str(home), nil
-}
-
 // baseDir returns `Path.home() if home is None else home` for the "" spelling of None.
 func baseDir(home string) (string, error) {
 	if home == "" {
-		return homeDir()
+		return pathlib.Home()
 	}
 	return pathlib.Str(home), nil
 }
@@ -132,21 +94,9 @@ func sortPaths(paths []string) {
 	})
 }
 
-// exists ports Path.exists: any error reads as false.
-func exists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
 func lexists(path string) bool {
 	_, err := os.Lstat(path)
 	return err == nil
-}
-
-// isFile ports Path.is_file: it follows symlinks, and any error reads as false.
-func isFile(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.Mode().IsRegular()
 }
 
 // readText returns Path(path).read_text(encoding="utf-8"): strict UTF-8 with universal newlines.
@@ -234,36 +184,11 @@ func spawnError(err error, binary string) error {
 
 // isValueError reports whether err is a ValueError or one of its subclasses.
 func isValueError(err error) bool {
-	switch pyClass(err) {
+	switch pyerr.Class(err) {
 	case "ValueError", "JSONDecodeError", "UnicodeDecodeError", "UnicodeEncodeError":
 		return true
 	}
 	return false
-}
-
-// pyClass returns the Python class name of err, or "" for an error outside the Python model.
-func pyClass(err error) string {
-	var typed interface{ PyType() string }
-	if errors.As(err, &typed) {
-		return typed.PyType()
-	}
-	return ""
-}
-
-// pyWrite writes s to a Python text stream with the backslashreplace error handler of sys.stderr: a lone
-// surrogate prints as \udXXX.
-func pyWrite(w io.Writer, s string) {
-	var out strings.Builder
-	for rest := s; rest != ""; {
-		r, size := str.DecodeRune(rest)
-		if r >= 0xD800 && r <= 0xDFFF {
-			fmt.Fprintf(&out, `\u%04x`, r)
-		} else {
-			out.WriteString(rest[:size])
-		}
-		rest = rest[size:]
-	}
-	io.WriteString(w, out.String())
 }
 
 // lastCodePoint returns the last code point of s as a string, or "" for an empty s.
@@ -276,28 +201,12 @@ func lastCodePoint(s string) string {
 	return ""
 }
 
-// valueOr returns o.get(key, fallback).
-func valueOr(o *json.Object, key string, fallback any) any {
-	if value, present := o.Get(key); present {
-		return value
-	}
-	return fallback
-}
-
 // orDefault returns `value or fallback`.
 func orDefault(value, fallback any) any {
 	if json.Truthy(value) {
 		return value
 	}
 	return fallback
-}
-
-// item returns d[key], with the KeyError Python raises for a missing key.
-func item(d *json.Object, key string) (any, error) {
-	if value, present := d.Get(key); present {
-		return value, nil
-	}
-	return nil, &pyerr.Error{Class: "KeyError", Msg: str.Repr(key)}
 }
 
 // stringList reports whether v is a list of str.
@@ -417,34 +326,6 @@ func uuid4() string {
 	b[6] = b[6]&0x0f | 0x40
 	b[8] = b[8]&0x3f | 0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
-}
-
-// openFD ports os.open: the descriptor is close-on-exec and EINTR retries.
-func openFD(path string, flags int, mode uint32) (int, error) {
-	for {
-		fd, err := syscall.Open(path, flags|syscall.O_CLOEXEC, mode)
-		if err == nil {
-			return fd, nil
-		}
-		if err != syscall.EINTR {
-			return -1, pyerr.NewOSError(err, path)
-		}
-	}
-}
-
-// writeAll ports the `while view: view = view[os.write(fd, view):]` loop.
-func writeAll(fd int, data []byte) error {
-	for len(data) > 0 {
-		n, err := syscall.Write(fd, data)
-		if err == syscall.EINTR {
-			continue
-		}
-		if err != nil {
-			return pyerr.NewOSError(err)
-		}
-		data = data[n:]
-	}
-	return nil
 }
 
 // copy2 ports shutil.copy2(src, dst) for a regular file: copy the bytes, then the times, the mode and, on

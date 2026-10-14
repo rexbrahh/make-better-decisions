@@ -15,6 +15,8 @@ import (
 	"github.com/rexbrahh/make-better-decisions/internal/ledger"
 	"github.com/rexbrahh/make-better-decisions/internal/policy"
 	"github.com/rexbrahh/make-better-decisions/internal/py/json"
+	"github.com/rexbrahh/make-better-decisions/internal/py/ospath"
+	"github.com/rexbrahh/make-better-decisions/internal/py/pyerr"
 )
 
 // fakeCodexArgs names the file where the fake Codex records its arguments. When it is set, the test
@@ -770,7 +772,7 @@ func TestApplyCodexUsesConfigRpcWithoutRewritingToml(t *testing.T) {
 	data, err := os.ReadFile(dir + "/config.toml")
 	check(t, err)
 	wantEqual(t, string(data), "default_permissions = \":workspace\"\n")
-	if !exists(result.Value("backup").(string)) {
+	if !ospath.Exists(result.Value("backup").(string)) {
 		t.Fatal("no backup")
 	}
 	spec, err := isolation.LatestInstallationSpec("codex")
@@ -785,7 +787,7 @@ func TestApplyCodexFailureKeepsSignedRecipeAvailableForWrappers(t *testing.T) {
 	_, err := ApplyCodexPlan(plan, writerFunc(func(string, *json.Object) (*json.Object, error) {
 		return nil, installError("config write failed")
 	}))
-	if pyClass(err) != "InstallError" {
+	if pyerr.Class(err) != "InstallError" {
 		t.Fatalf("err = %v, want InstallError", err)
 	}
 	spec, err := isolation.LatestInstallationSpec("codex")

@@ -54,7 +54,7 @@ func (e *expr) item(v any, key string) any {
 	case string:
 		e.fail("TypeError", "string indices must be integers, not 'str'")
 	default:
-		e.fail("TypeError", "'%s' object is not subscriptable", typeName(v))
+		e.fail("TypeError", "'%s' object is not subscriptable", json.TypeName(v))
 	}
 	return nil
 }
@@ -66,7 +66,7 @@ func (e *expr) get(v, key, def any) any {
 	}
 	object, ok := v.(*json.Object)
 	if !ok {
-		e.fail("AttributeError", "'%s' object has no attribute 'get'", typeName(v))
+		e.fail("AttributeError", "'%s' object has no attribute 'get'", json.TypeName(v))
 		return nil
 	}
 	name, found := e.key(key, "a dict key")
@@ -89,7 +89,7 @@ func (e *expr) key(key any, as string) (name string, found bool) {
 	case string:
 		return key, true
 	case []any, *json.Object:
-		name := typeName(key)
+		name := json.TypeName(key)
 		e.fail("TypeError", "cannot use '%s' as %s (unhashable type: '%s')", name, as, name)
 	}
 	return "", false
@@ -124,7 +124,7 @@ func (e *expr) iter(v any) []any {
 		}
 		return chars
 	}
-	e.fail("TypeError", "'%s' object is not iterable", typeName(v))
+	e.fail("TypeError", "'%s' object is not iterable", json.TypeName(v))
 	return nil
 }
 
@@ -135,7 +135,7 @@ func (e *expr) items(v any) *json.Object {
 	}
 	object, ok := v.(*json.Object)
 	if !ok {
-		e.fail("AttributeError", "'%s' object has no attribute 'items'", typeName(v))
+		e.fail("AttributeError", "'%s' object has no attribute 'items'", json.TypeName(v))
 		return &json.Object{}
 	}
 	return object
@@ -169,7 +169,7 @@ func (e *expr) compare(a any, op string, b any) bool {
 	x, xNaN, xOK := number(a)
 	y, yNaN, yOK := number(b)
 	if !xOK || !yOK {
-		e.fail("TypeError", "'%s' not supported between instances of '%s' and '%s'", op, typeName(a), typeName(b))
+		e.fail("TypeError", "'%s' not supported between instances of '%s' and '%s'", op, json.TypeName(a), json.TypeName(b))
 		return false
 	}
 	if xNaN || yNaN {
@@ -219,7 +219,7 @@ func (e *expr) negated(v any) float64 {
 		f, _ := strconv.ParseFloat(string(v), 64)
 		return -f
 	}
-	e.fail("TypeError", "bad operand type for unary -: '%s'", typeName(v))
+	e.fail("TypeError", "bad operand type for unary -: '%s'", json.TypeName(v))
 	return 0
 }
 
@@ -246,7 +246,7 @@ func (e *expr) fixed2(v any) string {
 	case string:
 		e.fail("ValueError", "Unknown format code 'f' for object of type 'str'")
 	default:
-		e.fail("TypeError", "unsupported format string passed to %s.__format__", typeName(v))
+		e.fail("TypeError", "unsupported format string passed to %s.__format__", json.TypeName(v))
 	}
 	return ""
 }
@@ -276,71 +276,12 @@ func (e *expr) equal(a, b any) bool {
 	return same
 }
 
-// typeName returns type(v).__name__ for a decoded JSON value.
-func typeName(v any) string {
-	switch v.(type) {
-	case nil:
-		return "NoneType"
-	case bool:
-		return "bool"
-	case json.Int:
-		return "int"
-	case float64:
-		return "float"
-	case string:
-		return "str"
-	case []any:
-		return "list"
-	}
-	return "dict"
-}
-
 // display returns str(v) for a decoded JSON value.
 func display(v any) string {
 	if text, ok := v.(string); ok {
 		return text
 	}
-	return repr(v)
-}
-
-// repr returns repr(v) for a decoded JSON value. Python's C stack limit on repr of deep nesting is not
-// modelled.
-func repr(v any) string {
-	switch v := v.(type) {
-	case nil:
-		return "None"
-	case bool:
-		if v {
-			return "True"
-		}
-		return "False"
-	case float64:
-		switch text, _ := json.Dumps(v, json.Options{}); text { // json.dumps writes float.__repr__
-		case "NaN":
-			return "nan"
-		case "Infinity":
-			return "inf"
-		case "-Infinity":
-			return "-inf"
-		default:
-			return text
-		}
-	case string:
-		return pystr.Repr(v)
-	case []any:
-		items := make([]string, len(v))
-		for i, item := range v {
-			items[i] = repr(item)
-		}
-		return "[" + strings.Join(items, ", ") + "]"
-	case *json.Object:
-		items := make([]string, 0, v.Len())
-		for _, key := range v.Keys() {
-			items = append(items, pystr.Repr(key)+": "+repr(v.Value(key)))
-		}
-		return "{" + strings.Join(items, ", ") + "}"
-	}
-	return string(v.(json.Int))
+	return json.Repr(v)
 }
 
 // isValueError reports whether err is a Python ValueError or one of its subclasses.
@@ -376,7 +317,7 @@ func pathOf(cwd any) (string, error) {
 	dir, ok := cwd.(string)
 	if !ok {
 		return "", &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf(
-			"argument should be a str or an os.PathLike object where __fspath__ returns a str, not '%s'", typeName(cwd))}
+			"argument should be a str or an os.PathLike object where __fspath__ returns a str, not '%s'", json.TypeName(cwd))}
 	}
 	return pathlib.Str(dir), nil
 }

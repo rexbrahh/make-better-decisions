@@ -11,9 +11,7 @@ package policy
 import (
 	"os"
 
-	"github.com/rexbrahh/make-better-decisions/internal/py/ospath"
 	"github.com/rexbrahh/make-better-decisions/internal/py/pathlib"
-	"github.com/rexbrahh/make-better-decisions/internal/py/pyerr"
 )
 
 // py: agent_decisions/policy.py MODEL, REVIEW_CONTRACT, URL, TIMEOUT_S
@@ -29,7 +27,7 @@ const (
 //
 // py: agent_decisions/policy.py KEY_FILE
 func KeyFile() (string, error) {
-	home, err := home()
+	home, err := pathlib.Home()
 	if err != nil {
 		return "", err
 	}
@@ -80,23 +78,9 @@ func StateDir() (string, error) {
 	if override := os.Getenv("AGENT_DECISIONS_STATE"); override != "" {
 		return pathlib.Str(override), nil
 	}
-	home, err := home()
+	home, err := pathlib.Home()
 	if err != nil {
 		return "", err
 	}
 	return pathlib.Join(home, ".local/state/agent-decisions"), nil
-}
-
-// home returns str(Path.home()), or the RuntimeError that Path.home() raises.
-//
-// py: Lib/pathlib/_local.py Path.home (Python 3.15)
-func home() (string, error) {
-	dir, err := ospath.ExpandUser("~")
-	if err != nil {
-		return "", err
-	}
-	if dir == "~" {
-		return "", &pyerr.Error{Class: "RuntimeError", Msg: "Could not determine home directory."}
-	}
-	return pathlib.Str(dir), nil
 }

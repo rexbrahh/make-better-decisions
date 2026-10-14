@@ -26,7 +26,8 @@ const (
 // py: Lib/shlex.py shlex.read_token (Python 3.15)
 type Error struct{ msg string }
 
-func (e *Error) Error() string { return e.msg }
+func (e *Error) Error() string  { return e.msg }
+func (e *Error) PyType() string { return "ValueError" }
 
 // Stream is the instream that a Lexer reads. Read is instream.read(1): one character, or "" at the end.
 // ReadLine is instream.readline(); the Lexer calls it only to skip a comment.

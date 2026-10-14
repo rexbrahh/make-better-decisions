@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/rexbrahh/make-better-decisions/internal/py/ospath"
 	"github.com/rexbrahh/make-better-decisions/internal/py/pyerr"
 )
 
@@ -97,4 +98,40 @@ func Mkdir(p string, mode uint32, parents bool) error {
 		return nil
 	}
 	return pyerr.NewOSError(err, p)
+}
+
+// Home returns str(Path.home()).
+//
+// py: Lib/pathlib/__init__.py Path.home (Python 3.15)
+func Home() (string, error) {
+	home, err := ospath.ExpandUser("~")
+	if err != nil {
+		return "", err
+	}
+	if home == "~" {
+		return "", &pyerr.Error{Class: "RuntimeError", Msg: "Could not determine home directory."}
+	}
+	return Str(home), nil
+}
+
+// ExpandUser returns str(Path(p).expanduser()): only a leading "~" part expands.
+//
+// py: Lib/pathlib/__init__.py Path.expanduser (Python 3.15)
+func ExpandUser(p string) (string, error) {
+	path := Str(p)
+	if !strings.HasPrefix(path, "~") {
+		return path, nil
+	}
+	first, rest, _ := strings.Cut(path, "/")
+	home, err := ospath.ExpandUser(first)
+	if err != nil {
+		return "", err
+	}
+	if strings.HasPrefix(home, "~") {
+		return "", &pyerr.Error{Class: "RuntimeError", Msg: "Could not determine home directory."}
+	}
+	if rest == "" {
+		return Str(home), nil
+	}
+	return Join(Str(home), rest), nil
 }

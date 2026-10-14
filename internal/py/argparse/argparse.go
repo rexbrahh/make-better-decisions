@@ -1,8 +1,10 @@
-package isolation
-
-// The subset of CPython 3.15's argparse that the agent-decisions-isolate parser uses: help, store and
-// store_true optionals, one subparsers positional, abbreviated options, the errors with their
-// close-match suggestions, and the usage and help text with its wrapping and colors.
+// Package argparse ports the subset of CPython 3.15's argparse that the agent-decisions commands use: help,
+// store, store_true and append optionals, one subparsers positional, required arguments, abbreviated
+// options, the errors with their close-match suggestions, and the usage and help text with its wrapping
+// and colors.
+//
+// A Parser prints as ArgumentParser does and returns an *Exit where argparse raises SystemExit.
+package argparse
 
 import (
 	"fmt"
@@ -11,52 +13,72 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"syscall"
+	"unsafe"
 
+	"github.com/rexbrahh/make-better-decisions/internal/py/pyerr"
 	pyre "github.com/rexbrahh/make-better-decisions/internal/py/re"
 	"github.com/rexbrahh/make-better-decisions/internal/py/str"
 )
 
-type actionKind int
+// Kind is the action class of an Action, with the nargs that argparse gives it.
+type Kind int
 
 const (
-	helpAction      actionKind = iota // action="help", nargs=0
-	storeAction                       // the default action, nargs=None
-	storeTrueAction                   // action="store_true", nargs=0
-	parsersAction                     // add_subparsers(), nargs=PARSER
+	Help      Kind = iota // action="help", nargs=0
+	Store                 // the default action, nargs=None
+	StoreTrue             // action="store_true", nargs=0
+	Append                // action="append", nargs=None
+	Parsers               // add_subparsers(), nargs=PARSER
 )
 
-// action is an argparse Action. An action without options is positional.
-type action struct {
-	kind       actionKind
-	options    []string
-	dest       string   // "" is SUPPRESS
-	choices    []string // nil is None
-	required   bool
-	help       string  // "" is None
-	parser     *parser // the parser of the only subcommand of a parsersAction
-	choiceHelp string  // the help of that subcommand
+// Action is an argparse Action. An action without options is positional: a Store positional has
+// nargs=None and is always required, and a Parsers positional is the subcommand.
+type Action struct {
+	Kind     Kind
+	Options  []string
+	Dest     string   // "" is SUPPRESS
+	Choices  []string // nil is None
+	Required bool
+	Metavar  string // "" is None
+	Help     string // "" is None
+	// Default is the namespace value before parsing: nil (None), a string or a []string. A StoreTrue
+	// action with a nil Default defaults to false, as store_true does.
+	Default any
+	// Parser and ChoiceHelp are the parser and help of the only subcommand of a Parsers action, which is
+	// named Choices[0].
+	Parser     *Parser
+	ChoiceHelp string
 }
 
-type parser struct {
-	prog    string
-	actions []*action
+// HelpAction returns the -h/--help action that ArgumentParser adds with add_help=True.
+func HelpAction() *Action {
+	return &Action{Kind: Help, Options: []string{"-h", "--help"}, Help: "show this help message and exit"}
 }
 
-// streams are the files that argparse prints to: sys.stdout and sys.stderr.
-type streams struct {
-	stdout, stderr io.Writer
+// Parser is an ArgumentParser. Stdout and Stderr are sys.stdout and sys.stderr; a subcommand parser prints
+// to those of its parent. IgnoreEnvironment is sys.flags.ignore_environment (python3 -I or -E), which
+// makes the colors ignore PYTHON_COLORS.
+type Parser struct {
+	Prog              string
+	Actions           []*Action
+	Stdout, Stderr    io.Writer
+	IgnoreEnvironment bool
 }
 
-// systemExit is the SystemExit that argparse raises after it prints help or an error.
-type systemExit struct {
-	code int
+// Namespace is an argparse.Namespace: dest to value, where nil is None.
+type Namespace map[string]any
+
+// Exit is the SystemExit that argparse raises after it prints help or an error.
+type Exit struct {
+	Code int
 }
 
-func (e *systemExit) Error() string { return fmt.Sprintf("exit status %d", e.code) }
+func (e *Exit) Error() string { return fmt.Sprintf("exit status %d", e.Code) }
 
 // argumentError is argparse.ArgumentError. A nil action has no argument name.
 type argumentError struct {
-	action *action
+	action *Action
 	msg    string
 }
 
@@ -67,89 +89,111 @@ func (e *argumentError) Error() string {
 	return "argument " + actionName(e.action) + ": " + e.msg
 }
 
-// namespace is an argparse.Namespace: dest to value, where nil is None.
-type namespace map[string]any
-
 const unrecognizedArgs = "_unrecognized_args"
 
-// negativeNumber is _negative_number_matcher. The parsers here have no option that looks like a negative
+// negativeNumber is _negative_number_matcher. No parser here has an option that looks like a negative
 // number, so an argument that matches it is positional.
 var negativeNumber = regexp.MustCompile(`\A-\.?` + pyre.Digit)
 
-// isolateParser builds the parser of main_isolate.
-//
-// py: agent_decisions/isolation.py main_isolate
-func isolateParser() *parser {
-	hosts := []string{"claude", "codex"}
-	run := &parser{prog: "agent-decisions-isolate exec", actions: []*action{
-		helpArgument(),
-		{kind: storeAction, options: []string{"--host"}, dest: "host", choices: hosts, required: true},
-		{kind: storeAction, options: []string{"--command"}, dest: "command", required: true},
-		{kind: storeTrueAction, options: []string{"--read-only"}, dest: "read_only"},
-	}}
-	return &parser{prog: "agent-decisions-isolate", actions: []*action{
-		helpArgument(),
-		{kind: parsersAction, dest: "mode", choices: []string{"exec"}, parser: run,
-			choiceHelp: "run an opaque command from the signed host spec"},
-		{kind: storeAction, options: []string{"--server"}, dest: "server"},
-		{kind: storeAction, options: []string{"--host"}, dest: "host", choices: hosts},
-	}}
-}
-
-func helpArgument() *action {
-	return &action{kind: helpAction, options: []string{"-h", "--help"}, help: "show this help message and exit"}
-}
-
 // optionAction returns the action of an option string, or nil.
-func (p *parser) optionAction(option string) *action {
-	for _, a := range p.actions {
-		if slices.Contains(a.options, option) {
+func (p *Parser) optionAction(option string) *Action {
+	for _, a := range p.Actions {
+		if slices.Contains(a.Options, option) {
 			return a
 		}
 	}
 	return nil
 }
 
-// defaultValue returns the namespace default of a: None, or False for store_true.
-func (a *action) defaultValue() any {
-	if a.kind == storeTrueAction {
+// defaultValue returns the namespace default of a.
+func (a *Action) defaultValue() any {
+	if a.Kind == StoreTrue && a.Default == nil {
 		return false
+	}
+	return a.Default
+}
+
+// required reports whether a is required: a positional Store action always is, as add_argument makes
+// every positional of nargs=None required.
+//
+// py: Lib/argparse.py _ActionsContainer._get_positional_kwargs (Python 3.15)
+func (a *Action) required() bool {
+	return a.Required || len(a.Options) == 0 && a.Kind == Store
+}
+
+// py: Lib/argparse.py _get_action_name (Python 3.15)
+func actionName(a *Action) string {
+	switch {
+	case len(a.Options) > 0:
+		return strings.Join(a.Options, "/")
+	case a.Metavar != "":
+		return a.Metavar
+	case a.Dest != "":
+		return a.Dest
+	}
+	return "{" + strings.Join(a.Choices, ",") + "}"
+}
+
+// matchArgumentsPartial returns the argument counts of the longest prefix of actions whose nargs patterns
+// match the start of pattern.
+//
+// py: Lib/argparse.py ArgumentParser._match_arguments_partial, _get_nargs_pattern (Python 3.15)
+func matchArgumentsPartial(actions []*Action, pattern string) []int {
+	for i := len(actions); i > 0; i-- {
+		var expression strings.Builder
+		expression.WriteString(`\A`)
+		for _, a := range actions[:i] {
+			if a.Kind == Parsers {
+				expression.WriteString(`(-*A[-AO]*)`)
+			} else {
+				expression.WriteString(`(-*A-*)`) // a positional Store, nargs=None
+			}
+		}
+		// Go's regexp picks the submatches that a backtracking matcher such as Python's re picks.
+		match := regexp.MustCompile(expression.String()).FindStringSubmatchIndex(pattern)
+		if match == nil {
+			continue
+		}
+		counts := make([]int, i)
+		for j := range counts {
+			counts[j] = match[2*j+3] - match[2*j+2]
+		}
+		if end := match[1]; end < len(pattern) && pattern[end] == 'O' {
+			for len(counts) > 0 && counts[len(counts)-1] == 0 {
+				counts = counts[:len(counts)-1]
+			}
+		}
+		return counts
 	}
 	return nil
 }
 
-// py: Lib/argparse.py _get_action_name (Python 3.15)
-func actionName(a *action) string {
-	if len(a.options) > 0 {
-		return strings.Join(a.options, "/")
-	}
-	return a.dest
-}
-
+// ParseArgs returns the namespace of args, or the *Exit after it printed help or an error.
+//
 // py: Lib/argparse.py ArgumentParser.parse_args (Python 3.15)
-func (p *parser) parseArgs(args []string, out *streams) (namespace, error) {
-	ns, extras, err := p.parseKnownArgs(args, out)
+func (p *Parser) ParseArgs(args []string) (Namespace, error) {
+	ns, extras, err := p.parseKnownArgs(args)
 	if err != nil {
 		return nil, err
 	}
 	if len(extras) > 0 {
-		return nil, p.error("unrecognized arguments: "+strings.Join(extras, " "), out)
+		return nil, p.Error("unrecognized arguments: " + strings.Join(extras, " "))
 	}
 	return ns, nil
 }
 
 // py: Lib/argparse.py ArgumentParser._parse_known_args2 (Python 3.15)
-func (p *parser) parseKnownArgs(args []string, out *streams) (namespace, []string, error) {
-	ns := namespace{}
-	for _, a := range p.actions {
-		if a.dest != "" {
-			ns[a.dest] = a.defaultValue()
+func (p *Parser) parseKnownArgs(args []string) (Namespace, []string, error) {
+	ns := Namespace{}
+	for _, a := range p.Actions {
+		if a.Dest != "" {
+			ns[a.Dest] = a.defaultValue()
 		}
 	}
-	extras, err := p.parseKnown(args, ns, out)
+	extras, err := p.parseKnown(args, ns)
 	if err != nil {
 		if argErr, ok := err.(*argumentError); ok {
-			return nil, nil, p.error(argErr.Error(), out)
+			return nil, nil, p.Error(argErr.Error())
 		}
 		return nil, nil, err
 	}
@@ -163,14 +207,14 @@ func (p *parser) parseKnownArgs(args []string, out *streams) (namespace, []strin
 // optionTuple is one interpretation of an option argument. A nil action is an unknown option. sep is ""
 // for None and "", and explicit is nil for None.
 type optionTuple struct {
-	action   *action
+	action   *Action
 	option   string
 	sep      string
 	explicit *string
 }
 
 // py: Lib/argparse.py ArgumentParser._parse_known_args (Python 3.15)
-func (p *parser) parseKnown(args []string, ns namespace, out *streams) ([]string, error) {
+func (p *Parser) parseKnown(args []string, ns Namespace) ([]string, error) {
 	// 'O' marks an option, 'A' an argument and '-' the first "--", after which everything is an argument.
 	options := map[int][]optionTuple{}
 	pattern := make([]byte, 0, len(args))
@@ -188,26 +232,32 @@ func (p *parser) parseKnown(args []string, ns namespace, out *streams) ([]string
 		}
 	}
 
-	seen := map[*action]bool{}
-	takeAction := func(a *action, values []string) error {
+	seen := map[*Action]bool{}
+	takeAction := func(a *Action, values []string) error {
 		seen[a] = true
-		switch a.kind {
-		case helpAction:
-			p.printHelp(out.stdout)
-			return &systemExit{0}
-		case storeTrueAction:
-			ns[a.dest] = true
-		case storeAction:
+		switch a.Kind {
+		case Help:
+			p.printHelp(p.Stdout)
+			return &Exit{0}
+		case StoreTrue:
+			ns[a.Dest] = true
+		case Store, Append:
 			if err := checkValue(a, values[0]); err != nil {
 				return err
 			}
-			ns[a.dest] = values[0]
-		case parsersAction:
+			if a.Kind == Store {
+				ns[a.Dest] = values[0]
+			} else {
+				ns[a.Dest] = append(slices.Clone(ns[a.Dest].([]string)), values[0])
+			}
+		case Parsers:
 			if err := checkValue(a, values[0]); err != nil {
 				return err
 			}
-			ns[a.dest] = values[0]
-			subNamespace, subExtras, err := a.parser.parseKnownArgs(values[1:], out)
+			ns[a.Dest] = values[0]
+			sub := *a.Parser
+			sub.Stdout, sub.Stderr, sub.IgnoreEnvironment = p.Stdout, p.Stderr, p.IgnoreEnvironment
+			subNamespace, subExtras, err := sub.parseKnownArgs(values[1:])
 			if err != nil {
 				return err
 			}
@@ -235,7 +285,7 @@ func (p *parser) parseKnown(args []string, ns namespace, out *streams) ([]string
 		}
 		a, option, sep, explicit := tuples[0].action, tuples[0].option, tuples[0].sep, tuples[0].explicit
 		type call struct {
-			action *action
+			action *Action
 			values []string
 		}
 		var calls []call
@@ -248,7 +298,7 @@ func (p *parser) parseKnown(args []string, ns namespace, out *streams) ([]string
 				return start + 1, nil
 			case explicit == nil:
 				count := 0
-				if a.kind == storeAction {
+				if takesValue(a) {
 					if start+1 >= len(pattern) || pattern[start+1] != 'A' {
 						return 0, &argumentError{a, "expected one argument"}
 					}
@@ -257,7 +307,7 @@ func (p *parser) parseKnown(args []string, ns namespace, out *streams) ([]string
 				stop = start + 1 + count
 				calls = append(calls, call{a, args[start+1 : stop]})
 				break loop
-			case a.kind == storeAction:
+			case takesValue(a):
 				calls = append(calls, call{a, []string{*explicit}})
 				break loop
 			case option[1] != '-' && *explicit != "":
@@ -295,26 +345,23 @@ func (p *parser) parseKnown(args []string, ns namespace, out *streams) ([]string
 		return stop, nil
 	}
 
-	var positionals []*action
-	for _, a := range p.actions {
-		if len(a.options) == 0 {
+	var positionals []*Action
+	for _, a := range p.Actions {
+		if len(a.Options) == 0 {
 			positionals = append(positionals, a)
 		}
 	}
 	consumePositionals := func(start int) (int, error) {
-		// The only positional is a parsersAction, whose nargs pattern '(-*A[-AO]*)' takes everything left
-		// once an argument follows the leading "--".
-		var counts []int
-		if len(positionals) > 0 {
-			selected := strings.TrimLeft(string(pattern[start:]), "-")
-			if strings.HasPrefix(selected, "A") {
-				counts = []int{len(pattern) - start}
-			}
-		}
+		counts := matchArgumentsPartial(positionals, string(pattern[start:]))
 		for i, count := range counts {
 			values := slices.Clone(args[start : start+count])
-			if pattern[start] == '-' {
-				values = slices.Delete(values, 0, 1) // args.remove('--')
+			switch {
+			case positionals[i].Kind == Parsers:
+				if pattern[start] == '-' {
+					values = slices.Delete(values, 0, 1) // args.remove('--')
+				}
+			case strings.IndexByte(string(pattern[start:start+count]), '-') >= 0:
+				values = slices.Delete(values, slices.Index(values, "--"), slices.Index(values, "--")+1)
 			}
 			start += count
 			if err := takeAction(positionals[i], values); err != nil {
@@ -363,8 +410,8 @@ func (p *parser) parseKnown(args []string, ns namespace, out *streams) ([]string
 	extras = append(extras, args[stop:]...)
 
 	var required []string
-	for _, a := range p.actions {
-		if !seen[a] && a.required {
+	for _, a := range p.Actions {
+		if !seen[a] && a.required() {
 			required = append(required, actionName(a))
 		}
 	}
@@ -377,7 +424,7 @@ func (p *parser) parseKnown(args []string, ns namespace, out *streams) ([]string
 // parseOptional returns the interpretations of arg as an option, or nil when it is positional.
 //
 // py: Lib/argparse.py ArgumentParser._parse_optional (Python 3.15)
-func (p *parser) parseOptional(arg string) []optionTuple {
+func (p *Parser) parseOptional(arg string) []optionTuple {
 	if arg == "" || arg[0] != '-' {
 		return nil
 	}
@@ -405,7 +452,7 @@ func (p *parser) parseOptional(arg string) []optionTuple {
 // with.
 //
 // py: Lib/argparse.py ArgumentParser._get_option_tuples (Python 3.15)
-func (p *parser) optionTuples(arg string) []optionTuple {
+func (p *Parser) optionTuples(arg string) []optionTuple {
 	prefix, explicitText, found := strings.Cut(arg, "=")
 	sep, explicit := "", (*string)(nil)
 	if found {
@@ -413,8 +460,8 @@ func (p *parser) optionTuples(arg string) []optionTuple {
 	}
 	short, shortExplicit := str.SliceTo(arg, 2), str.SliceFrom(arg, 2)
 	var result []optionTuple
-	for _, a := range p.actions {
-		for _, option := range a.options {
+	for _, a := range p.Actions {
+		for _, option := range a.Options {
 			switch {
 			case arg[1] != '-' && option == short:
 				result = append(result, optionTuple{a, option, "", &shortExplicit})
@@ -427,39 +474,47 @@ func (p *parser) optionTuples(arg string) []optionTuple {
 }
 
 // py: Lib/argparse.py ArgumentParser._check_value (Python 3.15)
-func checkValue(a *action, value string) error {
-	if a.choices == nil || slices.Contains(a.choices, value) {
+func checkValue(a *Action, value string) error {
+	if a.Choices == nil || slices.Contains(a.Choices, value) {
 		return nil
 	}
-	quoted := make([]string, len(a.choices))
-	for i, choice := range a.choices {
+	quoted := make([]string, len(a.Choices))
+	for i, choice := range a.Choices {
 		quoted[i] = str.Repr(choice)
 	}
 	choices := strings.Join(quoted, ", ")
-	if closest := closeMatch(value, a.choices); closest != "" {
+	if closest := closeMatch(value, a.Choices); closest != "" {
 		return &argumentError{a, fmt.Sprintf("invalid choice: %s, maybe you meant %s? (choose from %s)",
 			str.Repr(value), str.Repr(closest), choices)}
 	}
 	return &argumentError{a, fmt.Sprintf("invalid choice: %s (choose from %s)", str.Repr(value), choices)}
 }
 
+// Error prints the usage and message to Stderr and returns the SystemExit of status 2.
+//
 // py: Lib/argparse.py ArgumentParser.error (Python 3.15)
-func (p *parser) error(message string, out *streams) *systemExit {
-	p.printUsage(out.stderr)
-	t := themeFor(out.stderr)
-	pyWrite(out.stderr, fmt.Sprintf("%s: %serror:%s %s%s%s\n", p.prog, t.error, t.reset, t.message, message, t.reset))
-	return &systemExit{2}
+func (p *Parser) Error(message string) *Exit {
+	p.printUsage(p.Stderr)
+	t := p.themeFor(p.Stderr)
+	write(p.Stderr, fmt.Sprintf("%s: %serror:%s %s%s%s\n", p.Prog, t.error, t.reset, t.message, message, t.reset))
+	return &Exit{2}
 }
 
 // py: Lib/argparse.py ArgumentParser.print_usage (Python 3.15)
-func (p *parser) printUsage(w io.Writer) {
-	f := newFormatter(p.prog, themeFor(w))
-	pyWrite(w, strings.Trim(f.formatUsage(p), "\n")+"\n")
+func (p *Parser) printUsage(w io.Writer) {
+	f := newFormatter(p.Prog, p.themeFor(w))
+	write(w, strings.Trim(f.formatUsage(p), "\n")+"\n")
 }
 
 // py: Lib/argparse.py ArgumentParser.print_help (Python 3.15)
-func (p *parser) printHelp(w io.Writer) {
-	pyWrite(w, newFormatter(p.prog, themeFor(w)).formatHelp(p))
+func (p *Parser) printHelp(w io.Writer) {
+	write(w, newFormatter(p.Prog, p.themeFor(w)).formatHelp(p))
+}
+
+// write ports _print_message: it writes s with the backslashreplace error handler of sys.stderr and
+// ignores write errors.
+func write(w io.Writer, s string) {
+	io.WriteString(w, pyerr.EncodeBackslashReplace(s))
 }
 
 // theme is the argparse section of a _colorize theme. The zero theme has no colors.
@@ -479,9 +534,11 @@ var colorTheme = theme{
 // themeFor returns the theme for text written to w.
 //
 // py: Lib/_colorize.py can_colorize (Python 3.15)
-func themeFor(w io.Writer) *theme {
-	// python3 -I ignores PYTHON_COLORS.
+func (p *Parser) themeFor(w io.Writer) *theme {
 	switch {
+	case !p.IgnoreEnvironment && os.Getenv("PYTHON_COLORS") == "0":
+	case !p.IgnoreEnvironment && os.Getenv("PYTHON_COLORS") == "1":
+		return &colorTheme
 	case os.Getenv("NO_COLOR") != "":
 	case os.Getenv("FORCE_COLOR") != "":
 		return &colorTheme
@@ -516,44 +573,46 @@ func newFormatter(prog string, t *theme) *formatter {
 	return &formatter{prog: prog, width: width, maxHelpPosition: min(24, max(width-20, 4)), theme: t}
 }
 
-// metavar returns the metavar of a: its choices, or its dest (upper-cased for an option).
+// metavar returns the metavar of a: its metavar, its choices, or its dest (upper-cased for an option).
 //
 // py: Lib/argparse.py HelpFormatter._metavar_formatter (Python 3.15)
-func metavar(a *action) string {
+func metavar(a *Action) string {
 	switch {
-	case a.choices != nil:
-		return "{" + strings.Join(a.choices, ",") + "}"
-	case len(a.options) > 0:
-		return strings.ToUpper(a.dest) // ASCII dest
+	case a.Metavar != "":
+		return a.Metavar
+	case a.Choices != nil:
+		return "{" + strings.Join(a.Choices, ",") + "}"
+	case len(a.Options) > 0:
+		return strings.ToUpper(a.Dest) // ASCII dest
 	}
-	return a.dest
+	return a.Dest
 }
 
 // py: Lib/argparse.py HelpFormatter._format_args (Python 3.15)
-func formatArgs(a *action) string {
-	if a.kind == parsersAction {
+func formatArgs(a *Action) string {
+	if a.Kind == Parsers {
 		return metavar(a) + " ..."
 	}
 	return metavar(a)
 }
 
-func takesValue(a *action) bool {
-	return a.kind == storeAction || a.kind == parsersAction
+func takesValue(a *Action) bool {
+	return a.Kind == Store || a.Kind == Append || a.Kind == Parsers
 }
 
 // usageParts returns the usage parts of the actions, optionals first, and the index of the first
 // positional.
 //
 // py: Lib/argparse.py HelpFormatter._get_actions_usage_parts (Python 3.15)
-func (f *formatter) usageParts(p *parser) ([]string, int) {
+func (f *formatter) usageParts(p *Parser) ([]string, int) {
 	t := f.theme
 	var optionals, positionals []string
-	for _, a := range p.actions {
-		if len(a.options) == 0 {
+	for _, a := range p.Actions {
+		if len(a.Options) == 0 {
 			positionals = append(positionals, t.summaryAction+formatArgs(a)+t.reset)
 			continue
 		}
-		option := a.options[0]
+		option := a.Options[0]
 		color := t.summaryShortOption
 		if len(option) > 2 {
 			color = t.summaryLongOption
@@ -562,7 +621,7 @@ func (f *formatter) usageParts(p *parser) ([]string, int) {
 		if takesValue(a) {
 			part = color + option + " " + t.summaryLabel + formatArgs(a) + t.reset
 		}
-		if !a.required {
+		if !a.Required {
 			part = "[" + part + "]"
 		}
 		optionals = append(optionals, part)
@@ -573,7 +632,7 @@ func (f *formatter) usageParts(p *parser) ([]string, int) {
 // formatUsage returns the usage block, which ends with a blank line.
 //
 // py: Lib/argparse.py HelpFormatter._format_usage (Python 3.15)
-func (f *formatter) formatUsage(p *parser) string {
+func (f *formatter) formatUsage(p *Parser) string {
 	t := f.theme
 	const prefix = "usage: "
 	prog := f.prog
@@ -631,24 +690,24 @@ func (f *formatter) formatUsage(p *parser) string {
 	return t.usage + prefix + t.reset + usage + "\n\n"
 }
 
-// subactions returns the choice pseudo-actions of a parsersAction, which list each subcommand.
+// subactions returns the choice pseudo-actions of a Parsers action, which list each subcommand.
 //
 // py: Lib/argparse.py _SubParsersAction._get_subactions (Python 3.15)
-func subactions(a *action) []*action {
-	if a.kind != parsersAction {
+func subactions(a *Action) []*Action {
+	if a.Kind != Parsers {
 		return nil
 	}
-	return []*action{{kind: storeAction, dest: a.choices[0], help: a.choiceHelp}}
+	return []*Action{{Kind: Store, Dest: a.Choices[0], Help: a.ChoiceHelp}}
 }
 
 // py: Lib/argparse.py HelpFormatter._format_action_invocation (Python 3.15)
-func (f *formatter) invocation(a *action) string {
+func (f *formatter) invocation(a *Action) string {
 	t := f.theme
-	if len(a.options) == 0 {
+	if len(a.Options) == 0 {
 		return t.action + metavar(a) + t.reset
 	}
 	var options []string
-	for _, option := range a.options {
+	for _, option := range a.Options {
 		color := t.shortOption
 		if len(option) > 2 {
 			color = t.longOption
@@ -666,11 +725,11 @@ var longBreak = regexp.MustCompile(`\n\n\n+`)
 // formatHelp returns the help text of p.
 //
 // py: Lib/argparse.py ArgumentParser.format_help, HelpFormatter.format_help (Python 3.15)
-func (f *formatter) formatHelp(p *parser) string {
+func (f *formatter) formatHelp(p *Parser) string {
 	t := f.theme
-	var positionals, optionals []*action
-	for _, a := range p.actions {
-		if len(a.options) == 0 {
+	var positionals, optionals []*Action
+	for _, a := range p.Actions {
+		if len(a.Options) == 0 {
 			positionals = append(positionals, a)
 		} else {
 			optionals = append(optionals, a)
@@ -678,7 +737,7 @@ func (f *formatter) formatHelp(p *parser) string {
 	}
 	sections := []struct {
 		heading string
-		actions []*action
+		actions []*Action
 	}{{"positional arguments", positionals}, {"options", optionals}}
 	// HelpFormatter.add_argument: every section is indented by 2, and subactions by 2 more.
 	for _, section := range sections {
@@ -703,8 +762,11 @@ func (f *formatter) formatHelp(p *parser) string {
 	return strings.Trim(help, "\n") + "\n"
 }
 
+// formatAction returns the help of one action.
+// ponytail: _expand_help's %-formatting is not ported; no help text here holds "%".
+//
 // py: Lib/argparse.py HelpFormatter._format_action (Python 3.15)
-func (f *formatter) formatAction(a *action, indent int) string {
+func (f *formatter) formatAction(a *Action, indent int) string {
 	helpPosition := min(f.actionMaxLength+2, f.maxHelpPosition)
 	helpWidth := max(f.width-helpPosition, 11)
 	actionWidth := helpPosition - indent - 2
@@ -713,7 +775,7 @@ func (f *formatter) formatAction(a *action, indent int) string {
 	var out strings.Builder
 	indentFirst := 0
 	switch {
-	case a.help == "":
+	case a.Help == "":
 		out.WriteString(strings.Repeat(" ", indent) + header + "\n")
 	case len(plain) <= actionWidth:
 		padded := strings.Repeat(" ", indent) + plain + strings.Repeat(" ", actionWidth-len(plain)) + "  "
@@ -722,8 +784,8 @@ func (f *formatter) formatAction(a *action, indent int) string {
 		out.WriteString(strings.Repeat(" ", indent) + header + "\n")
 		indentFirst = helpPosition
 	}
-	if a.help != "" {
-		lines := wrap(a.help, helpWidth)
+	if str.Strip(a.Help) != "" {
+		lines := splitLines(a.Help, helpWidth)
 		out.WriteString(strings.Repeat(" ", indentFirst) + lines[0] + "\n")
 		for _, line := range lines[1:] {
 			out.WriteString(strings.Repeat(" ", helpPosition) + line + "\n")
@@ -735,144 +797,68 @@ func (f *formatter) formatAction(a *action, indent int) string {
 	return out.String()
 }
 
-// wrap ports textwrap.wrap(text, width) for ASCII text of single-spaced words.
-// ponytail: the help strings here have no word longer than 11, the least width argparse passes, so the
-// long-word breaking of textwrap is not ported.
-func wrap(text string, width int) []string {
-	var lines []string
-	line := ""
-	for _, word := range strings.Fields(text) {
-		if line != "" && len(line)+1+len(word) > width {
-			lines, line = append(lines, line), ""
-		}
-		if line != "" {
-			line += " "
-		}
-		line += word
-	}
-	return append(lines, line)
+// asciiWhitespace is HelpFormatter._whitespace_matcher, re.compile(r'\s+', re.ASCII).
+var asciiWhitespace = regexp.MustCompile(`[\t\n\v\f\r ]+`)
+
+// py: Lib/argparse.py HelpFormatter._split_lines (Python 3.15)
+func splitLines(text string, width int) []string {
+	return wrap(str.Strip(asciiWhitespace.ReplaceAllString(text, " ")), width)
 }
 
-// closeMatch returns difflib.get_close_matches(word, possibilities, 1)[0], or "" when nothing scores at
-// least 0.6.
+// terminalColumns ports shutil.get_terminal_size().columns: $COLUMNS when it is a positive int, else the
+// width of the terminal on file descriptor 1, else 80.
 //
-// py: Lib/difflib.py get_close_matches (Python 3.15)
-func closeMatch(word string, possibilities []string) string {
-	const cutoff = 0.6
-	b := codePoints(word)
-	best, bestScore := "", 0.0
-	for _, x := range possibilities {
-		a := codePoints(x)
-		if realQuickRatio(a, b) < cutoff || quickRatio(a, b) < cutoff {
-			continue
-		}
-		score := ratio(a, b)
-		if score >= cutoff && (best == "" || score > bestScore || score == bestScore && x > best) {
-			best, bestScore = x, score // heapq.nlargest(1) on (score, x)
-		}
+// py: Lib/shutil.py get_terminal_size (Python 3.15)
+func terminalColumns() int {
+	if columns, ok := pyInt(os.Getenv("COLUMNS")); ok && columns > 0 {
+		return columns
 	}
-	return best
+	if columns, ok := winsizeColumns(1); ok && columns > 0 {
+		return columns
+	}
+	return 80
 }
 
-func codePoints(s string) []rune {
-	var runes []rune
-	for s != "" {
-		r, size := str.DecodeRune(s)
-		runes, s = append(runes, r), s[size:]
+// pyInt ports int(s) for a str s, saturating far beyond any terminal width.
+// ponytail: only ASCII digits; int() also accepts other Unicode decimal digits.
+func pyInt(s string) (int, bool) {
+	s = str.Strip(s)
+	negative := false
+	if s != "" && (s[0] == '-' || s[0] == '+') {
+		negative, s = s[0] == '-', s[1:]
 	}
-	return runes
+	if s == "" || s[0] == '_' || s[len(s)-1] == '_' || strings.Contains(s, "__") {
+		return 0, false
+	}
+	n := 0
+	for i := range len(s) {
+		switch c := s[i]; {
+		case c == '_':
+		case c >= '0' && c <= '9':
+			n = min(n*10+int(c-'0'), 1<<40)
+		default:
+			return 0, false
+		}
+	}
+	if negative {
+		n = -n
+	}
+	return n, true
 }
 
-// py: Lib/difflib.py _calculate_ratio (Python 3.15)
-func calculateRatio(matches, length int) float64 {
-	if length == 0 {
-		return 1.0
-	}
-	return 2.0 * float64(matches) / float64(length)
+// winsizeColumns returns the terminal width on fd, as os.get_terminal_size(fd) does.
+func winsizeColumns(fd uintptr) (int, bool) {
+	var size struct{ rows, columns, xpixels, ypixels uint16 }
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, uintptr(syscall.TIOCGWINSZ), uintptr(unsafe.Pointer(&size)))
+	return int(size.columns), errno == 0
 }
 
-// py: Lib/difflib.py SequenceMatcher.real_quick_ratio (Python 3.15)
-func realQuickRatio(a, b []rune) float64 {
-	return calculateRatio(min(len(a), len(b)), len(a)+len(b))
-}
-
-// py: Lib/difflib.py SequenceMatcher.quick_ratio (Python 3.15)
-func quickRatio(a, b []rune) float64 {
-	avail := map[rune]int{}
-	for _, r := range b {
-		avail[r]++
+// isatty ports os.isatty(file.fileno()) for a writer: false for a writer without a file descriptor.
+func isatty(w io.Writer) bool {
+	file, ok := w.(*os.File)
+	if !ok {
+		return false
 	}
-	matches := 0
-	for _, r := range a {
-		if avail[r] > 0 {
-			matches++
-		}
-		avail[r]--
-	}
-	return calculateRatio(matches, len(a)+len(b))
-}
-
-// ratio returns SequenceMatcher(None, a, b).ratio(), with the autojunk heuristic.
-//
-// py: Lib/difflib.py SequenceMatcher.ratio, get_matching_blocks, find_longest_match (Python 3.15)
-func ratio(a, b []rune) float64 {
-	b2j := map[rune][]int{}
-	for j, r := range b {
-		b2j[r] = append(b2j[r], j)
-	}
-	if n := len(b); n >= 200 {
-		for r, indices := range b2j {
-			if len(indices) > n/100+1 {
-				delete(b2j, r) // a popular element
-			}
-		}
-	}
-	longest := func(alo, ahi, blo, bhi int) (int, int, int) {
-		besti, bestj, bestsize := alo, blo, 0
-		j2len := map[int]int{}
-		for i := alo; i < ahi; i++ {
-			next := map[int]int{}
-			for _, j := range b2j[a[i]] {
-				if j < blo {
-					continue
-				}
-				if j >= bhi {
-					break
-				}
-				k := j2len[j-1] + 1
-				next[j] = k
-				if k > bestsize {
-					besti, bestj, bestsize = i-k+1, j-k+1, k
-				}
-			}
-			j2len = next
-		}
-		// The junk set is empty, so only the extension over popular elements applies.
-		for besti > alo && bestj > blo && a[besti-1] == b[bestj-1] {
-			besti, bestj, bestsize = besti-1, bestj-1, bestsize+1
-		}
-		for besti+bestsize < ahi && bestj+bestsize < bhi && a[besti+bestsize] == b[bestj+bestsize] {
-			bestsize++
-		}
-		return besti, bestj, bestsize
-	}
-	matches := 0
-	queue := [][4]int{{0, len(a), 0, len(b)}}
-	for len(queue) > 0 {
-		q := queue[len(queue)-1]
-		queue = queue[:len(queue)-1]
-		alo, ahi, blo, bhi := q[0], q[1], q[2], q[3]
-		i, j, k := longest(alo, ahi, blo, bhi)
-		if k == 0 {
-			continue
-		}
-		matches += k
-		if alo < i && blo < j {
-			queue = append(queue, [4]int{alo, i, blo, j})
-		}
-		if i+k < ahi && j+k < bhi {
-			queue = append(queue, [4]int{i + k, ahi, j + k, bhi})
-		}
-	}
-	return calculateRatio(matches, len(a)+len(b))
+	_, isTerminal := winsizeColumns(file.Fd())
+	return isTerminal
 }

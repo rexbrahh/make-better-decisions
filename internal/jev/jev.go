@@ -355,7 +355,7 @@ func objectGet(d *json.Object, key string) (*json.Object, error) {
 	object, ok := value.(*json.Object)
 	if !ok {
 		return nil, &pyerr.Error{Class: "AttributeError",
-			Msg: fmt.Sprintf("'%s' object has no attribute 'get'", typeName(value))}
+			Msg: fmt.Sprintf("'%s' object has no attribute 'get'", json.TypeName(value))}
 	}
 	return object, nil
 }
@@ -543,7 +543,7 @@ func evidenceBundle(state *json.Object) (*json.Object, error) {
 	bundle, ok := value.(*json.Object)
 	if !ok {
 		return nil, &pyerr.Error{Class: "TypeError",
-			Msg: fmt.Sprintf("'%s' object is not a mapping", typeName(value))}
+			Msg: fmt.Sprintf("'%s' object is not a mapping", json.TypeName(value))}
 	}
 	return bundle, nil
 }
@@ -619,11 +619,11 @@ func check(answer, question any) error {
 	}
 	criteria, ok := criteriaValue.(*json.Object)
 	if !ok { // gates.py always sends a dict
-		return &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf("criteria is a '%s', not a dict", typeName(criteriaValue))}
+		return &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf("criteria is a '%s', not a dict", json.TypeName(criteriaValue))}
 	}
 	switch choice.(type) {
 	case []any, *json.Object:
-		name := typeName(choice)
+		name := json.TypeName(choice)
 		return &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf("cannot use '%s' as a dict key (unhashable type: '%s')", name, name)}
 	}
 	choiceKey, isString := choice.(string)
@@ -712,7 +712,7 @@ func subscript(value any, key string) (any, error) {
 	case string:
 		return nil, &pyerr.Error{Class: "TypeError", Msg: "string indices must be integers, not 'str'"}
 	}
-	return nil, &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf("'%s' object is not subscriptable", typeName(value))}
+	return nil, &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf("'%s' object is not subscriptable", json.TypeName(value))}
 }
 
 func sameKeys(a, b *json.Object) bool {
@@ -887,68 +887,10 @@ func decodeError(codec string) error {
 	return &pyerr.Error{Class: "UnicodeDecodeError", Msg: "'" + codec + "' codec can't decode bytes"}
 }
 
-// typeName returns type(v).__name__ for a decoded JSON value.
-func typeName(v any) string {
-	switch v.(type) {
-	case nil:
-		return "NoneType"
-	case bool:
-		return "bool"
-	case json.Int:
-		return "int"
-	case float64:
-		return "float"
-	case string:
-		return "str"
-	case []any:
-		return "list"
-	}
-	return "dict"
-}
-
 // display returns str(v) for a decoded JSON value.
 func display(v any) string {
 	if text, ok := v.(string); ok {
 		return text
 	}
-	return repr(v)
-}
-
-// repr returns repr(v) for a decoded JSON value.
-func repr(v any) string {
-	switch v := v.(type) {
-	case nil:
-		return "None"
-	case bool:
-		if v {
-			return "True"
-		}
-		return "False"
-	case float64:
-		switch text, _ := json.Dumps(v, json.Options{}); text { // json.dumps writes float.__repr__
-		case "NaN":
-			return "nan"
-		case "Infinity":
-			return "inf"
-		case "-Infinity":
-			return "-inf"
-		default:
-			return text
-		}
-	case string:
-		return pystr.Repr(v)
-	case []any:
-		items := make([]string, len(v))
-		for i, item := range v {
-			items[i] = repr(item)
-		}
-		return "[" + strings.Join(items, ", ") + "]"
-	case *json.Object:
-		items := make([]string, 0, v.Len())
-		for _, key := range v.Keys() {
-			items = append(items, pystr.Repr(key)+": "+repr(v.Value(key)))
-		}
-		return "{" + strings.Join(items, ", ") + "}"
-	}
-	return string(v.(json.Int))
+	return json.Repr(v)
 }

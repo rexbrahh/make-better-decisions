@@ -4,11 +4,16 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/rexbrahh/make-better-decisions/internal/isolation"
+	"github.com/rexbrahh/make-better-decisions/internal/policy"
 )
 
 // fixture is a plugin root inside a removable cache directory, as in tests/test_runtime.py, plus a fake
@@ -167,6 +172,54 @@ func TestChangedSourceIsRejectedBeforeActivation(t *testing.T) {
 	wantRuntimeError(t, err, "runtime source changed during publication")
 	if exists(current(t, f.home)) {
 		t.Fatal("current exists after a rejected publish")
+	}
+}
+
+// The Go bundle has no hooks/hook.py, so the pointer write targets .claude-plugin/plugin.json instead.
+//
+// py: tests/test_runtime.py::test_native_sandbox_denies_pointer_replacement_and_bundle_writes
+func TestNativeSandboxDeniesPointerReplacementAndBundleWrites(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("native runtime protection proof requires macOS")
+	}
+	probe := exec.Command("/usr/bin/sandbox-exec", "-p", "(version 1)\n(allow default)", "/usr/bin/true")
+	if output, err := probe.CombinedOutput(); err != nil {
+		t.Skipf("sandbox-exec cannot apply a profile here: %v: %s", err, output)
+	}
+	t.Setenv("AGENT_DECISIONS_STATE", t.TempDir())
+	f := newFixture(t)
+	active, err := Publish(f.source, f.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const script = `pointer=$1
+resolved=$(cd -P "$pointer" && pwd -P)
+for operation in 'rm -f "$pointer"' 'printf tamper > "$pointer/.claude-plugin/plugin.json"' \
+		'printf tamper > "$resolved/bin/ts-decide"'; do
+	if (eval "$operation") 2> /dev/null; then echo allowed; else echo denied; fi
+done
+`
+	state, err := policy.StateDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	namespace, err := Namespace(f.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	argv, err := isolation.WrapArgv([]string{"/bin/sh", "-c", script, "sh", active}, state, true, false, namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	command := exec.Command(argv[0], argv[1:]...)
+	command.Stderr = &stderr
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("%v: %s", err, stderr.String())
+	}
+	if got := strings.Split(strings.TrimSuffix(string(output), "\n"), "\n"); !slices.Equal(got, []string{"denied", "denied", "denied"}) {
+		t.Fatalf("operations = %q, want three denials", got)
 	}
 }
 

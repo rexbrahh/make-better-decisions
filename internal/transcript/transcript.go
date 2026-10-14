@@ -236,7 +236,7 @@ func IsDecide(call ToolCall) (bool, error) {
 	}
 	command := toolInput
 	if object, ok := toolInput.(*json.Object); ok {
-		command = valueOr(object, "command", valueOr(object, "cmd", ""))
+		command = object.ValueOr("command", object.ValueOr("cmd", ""))
 	}
 	if list, ok := command.([]any); ok {
 		if flag, _ := listItem(list, 1).(string); len(list) == 3 && (flag == "-c" || flag == "-lc") {
@@ -375,10 +375,10 @@ func text(content any) (string, error) {
 			if kind := block.Value("type"); !isStr(kind, "text") && !isStr(kind, "input_text") && !isStr(kind, "output_text") {
 				continue
 			}
-			part, ok := valueOr(block, "text", "").(string)
+			part, ok := block.ValueOr("text", "").(string)
 			if !ok {
 				return "", &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf("sequence item %d: expected str instance, %s found",
-					len(parts), typeName(valueOr(block, "text", "")))}
+					len(parts), typeName(block.ValueOr("text", "")))}
 			}
 			parts = append(parts, part)
 		}
@@ -659,7 +659,7 @@ func claudeRecord(b *builder, r *json.Object) error {
 				continue
 			}
 			if isStr(block.Value("type"), "tool_use") {
-				if err := b.call(valueOr(block, "id", ""), valueOr(block, "name", ""), block.Value("input")); err != nil {
+				if err := b.call(block.ValueOr("id", ""), block.ValueOr("name", ""), block.Value("input")); err != nil {
 					return err
 				}
 			} else if isStr(block.Value("type"), "text") && json.Truthy(block.Value("text")) {
@@ -686,7 +686,7 @@ func claudeRecord(b *builder, r *json.Object) error {
 			}
 		}
 		for _, result := range results {
-			callID := valueOr(result, "tool_use_id", "")
+			callID := result.ValueOr("tool_use_id", "")
 			if err := b.output(callID, result.Value("content")); err != nil {
 				return err
 			}
@@ -756,13 +756,13 @@ func codexRecord(b *builder, r *json.Object, identity *HostIdentity) error {
 	case isStr(kind, "message"):
 		return codexMessage(b, r, p, identity)
 	case isStr(kind, "function_call"):
-		return b.call(valueOr(p, "call_id", ""), valueOr(p, "name", ""), valueOr(p, "arguments", ""))
+		return b.call(p.ValueOr("call_id", ""), p.ValueOr("name", ""), p.ValueOr("arguments", ""))
 	case isStr(kind, "custom_tool_call"):
 		if !isStr(p.Value("name"), "exec") {
-			return b.call(valueOr(p, "call_id", ""), valueOr(p, "name", ""), valueOr(p, "input", ""))
+			return b.call(p.ValueOr("call_id", ""), p.ValueOr("name", ""), p.ValueOr("input", ""))
 		}
 	case isStr(kind, "function_call_output"), isStr(kind, "custom_tool_call_output"):
-		return b.output(valueOr(p, "call_id", ""), valueOr(p, "output", ""))
+		return b.output(p.ValueOr("call_id", ""), p.ValueOr("output", ""))
 	}
 	return nil
 }
@@ -779,13 +779,13 @@ func codexEvent(b *builder, r *json.Object) error {
 	if err != nil {
 		return err
 	}
-	callID := valueOr(item, "id", "")
+	callID := item.ValueOr("id", "")
 	switch kind := item.Value("type"); {
 	case isStr(kind, "CommandExecution"):
-		if err := b.call(callID, "Bash", json.NewObject("command", valueOr(item, "command", []any{}))); err != nil {
+		if err := b.call(callID, "Bash", json.NewObject("command", item.ValueOr("command", []any{}))); err != nil {
 			return err
 		}
-		if err := b.output(callID, valueOr(item, "aggregated_output", "")); err != nil {
+		if err := b.output(callID, item.ValueOr("aggregated_output", "")); err != nil {
 			return err
 		}
 		execution := &json.Object{}
@@ -796,7 +796,7 @@ func codexEvent(b *builder, r *json.Object) error {
 		}
 		b.executions[callID.(string)] = execution // call accepts only a str id
 	case isStr(kind, "McpToolCall"):
-		name := "mcp__" + display(valueOr(item, "server", "")) + "__" + display(valueOr(item, "tool", ""))
+		name := "mcp__" + display(item.ValueOr("server", "")) + "__" + display(item.ValueOr("tool", ""))
 		if err := b.call(callID, name, item.Value("arguments")); err != nil {
 			return err
 		}
@@ -805,7 +805,7 @@ func codexEvent(b *builder, r *json.Object) error {
 		if err := b.call(callID, "apply_patch", item.Value("changes")); err != nil {
 			return err
 		}
-		return b.output(callID, display(valueOr(item, "stdout", ""))+"\n"+display(valueOr(item, "stderr", "")))
+		return b.output(callID, display(item.ValueOr("stdout", ""))+"\n"+display(item.ValueOr("stderr", "")))
 	}
 	return nil
 }
@@ -901,7 +901,7 @@ func codexIdentity(records iter.Seq2[*json.Object, error]) (*HostIdentity, error
 		return nil, nil
 	}
 	threadID, _ := first.Value("id").(string)
-	sessionID, _ := valueOr(first, "session_id", first.Value("id")).(string)
+	sessionID, _ := first.ValueOr("session_id", first.Value("id")).(string)
 	cwd, _ := first.Value("cwd").(string)
 	if !validID.MatchString(threadID) || !validID.MatchString(sessionID) || cwd == "" {
 		return nil, &pyerr.OSError{Class: "OSError", Msg: "invalid host identity"}
@@ -955,14 +955,6 @@ func startsWith(s string, prefixes ...string) bool {
 	return false
 }
 
-// valueOr returns object.get(key, fallback).
-func valueOr(object *json.Object, key string, fallback any) any {
-	if value, ok := object.Get(key); ok {
-		return value
-	}
-	return fallback
-}
-
 // listItem returns list[i], or nil when i is out of range.
 func listItem(list []any, i int) any {
 	if i < len(list) {
@@ -1004,7 +996,7 @@ func originKind(record *json.Object, fallback any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return valueOr(origin, "kind", fallback), nil
+	return origin.ValueOr("kind", fallback), nil
 }
 
 // shellJoin returns shlex.join(args) for decoded JSON items. shlex.quote returns two single quotes for
@@ -1049,47 +1041,7 @@ func display(v any) string {
 	if text, ok := v.(string); ok {
 		return text
 	}
-	return repr(v)
-}
-
-// repr returns repr(v) for a decoded JSON value.
-func repr(v any) string {
-	switch v := v.(type) {
-	case nil:
-		return "None"
-	case bool:
-		if v {
-			return "True"
-		}
-		return "False"
-	case float64:
-		// json.dumps writes float.__repr__ for every finite float.
-		switch text, _ := json.Dumps(v, json.Options{}); text { // a float does not nest
-		case "NaN":
-			return "nan"
-		case "Infinity":
-			return "inf"
-		case "-Infinity":
-			return "-inf"
-		default:
-			return text
-		}
-	case string:
-		return pystr.Repr(v)
-	case []any:
-		items := make([]string, len(v))
-		for i, item := range v {
-			items[i] = repr(item)
-		}
-		return "[" + strings.Join(items, ", ") + "]"
-	case *json.Object:
-		items := make([]string, 0, v.Len())
-		for _, key := range v.Keys() {
-			items = append(items, pystr.Repr(key)+": "+repr(v.Value(key)))
-		}
-		return "{" + strings.Join(items, ", ") + "}"
-	}
-	return string(v.(json.Int))
+	return json.Repr(v)
 }
 
 // unhashable returns the TypeError Python raises for a list or dict used as a set element or dict key,

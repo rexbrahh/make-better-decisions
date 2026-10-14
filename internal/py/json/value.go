@@ -13,6 +13,10 @@ import (
 	"math"
 	"math/big"
 	"strconv"
+	"strings"
+
+	"github.com/rexbrahh/make-better-decisions/internal/py/pyerr"
+	"github.com/rexbrahh/make-better-decisions/internal/py/str"
 )
 
 // Object is a Python dict with string keys. It keeps insertion order, and assigning an existing key keeps
@@ -56,6 +60,26 @@ func (o *Object) Get(key string) (any, bool) {
 // py: Objects/dictobject.c dict.get (Python 3.15)
 func (o *Object) Value(key string) any {
 	return o.values[key]
+}
+
+// ValueOr returns o.get(key, fallback).
+//
+// py: Objects/dictobject.c dict.get (Python 3.15)
+func (o *Object) ValueOr(key string, fallback any) any {
+	if value, present := o.Get(key); present {
+		return value
+	}
+	return fallback
+}
+
+// Item returns o[key], with the KeyError Python raises for a missing key.
+//
+// py: Objects/dictobject.c dict_subscript (Python 3.15)
+func (o *Object) Item(key string) (any, error) {
+	if value, present := o.Get(key); present {
+		return value, nil
+	}
+	return nil, &pyerr.Error{Class: "KeyError", Msg: str.Repr(key)}
 }
 
 // Set assigns value to key. A new key goes last; an existing key keeps its position.
@@ -310,4 +334,66 @@ func asList(v any) []any {
 		return list
 	}
 	return v.([]any)
+}
+
+// TypeName returns type(v).__name__. It panics on a Go type outside the value model.
+func TypeName(v any) string {
+	switch v.(type) {
+	case nil:
+		return "NoneType"
+	case bool:
+		return "bool"
+	case Int, int, int64:
+		return "int"
+	case float64:
+		return "float"
+	case string:
+		return "str"
+	case []any, []string:
+		return "list"
+	case *Object:
+		return "dict"
+	}
+	panic(fmt.Sprintf("json.TypeName: unsupported type %T", v))
+}
+
+// Repr returns repr(v) for a value of the value model. It panics on a Go type outside it.
+//
+// py: Objects/object.c PyObject_Repr (Python 3.15)
+func Repr(v any) string {
+	switch v := v.(type) {
+	case nil:
+		return "None"
+	case bool:
+		if v {
+			return "True"
+		}
+		return "False"
+	case float64:
+		switch text, _ := Dumps(v, Options{}); text { // json.dumps writes float.__repr__
+		case "NaN":
+			return "nan"
+		case "Infinity":
+			return "inf"
+		case "-Infinity":
+			return "-inf"
+		default:
+			return text
+		}
+	case string:
+		return str.Repr(v)
+	case []any:
+		items := make([]string, len(v))
+		for i, item := range v {
+			items[i] = Repr(item)
+		}
+		return "[" + strings.Join(items, ", ") + "]"
+	case *Object:
+		items := make([]string, 0, v.Len())
+		for _, key := range v.Keys() {
+			items = append(items, str.Repr(key)+": "+Repr(v.Value(key)))
+		}
+		return "{" + strings.Join(items, ", ") + "}"
+	}
+	return string(v.(Int))
 }

@@ -8,7 +8,6 @@
 package isolation
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -17,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/rexbrahh/make-better-decisions/internal/ledger"
+	"github.com/rexbrahh/make-better-decisions/internal/py/argparse"
 	"github.com/rexbrahh/make-better-decisions/internal/py/json"
 	"github.com/rexbrahh/make-better-decisions/internal/py/ospath"
 	"github.com/rexbrahh/make-better-decisions/internal/py/pathlib"
@@ -53,25 +53,17 @@ func unsupportedIsolationError(msg string) error {
 
 // isIsolationError reports whether Python's `except IsolationError` catches err.
 func isIsolationError(err error) bool {
-	class := pyClass(err)
+	class := pyerr.Class(err)
 	return class == "IsolationError" || class == configurationErrorClass || class == unsupportedErrorClass
 }
 
-// pyClass returns the Python class name of err, or "" for an error that is not a Python exception.
-func pyClass(err error) string {
-	var typed interface{ PyType() string }
-	if errors.As(err, &typed) {
-		return typed.PyType()
-	}
-	return ""
-}
-
 // WrapArgv returns argv wrapped in the filesystem isolator of this platform. Python's defaults are
-// protectCode true and readOnly false.
+// protectCode true and readOnly false. protectedPaths are the protected_paths of _wrap_argv: more paths
+// to deny writes to. wrap_argv passes none.
 //
-// py: agent_decisions/isolation.py wrap_argv
-func WrapArgv(argv []string, privateRoot string, protectCode, readOnly bool) ([]string, error) {
-	return wrapArgv(argv, privateRoot, protectCode, readOnly, nil)
+// py: agent_decisions/isolation.py wrap_argv, _wrap_argv
+func WrapArgv(argv []string, privateRoot string, protectCode, readOnly bool, protectedPaths ...string) ([]string, error) {
+	return wrapArgv(argv, privateRoot, protectCode, readOnly, protectedPaths)
 }
 
 // LatestInstallationSpec returns the spec of the newest verified installation entry for host.
@@ -149,7 +141,7 @@ func CommandToArgv(command string) ([]string, error) {
 		return nil, nil // shlex raises ValueError
 	}
 	argv, err := NormalizeArgv(words)
-	if err != nil && (pyClass(err) == configurationErrorClass || isValueError(err)) {
+	if err != nil && (pyerr.Class(err) == configurationErrorClass || isValueError(err)) {
 		return nil, nil
 	}
 	return argv, err
@@ -160,11 +152,10 @@ func CommandToArgv(command string) ([]string, error) {
 //
 // py: agent_decisions/isolation.py main_isolate
 func MainIsolate(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	parser := isolateParser()
-	out := &streams{stdout: stdout, stderr: stderr}
-	namespace, err := parser.parseArgs(args, out)
+	parser := isolateParser(stdout, stderr)
+	namespace, err := parser.ParseArgs(args)
 	if err != nil {
-		return err.(*systemExit).code
+		return err.(*argparse.Exit).Code
 	}
 	if namespace["mode"] == "exec" {
 		err = execCommand(namespace["host"].(string), namespace["command"].(string), namespace["read_only"].(bool))
@@ -172,7 +163,7 @@ func MainIsolate(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		server, _ := namespace["server"].(string)
 		host, _ := namespace["host"].(string)
 		if server == "" || host == "" {
-			return parser.error("use --server NAME --host HOST or exec --host HOST --command COMMAND", out).code
+			return parser.Error("use --server NAME --host HOST or exec --host HOST --command COMMAND").Code
 		}
 		err = execServer(host, server)
 	}
@@ -180,10 +171,32 @@ func MainIsolate(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if isIsolationError(err) {
-		pyWrite(stderr, fmt.Sprintf("agent-decisions-isolate: %s\n", err))
+		io.WriteString(stderr, pyerr.EncodeBackslashReplace(fmt.Sprintf("agent-decisions-isolate: %s\n", err)))
 		return 78
 	}
 	return uncaught(stderr, err)
+}
+
+// isolateParser builds the parser of main_isolate. The launcher runs python3 -I, which ignores
+// PYTHON_COLORS.
+//
+// py: agent_decisions/isolation.py main_isolate
+func isolateParser(stdout, stderr io.Writer) *argparse.Parser {
+	hosts := []string{"claude", "codex"}
+	run := &argparse.Parser{Prog: "agent-decisions-isolate exec", Actions: []*argparse.Action{
+		argparse.HelpAction(),
+		{Kind: argparse.Store, Options: []string{"--host"}, Dest: "host", Choices: hosts, Required: true},
+		{Kind: argparse.Store, Options: []string{"--command"}, Dest: "command", Required: true},
+		{Kind: argparse.StoreTrue, Options: []string{"--read-only"}, Dest: "read_only"},
+	}}
+	return &argparse.Parser{Prog: "agent-decisions-isolate", Stdout: stdout, Stderr: stderr, IgnoreEnvironment: true,
+		Actions: []*argparse.Action{
+			argparse.HelpAction(),
+			{Kind: argparse.Parsers, Dest: "mode", Choices: []string{"exec"}, Parser: run,
+				ChoiceHelp: "run an opaque command from the signed host spec"},
+			{Kind: argparse.Store, Options: []string{"--server"}, Dest: "server"},
+			{Kind: argparse.Store, Options: []string{"--host"}, Dest: "host", Choices: hosts},
+		}}
 }
 
 // MainShellPrefix is the agent-decisions-shell-prefix command, which Claude Code runs around every Bash
@@ -193,7 +206,7 @@ func MainIsolate(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 // py: agent_decisions/isolation.py main_shell_prefix
 func MainShellPrefix(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) != 1 {
-		pyWrite(stderr, "agent-decisions-shell-prefix: expected one command string\n")
+		io.WriteString(stderr, "agent-decisions-shell-prefix: expected one command string\n")
 		return 2
 	}
 	command := args[0]
@@ -232,7 +245,7 @@ func MainShellPrefix(args []string, stdin io.Reader, stdout, stderr io.Writer) i
 		if !isIsolationError(err) {
 			return uncaught(stderr, err)
 		}
-		pyWrite(stderr, fmt.Sprintf("agent-decisions-shell-prefix: %s\n", err))
+		io.WriteString(stderr, pyerr.EncodeBackslashReplace(fmt.Sprintf("agent-decisions-shell-prefix: %s\n", err)))
 		return 78
 	}
 	return exited(stderr, execvpe(isolated[0], isolated, environCopy()))
@@ -250,14 +263,14 @@ func exited(stderr io.Writer, err error) int {
 // uncaught prints the last line of the traceback of an exception that escapes main, and returns 1, the
 // status of an uncaught exception. The traceback frames are Python file positions and have no Go form.
 func uncaught(stderr io.Writer, err error) int {
-	line := pyClass(err)
+	line := pyerr.Class(err)
 	if line == "" {
 		line = "Exception"
 	}
 	if msg := err.Error(); msg != "" {
 		line += ": " + msg
 	}
-	pyWrite(stderr, line+"\n")
+	io.WriteString(stderr, pyerr.EncodeBackslashReplace(line+"\n"))
 	return 1
 }
 
@@ -418,7 +431,7 @@ func wrapArgv(argv []string, privateRoot string, protectCode, readOnly bool, pro
 	switch {
 	case platform == "darwin":
 		const sandbox = "/usr/bin/sandbox-exec"
-		if !exists(sandbox) {
+		if !ospath.Exists(sandbox) {
 			return nil, unsupportedIsolationError("macOS sandbox-exec is unavailable")
 		}
 		return append([]string{sandbox, "-p", macosProfile(private, protected, readOnly)}, child...), nil
@@ -462,7 +475,7 @@ func linuxWrapArgv(argv []string, private string, protected []string, readOnly b
 	}
 	command := []string{bwrap, "--die-with-parent", bind, "/", "/", "--ro-bind", denied, private}
 	for _, path := range protected {
-		if !exists(path) {
+		if !ospath.Exists(path) {
 			return nil, unsupportedIsolationError("cannot protect missing Linux path " + path)
 		}
 		command = append(command, "--ro-bind", path, path)
@@ -473,7 +486,7 @@ func linuxWrapArgv(argv []string, private string, protected []string, readOnly b
 // py: agent_decisions/isolation.py _protected_write_paths
 func protectedWritePaths(protectCode bool, extraPaths []string) ([]string, error) {
 	var paths []string
-	home, err := pathHome()
+	home, err := pathlib.Home()
 	if err != nil {
 		return nil, err
 	}
@@ -517,7 +530,7 @@ func protectedWritePaths(protectCode bool, extraPaths []string) ([]string, error
 		if path == "" {
 			return nil, configurationError("protected_paths must contain strings")
 		}
-		expanded, err := pathExpanduser(pathlib.Str(path))
+		expanded, err := pathlib.ExpandUser(pathlib.Str(path))
 		if err != nil {
 			return nil, err
 		}
@@ -584,7 +597,7 @@ func authorityCodeRoot() (string, error) {
 	if pathlib.Name(parent) == "agent-decisions" && pathlib.Name(pathlib.Parent(pathlib.Parent(parent))) == "cache" {
 		return parent, nil
 	}
-	if exists(pathlib.Join(root, ".git")) {
+	if ospath.Exists(pathlib.Join(root, ".git")) {
 		return "", nil
 	}
 	return root, nil
@@ -644,7 +657,7 @@ func matchesAny(argv []string, matchers any) (bool, error) {
 	for _, matcher := range list {
 		normalized, err := NormalizeArgv(matcher)
 		if err != nil {
-			if pyClass(err) == configurationErrorClass {
+			if pyerr.Class(err) == configurationErrorClass {
 				continue
 			}
 			return false, err
@@ -675,7 +688,7 @@ func execShell(command, previousShellPrefix string) error {
 
 // py: agent_decisions/isolation.py _shell
 func shell() string {
-	if exists("/bin/zsh") {
+	if ospath.Exists("/bin/zsh") {
 		return "/bin/zsh"
 	}
 	return "/bin/sh"
@@ -686,7 +699,7 @@ func shell() string {
 //
 // py: agent_decisions/isolation.py _absolute_path
 func absolutePath(value string) (string, error) {
-	expanded, err := pathExpanduser(pathlib.Str(value))
+	expanded, err := pathlib.ExpandUser(pathlib.Str(value))
 	if err != nil {
 		return "", err
 	}
