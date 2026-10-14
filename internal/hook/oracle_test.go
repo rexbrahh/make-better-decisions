@@ -29,7 +29,8 @@ const (
 // replayScript runs the steps of a replay case through agent_decisions/hook.py handle, with the clock,
 // perf_counter and uuid4 of hook.py fixed. It reads the case as JSON on stdin and prints one result per
 // step: null for a setup step, or {"out": json.dumps(response) or null, "error": [class, str] or null,
-// "requests": [json.dumps(request), ...]} with the Jev request bodies in arrival order.
+// "requests": [json.dumps(request), ...], "elapsed": seconds} with the Jev request bodies in arrival order
+// and the wall time of the handle call.
 //
 // Setup steps: "append" adds a signed ledger entry; "complete" appends a finished tool call to a transcript,
 // whose output is the verdict that this engine printed for that tool_use_id.
@@ -64,14 +65,16 @@ for step in spec["steps"]:
     fake = step["fake"]
     api = FakeJev(raises=None if fake["raises"] is None else jev.JevError(fake["raises"]),
                   raw=None if fake["raw"] is None else fake["raw"].encode(), **fake["answers"])
+    started = time.perf_counter()
     try:
         out, error = hook.handle(step["event"], step["payload"], step["host"], post=api), None
     except Exception as exception:
         out, error = None, [type(exception).__name__, str(exception)]
+    elapsed = time.perf_counter() - started
     if out is not None:
         outs[step["payload"].get("tool_use_id")] = out
     results.append({"out": None if out is None else json.dumps(out), "error": error,
-                    "requests": [json.dumps(request) for request in api.requests]})
+                    "requests": [json.dumps(request) for request in api.requests], "elapsed": elapsed})
 print(json.dumps(results))
 `
 
@@ -141,6 +144,7 @@ type stepResult struct {
 	errClass string
 	errText  string
 	requests []string
+	elapsed  time.Duration // the wall time of the handle call
 }
 
 // oracleSetUp gives the replay its work directory and environment, and returns the Python interpreter.
@@ -158,7 +162,7 @@ func oracleSetUp(t *testing.T) (string, string) {
 }
 
 // resetState empties the state directory except for a fixed ledger key, so both engines seal with it.
-func resetState(t *testing.T) string {
+func resetState(t testing.TB) string {
 	t.Helper()
 	state := os.Getenv("AGENT_DECISIONS_STATE")
 	if err := os.RemoveAll(state); err != nil {
@@ -237,6 +241,7 @@ func runPython(t *testing.T, python string, steps []replayStep) []*stepResult {
 		for _, request := range object.Value("requests").([]any) {
 			result.requests = append(result.requests, request.(string))
 		}
+		result.elapsed = time.Duration(object.Value("elapsed").(float64) * float64(time.Second))
 		results[i] = result
 	}
 	return results
@@ -276,8 +281,10 @@ func runGo(t *testing.T, steps []replayStep) []*stepResult {
 		}
 		api := step.fake.jev()
 		// The payload is decoded from its JSON text, as Python receives it.
-		out, err := Handle(step.event, loads(t, dumps(t, step.payload)), step.host, api.Post)
-		result := &stepResult{}
+		payload := loads(t, dumps(t, step.payload))
+		started := time.Now()
+		out, err := Handle(step.event, payload, step.host, api.Post)
+		result := &stepResult{elapsed: time.Since(started)}
 		if err != nil {
 			result.errClass, result.errText = pyClass(err), err.Error()
 		}

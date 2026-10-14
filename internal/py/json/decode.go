@@ -31,12 +31,16 @@ type DecodeError struct {
 	Colno  int
 }
 
-func newDecodeError(msg string, text []rune, pos int) *DecodeError {
-	lineno, lastNewline := 1, -1
-	for i, r := range text[:pos] {
+// newDecodeError returns the error at byte offset at of text, which starts a code point. Its position,
+// line and column count code points, as Python does.
+func newDecodeError(msg string, text string, at int) *DecodeError {
+	pos, lineno, lastNewline := 0, 1, -1
+	for i := 0; i < at; pos++ {
+		r, size := decodeRuneWTF8(text[i:])
 		if r == '\n' {
-			lineno, lastNewline = lineno+1, i
+			lineno, lastNewline = lineno+1, pos
 		}
+		i += size
 	}
 	return &DecodeError{Msg: msg, Pos: pos, Lineno: lineno, Colno: pos - lastNewline}
 }
@@ -86,24 +90,25 @@ func (e *IntDigitsError) PyType() string { return "ValueError" }
 //
 // py: Lib/json/__init__.py loads, Lib/json/decoder.py JSONDecoder.decode (Python 3.15)
 func Loads(s string) (any, error) {
-	text := decodeWTF8(s)
-	if len(text) > 0 && text[0] == 0xfeff {
-		return nil, newDecodeError("Unexpected UTF-8 BOM (decode using utf-8-sig)", text, 0)
+	if strings.HasPrefix(s, "\ufeff") {
+		return nil, newDecodeError("Unexpected UTF-8 BOM (decode using utf-8-sig)", s, 0)
 	}
-	scanner := &scanner{text: text}
+	scanner := &scanner{text: s}
 	value, end, err := scanner.scanOnce(scanner.skipWhitespace(0))
 	if err != nil {
 		return nil, err
 	}
-	if end = scanner.skipWhitespace(end); end != len(text) {
+	if end = scanner.skipWhitespace(end); end != len(s) {
 		return nil, scanner.fail("Extra data", end)
 	}
 	return value, nil
 }
 
-// scanner holds one document as code points, so every index matches the Python str index.
+// scanner holds one document. Its indexes are byte offsets, and each starts a code point: every character
+// that the grammar names is ASCII, and the bytes of any other code point are not, so the scan steps over
+// them one byte at a time. An error converts its offset to the code point index that Python reports.
 type scanner struct {
-	text  []rune
+	text  string
 	depth int
 }
 
@@ -111,10 +116,11 @@ func (s *scanner) fail(msg string, pos int) error {
 	return newDecodeError(msg, s.text, pos)
 }
 
-// at returns the code point at idx, or -1 past the end.
+// at returns the byte at idx, or -1 past the end. A byte of 0x80 or above stands for a non-ASCII code point,
+// which no comparison with an ASCII character matches.
 func (s *scanner) at(idx int) rune {
 	if idx < len(s.text) {
-		return s.text[idx]
+		return rune(s.text[idx])
 	}
 	return -1
 }
@@ -168,9 +174,8 @@ func (s *scanner) scanOnce(idx int) (any, int, error) {
 		return value, end, err
 	}
 	for _, constant := range constants {
-		end := idx + len(constant.word)
-		if end <= len(s.text) && string(s.text[idx:end]) == constant.word {
-			return constant.value, end, nil
+		if strings.HasPrefix(s.text[idx:], constant.word) {
+			return constant.value, idx + len(constant.word), nil
 		}
 	}
 	return s.matchNumber(idx)
@@ -265,12 +270,15 @@ func (s *scanner) scanString(end int) (string, int, error) {
 			}
 			next++
 		}
-		for _, r := range text[end:next] {
-			decoded = appendWTF8(decoded, r)
-		}
 		if next == len(text) {
 			return "", 0, s.fail("Unterminated string starting at", begin)
 		}
+		run := text[end:next]
+		if text[next] == '"' && decoded == nil && utf8.ValidString(run) {
+			// No escape and nothing to replace. A copy, so that a kept value does not pin the whole text.
+			return strings.Clone(run), next + 1, nil
+		}
+		decoded = appendRun(decoded, run)
 		if text[next] == '"' {
 			return string(decoded), next + 1, nil
 		}
@@ -279,7 +287,7 @@ func (s *scanner) scanString(end int) (string, int, error) {
 			return "", 0, s.fail("Unterminated string starting at", begin)
 		}
 		if text[next] != 'u' {
-			r, ok := backslashEscapes[text[next]]
+			r, ok := backslashEscapes[rune(text[next])]
 			if !ok {
 				return "", 0, s.fail("Invalid \\escape", next-1)
 			}
@@ -309,10 +317,25 @@ func (s *scanner) scanString(end int) (string, int, error) {
 	}
 }
 
+// appendRun appends the code points of run, a stretch of string content without escapes: each lone
+// surrogate stays, and each byte that is not valid UTF-8 becomes U+FFFD.
+func appendRun(b []byte, run string) []byte {
+	if utf8.ValidString(run) {
+		return append(b, run...)
+	}
+	for i := 0; i < len(run); {
+		r, size := decodeRuneWTF8(run[i:])
+		b = appendWTF8(b, r)
+		i += size
+	}
+	return b
+}
+
 // hex4 parses four hex digits of either case.
-func hex4(digits []rune) (rune, bool) {
+func hex4(digits string) (rune, bool) {
 	var r rune
-	for _, digit := range digits {
+	for _, digit := range []byte(digits) {
+		digit := rune(digit)
 		switch {
 		case '0' <= digit && digit <= '9':
 			r = r<<4 | (digit - '0')
@@ -367,7 +390,7 @@ func (s *scanner) matchNumber(start int) (any, int, error) {
 			}
 		}
 	}
-	literal := string(s.text[start:idx])
+	literal := s.text[start:idx]
 	if isFloat {
 		// The literal is valid float syntax, so the only possible error is ErrRange, which comes with the
 		// same ±Inf that float() returns.
@@ -381,7 +404,7 @@ func (s *scanner) matchNumber(start int) (any, int, error) {
 	if digits == "0" {
 		return Int("0"), idx, nil
 	}
-	return Int(literal), idx, nil
+	return Int(strings.Clone(literal)), idx, nil // a copy, as for strings
 }
 
 // surrogateEscape matches a JSON escape of a surrogate code point.
@@ -462,6 +485,9 @@ func withoutSurrogates(value any, frame int) (any, error) {
 //
 // py: Objects/unicodeobject.c unicode_decode_utf8 (Python 3.15)
 func DecodeUTF8(data []byte) string {
+	if utf8.Valid(data) {
+		return string(data)
+	}
 	var decoded strings.Builder
 	decoded.Grow(len(data))
 	for i := 0; i < len(data); {

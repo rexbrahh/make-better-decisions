@@ -207,6 +207,15 @@ var shortEscapes = map[rune]string{
 func appendQuoted(b []byte, s string, ascii bool) []byte {
 	b = append(b, '"')
 	for i := 0; i < len(s); {
+		// Printable ASCII other than the quote and the backslash needs no escape in either mode.
+		plain := i
+		for plain < len(s) && ' ' <= s[plain] && s[plain] <= '~' && s[plain] != '"' && s[plain] != '\\' {
+			plain++
+		}
+		if plain > i {
+			b, i = append(b, s[i:plain]...), plain
+			continue
+		}
 		r, size := decodeRuneWTF8(s[i:])
 		i += size
 		if escape, ok := shortEscapes[r]; ok {
@@ -215,13 +224,19 @@ func appendQuoted(b []byte, s string, ascii bool) []byte {
 		}
 		switch {
 		case r < 0x20 || ascii && r > '~' && r < 0x10000:
-			b = fmt.Appendf(b, `\u%04x`, r)
+			b = appendEscape(b, r)
 		case ascii && r >= 0x10000:
 			r -= 0x10000
-			b = fmt.Appendf(b, `\u%04x\u%04x`, 0xd800|r>>10, 0xdc00|r&0x3ff)
+			b = appendEscape(appendEscape(b, 0xd800|r>>10), 0xdc00|r&0x3ff)
 		default:
 			b = appendWTF8(b, r)
 		}
 	}
 	return append(b, '"')
+}
+
+// appendEscape appends \uXXXX for a code point below U+10000, with lowercase hex digits.
+func appendEscape(b []byte, r rune) []byte {
+	const digits = "0123456789abcdef"
+	return append(b, '\\', 'u', digits[r>>12&0xf], digits[r>>8&0xf], digits[r>>4&0xf], digits[r&0xf])
 }

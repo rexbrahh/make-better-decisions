@@ -50,7 +50,7 @@ func TestMain(m *testing.M) {
 // setUp ports tests/helpers.py StateTestCase.setUp and returns its directory. HOME is a private directory
 // too, so that no test resolves paths under the real ~/.local/state/agent-decisions. The hook's code root
 // is the repository, as it is for agent_decisions/hook.py.
-func setUp(t *testing.T) string {
+func setUp(t testing.TB) string {
 	t.Helper()
 	dir, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -72,7 +72,7 @@ func setUp(t *testing.T) string {
 }
 
 // patch sets *target to value for the duration of the test.
-func patch[T any](t *testing.T, target *T, value T) {
+func patch[T any](t testing.TB, target *T, value T) {
 	t.Helper()
 	saved := *target
 	*target = value
@@ -300,7 +300,7 @@ func writeJSONL(t *testing.T, directory, name string, records []*json.Object, ta
 	return path
 }
 
-func writeFile(t *testing.T, path, text string) {
+func writeFile(t testing.TB, path, text string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)

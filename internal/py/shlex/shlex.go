@@ -81,6 +81,19 @@ func (s *StringStream) ReadLine() string {
 	return line
 }
 
+// readUntil consumes the characters before the first byte in stop, or to the end, and returns them. The bytes in
+// stop are ASCII, and an ASCII byte is never part of a longer character, so the run ends on a character boundary.
+func (s *StringStream) readUntil(stop *asciiSet) string {
+	rest := s.text[s.offset:]
+	n := 0
+	for n < len(rest) && !stop.has(rest[n]) {
+		n++
+	}
+	s.offset += n
+	s.position += int64(utf8.RuneCountInString(rest[:n])) // Read counts characters with the same decoder
+	return rest[:n]
+}
+
 // Tell returns the character index of the next read. It is StringIO.tell().
 //
 // py: Lib/shlex.py shlex.read_token (Python 3.15)
@@ -126,7 +139,7 @@ type Lexer struct {
 	posix            bool
 	punctuationChars string
 	state            string
-	token            string
+	token            []byte   // Python's self.token; a []byte, so that a long token grows in linear time
 	pushback         []string // push_token stack; the last element is the left end of Python's deque
 	pushbackChars    []string // _pushback_chars stack; the last element is the right end of Python's deque
 }
@@ -230,9 +243,11 @@ func (l *Lexer) readToken() (token string, isNone bool, err error) {
 	quoted := false
 	escapedState := " "
 	// emit is Python's `self.token or (self.posix and quoted)`.
-	emit := func() bool { return l.token != "" || l.posix && quoted }
+	emit := func() bool { return len(l.token) > 0 || l.posix && quoted }
 scan:
 	for {
+		// The read that ends the run is in the same state, so it still sets quoted.
+		l.token = append(l.token, l.plainRun()...)
 		var next string
 		if n := len(l.pushbackChars); l.punctuationChars != "" && n > 0 {
 			next = l.pushbackChars[n-1]
@@ -245,7 +260,7 @@ scan:
 		}
 		switch {
 		case l.state == stateEOF:
-			l.token = "" // past end of file
+			l.token = l.token[:0] // past end of file
 			break scan
 		case l.state == " ":
 			switch {
@@ -263,21 +278,21 @@ scan:
 				escapedState = "a"
 				l.state = next
 			case contains(l.Wordchars, next):
-				l.token = next
+				l.token = append(l.token[:0], next...)
 				l.state = "a"
 			case contains(l.punctuationChars, next):
-				l.token = next
+				l.token = append(l.token[:0], next...)
 				l.state = "c"
 			case contains(l.Quotes, next):
 				if !l.posix {
-					l.token = next
+					l.token = append(l.token[:0], next...)
 				}
 				l.state = next
 			case l.WhitespaceSplit:
-				l.token = next
+				l.token = append(l.token[:0], next...)
 				l.state = "a"
 			default:
-				l.token = next // a single non-word character is a token of its own
+				l.token = append(l.token[:0], next...) // a single non-word character is a token of its own
 				break scan
 			}
 		case contains(l.Quotes, l.state):
@@ -287,7 +302,7 @@ scan:
 				return "", false, &Error{"No closing quotation"}
 			case next == l.state:
 				if !l.posix {
-					l.token += next
+					l.token = append(l.token, next...)
 					l.state = " "
 					break scan
 				}
@@ -296,7 +311,7 @@ scan:
 				escapedState = l.state
 				l.state = next
 			default:
-				l.token += next
+				l.token = append(l.token, next...)
 			}
 		case contains(l.Escape, l.state):
 			if next == "" {
@@ -304,9 +319,9 @@ scan:
 			}
 			// In posix shells, only the quote itself or the escape character may be escaped within quotes.
 			if contains(l.Quotes, escapedState) && next != l.state && next != escapedState {
-				l.token += l.state
+				l.token = append(l.token, l.state...)
 			}
-			l.token += next
+			l.token = append(l.token, next...)
 			l.state = escapedState
 		case l.state == "a" || l.state == "c":
 			switch {
@@ -329,7 +344,7 @@ scan:
 				}
 			case l.state == "c":
 				if contains(l.punctuationChars, next) {
-					l.token += next
+					l.token = append(l.token, next...)
 					break
 				}
 				l.pushbackChars = append(l.pushbackChars, next) // whitespace was handled above
@@ -340,9 +355,9 @@ scan:
 			case l.posix && contains(l.Escape, next):
 				escapedState = "a"
 				l.state = next
-			case contains(l.Wordchars, next) || contains(l.Quotes, next) ||
-				l.WhitespaceSplit && !contains(l.punctuationChars, next):
-				l.token += next
+			case l.WhitespaceSplit && !contains(l.punctuationChars, next) || contains(l.Wordchars, next) ||
+				contains(l.Quotes, next): // pure tests, so the cheapest goes first
+				l.token = append(l.token, next...)
 			default:
 				if l.punctuationChars != "" {
 					l.pushbackChars = append(l.pushbackChars, next)
@@ -356,8 +371,8 @@ scan:
 			}
 		}
 	}
-	token = l.token
-	l.token = ""
+	token = string(l.token)
+	l.token = l.token[:0]
 	return token, l.posix && !quoted && token == "", nil
 }
 
@@ -365,6 +380,14 @@ scan:
 //
 // py: Lib/shlex.py split (Python 3.15)
 func Split(s string) ([]string, error) {
+	// Without a quote or an escape, every token is a run of characters outside the whitespace " \t\r\n".
+	if !strings.ContainsAny(s, `'"\`) {
+		tokens := strings.FieldsFunc(s, func(r rune) bool { return r == ' ' || r == '\t' || r == '\r' || r == '\n' })
+		if tokens == nil {
+			tokens = []string{} // as Tokens returns
+		}
+		return tokens, nil
+	}
 	lexer := New(s, true, "")
 	lexer.WhitespaceSplit = true
 	lexer.Commenters = ""
@@ -406,6 +429,55 @@ func isUnsafe(r rune) bool {
 }
 
 // firstChar returns the first character of a non-empty s: one code point, or one byte that is not valid UTF-8.
+// plainRun consumes, in one step, the characters that readToken would otherwise append one at a time. It covers
+// a posix lexer without punctuation_chars that reads a *StringStream: inside quotes, every character up to the
+// closing quote or an escape that applies there; in a word of a whitespace-split lexer, every character that is
+// not whitespace, a commenter, a quote or an escape. A newline always ends the run, so that the per-character
+// path counts Lineno. The cases are tested in readToken's order. Any other lexer gets "".
+func (l *Lexer) plainRun() string {
+	stream, ok := l.stream.(*StringStream)
+	if !ok || !l.posix || l.punctuationChars != "" {
+		return ""
+	}
+	var stop asciiSet
+	stop.add("\n")
+	switch {
+	case l.state == stateEOF || l.state == " ":
+		return ""
+	case contains(l.Quotes, l.state):
+		ok = stop.add(l.state) && (!contains(l.EscapedQuotes, l.state) || stop.add(l.Escape))
+	case contains(l.Escape, l.state):
+		return ""
+	case l.state == "a" && l.WhitespaceSplit:
+		ok = stop.add(l.Whitespace) && stop.add(l.Commenters) && stop.add(l.Quotes) && stop.add(l.Escape)
+	default:
+		return ""
+	}
+	if !ok {
+		return "" // a stop character is not ASCII
+	}
+	return stream.readUntil(&stop)
+}
+
+// asciiSet is a set of ASCII bytes, one bit each.
+type asciiSet [2]uint64
+
+// add puts each byte of chars in s. It reports false, with s partly filled, when chars is not all ASCII.
+func (s *asciiSet) add(chars string) bool {
+	for i := 0; i < len(chars); i++ {
+		c := chars[i]
+		if c >= utf8.RuneSelf {
+			return false
+		}
+		s[c>>6] |= 1 << (c & 63)
+	}
+	return true
+}
+
+func (s *asciiSet) has(c byte) bool {
+	return c < utf8.RuneSelf && s[c>>6]&(1<<(c&63)) != 0
+}
+
 func firstChar(s string) string {
 	_, size := utf8.DecodeRuneInString(s)
 	return s[:size]
@@ -415,6 +487,9 @@ func firstChar(s string) string {
 func contains(chars, char string) bool {
 	if char == "" {
 		return true
+	}
+	if len(char) == 1 && char[0] < utf8.RuneSelf {
+		return strings.IndexByte(chars, char[0]) >= 0 // an ASCII byte in chars is a character of its own
 	}
 	for chars != "" {
 		first := firstChar(chars)

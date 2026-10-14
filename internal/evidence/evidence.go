@@ -85,9 +85,6 @@ var (
 		`(['"]?`+pyre.Space+`*[=:]`+pyre.Space+`*)(['"]?)[^`+spaceChars+`'"]{8,}`), false),
 		true, "api_key", "secret", "token", "passw")
 
-	// py: agent_decisions/evidence.py _WORD
-	word = regexp.MustCompile(`[A-Za-z0-9_]{3,}`)
-
 	// pathToken is the group and lookahead of _PATH_TOKEN, anchored at the start; pathTokens does the
 	// rest. The lookahead (?=$|[...]) becomes a consumed character or the end, which accepts the same
 	// group: Python's $ also matches before a final "\n", and \s already holds "\n".
@@ -100,6 +97,13 @@ var (
 		`(?:[` + spaceChars + `"'` + "`" + `)>}\],:;?!]|\z)`)
 	// pathTokenStart is the prefix class (?:^|[\s\"'`(<{\[]) of _PATH_TOKEN without ^.
 	pathTokenStart = regexp.MustCompile(`\A[` + spaceChars + `"'` + "`" + `(<{\[]`)
+	// asciiPathTokenStart says, for each ASCII character, whether pathTokenStart matches it.
+	asciiPathTokenStart = func() (table [utf8.RuneSelf]bool) {
+		for c := range table {
+			table[c] = pathTokenStart.MatchString(string(rune(c)))
+		}
+		return table
+	}()
 
 	// lineSuffix is the pattern of _clean_path_candidate's re.sub without its $, which cleanPathCandidate
 	// ports by hand.
@@ -1028,13 +1032,30 @@ func countTruncatedItems(items []any) int {
 // Terms returns the set of lower-cased words of three or more ASCII letters, digits or underscores in
 // text. gates.py calls this Python-private function.
 //
+// The matches of _WORD, [A-Za-z0-9_]{3,}, are the runs of three or more ASCII word bytes.
+//
 // py: agent_decisions/evidence.py _terms
 func Terms(text string) map[string]bool {
 	terms := map[string]bool{}
-	for _, term := range word.FindAllString(text, -1) {
-		terms[strings.ToLower(term)] = true // ASCII
-	}
+	eachTerm(text, func(term string) { terms[term] = true })
 	return terms
+}
+
+// eachTerm passes each match of _WORD in text to yield, lowercased.
+func eachTerm(text string, yield func(term string)) {
+	for i := 0; i < len(text); i++ {
+		start := i
+		for i < len(text) && isASCIIWord(text[i]) {
+			i++
+		}
+		if i-start >= 3 {
+			yield(strings.ToLower(text[start:i])) // ASCII
+		}
+	}
+}
+
+func isASCIIWord(c byte) bool {
+	return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '_'
 }
 
 // looksLikeConstraint reports whether text holds a constraint word.
@@ -1050,20 +1071,23 @@ func looksLikeConstraint(text string) bool {
 	return false
 }
 
-// overlap returns len(a & b).
-func overlap(a, b map[string]bool) int {
-	n := 0
-	for term := range a {
-		if b[term] {
-			n++
-		}
+// termOverlap returns len(queryTerms & Terms(text)) without collecting the terms of text.
+func termOverlap(queryTerms map[string]bool, text string) int {
+	if len(queryTerms) == 0 {
+		return 0
 	}
-	return n
+	shared := map[string]bool{}
+	eachTerm(text, func(term string) {
+		if queryTerms[term] {
+			shared[term] = true
+		}
+	})
+	return len(shared)
 }
 
 // py: agent_decisions/evidence.py _text_score
 func textScore(text string, queryTerms map[string]bool) int {
-	score := 100 * overlap(queryTerms, Terms(text))
+	score := 100 * termOverlap(queryTerms, text)
 	if looksLikeConstraint(text) {
 		score += 40
 	}
@@ -1084,7 +1108,7 @@ func selectUserMessages(messages []string, query string, clean func(string) stri
 	queryTerms := Terms(query)
 	rows := make([]ranked, len(messages))
 	for idx, message := range messages {
-		shared := overlap(queryTerms, Terms(message))
+		shared := termOverlap(queryTerms, message)
 		constrained := looksLikeConstraint(message)
 		group := 3
 		switch {
@@ -1598,6 +1622,9 @@ func pathCandidates(texts []string, frame int, yield func(string) bool) error {
 func pathTokens(text string) []string {
 	var found []string
 	attempt := func(at int) int {
+		if !mayStartPathToken(text[at:]) {
+			return -1
+		}
 		if loc := pathToken.FindStringSubmatchIndex(text[at:]); loc != nil {
 			found = append(found, text[at+loc[2]:at+loc[3]])
 			return at + loc[3] // the lookahead does not consume
@@ -1611,8 +1638,8 @@ func pathTokens(text string) []string {
 				continue
 			}
 		}
-		if loc := pathTokenStart.FindStringIndex(text[p:]); loc != nil {
-			if end := attempt(p + loc[1]); end >= 0 {
+		if start := pathTokenStartLen(text[p:]); start > 0 {
+			if end := attempt(p + start); end >= 0 {
 				p = end
 				continue
 			}
@@ -1621,6 +1648,35 @@ func pathTokens(text string) []string {
 		p += size
 	}
 	return found
+}
+
+// pathTokenStartLen returns the length of the pathTokenStart match at the start of a non-empty s, or 0.
+func pathTokenStartLen(s string) int {
+	if s[0] < utf8.RuneSelf {
+		if asciiPathTokenStart[s[0]] {
+			return 1
+		}
+		return 0
+	}
+	if loc := pathTokenStart.FindStringIndex(s); loc != nil {
+		return loc[1]
+	}
+	return 0
+}
+
+// mayStartPathToken reports whether pathToken can match at the start of s. Each alternative of its group
+// is a run of [A-Za-z0-9_@+./-] that holds a "/" or a ".", so it cannot match where the run at the start
+// of s holds neither. The check skips the regexp at most word starts.
+func mayStartPathToken(s string) bool {
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case c == '/' || c == '.':
+			return true
+		case !isASCIIWord(c) && c != '@' && c != '+' && c != '-':
+			return false
+		}
+	}
+	return false
 }
 
 // stringValues passes text to yield, then every string in its JSON value, and returns false when yield
@@ -1689,8 +1745,10 @@ func cleanPathCandidate(raw string) string {
 	if strings.HasSuffix(value, "\n") {
 		body, newline = value[:len(value)-1], "\n"
 	}
-	if loc := lineSuffix.FindStringIndex(body); loc != nil {
-		value = body[:loc[0]] + newline
+	if strings.IndexByte(body, ':') >= 0 { // the only way lineSuffix can match
+		if loc := lineSuffix.FindStringIndex(body); loc != nil {
+			value = body[:loc[0]] + newline
+		}
 	}
 	if strings.Contains(value, "://") || value == "" || value == "." || value == ".." {
 		return ""

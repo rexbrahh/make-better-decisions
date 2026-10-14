@@ -332,7 +332,8 @@ func records(stream io.ReadSeeker, end int64, frames int) iter.Seq2[*json.Object
 			yield(nil, pyerr.NewOSError(err))
 			return
 		}
-		lines := bufio.NewReader(io.LimitReader(stream, end))
+		// A large buffer: each read is a system call, and transcripts run to tens of megabytes.
+		lines := bufio.NewReaderSize(io.LimitReader(stream, end), 1<<20)
 		for {
 			line, readErr := lines.ReadBytes('\n')
 			if len(line) > 0 {

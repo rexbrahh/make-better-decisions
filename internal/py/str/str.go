@@ -25,6 +25,9 @@ import (
 // UTF-8 is one code point, U+DC00 plus the byte, as the surrogateescape error handler decodes it. An empty
 // s gives (utf8.RuneError, 0).
 func DecodeRune(s string) (rune, int) {
+	if s != "" && s[0] < utf8.RuneSelf {
+		return rune(s[0]), 1
+	}
 	r, size := utf8.DecodeRuneInString(s)
 	if r != utf8.RuneError || size != 1 {
 		return r, size
@@ -39,6 +42,11 @@ func DecodeRune(s string) (rune, int) {
 //
 // py: Objects/unicodeobject.c unicode_length (Python 3.15)
 func Len(s string) int {
+	// Without a 0xED byte, s holds no surrogate sequence, and DecodeRune reads each byte that is not valid
+	// UTF-8 as one code point, as utf8.RuneCountInString does.
+	if strings.IndexByte(s, 0xed) < 0 {
+		return utf8.RuneCountInString(s)
+	}
 	n := 0
 	for i := 0; i < len(s); n++ {
 		_, size := DecodeRune(s[i:])
@@ -96,6 +104,9 @@ func offset(s string, i int) int {
 //
 // py: Objects/unicodectype.c _PyUnicode_IsWhitespace (Python 3.15)
 func IsSpace(r rune) bool {
+	if 0 <= r && r < utf8.RuneSelf {
+		return asciiSpace[r]
+	}
 	return unicode.Is(spaceTable, r)
 }
 
@@ -177,18 +188,42 @@ func LStripChars(s, chars string) string {
 //
 // py: Objects/unicodeobject.c do_argstrip (Python 3.15)
 func RStripChars(s, chars string) string {
-	end := 0 // decode forward: a backward decoder can split a surrogate or undecodable byte differently
-	for i := 0; i < len(s); {
-		r, size := DecodeRune(s[i:])
-		if i += size; !containsRune(chars, r) {
-			end = i
+	// A backward decoder can split a surrogate or undecodable byte differently, so this decodes forward. An
+	// ASCII byte is always a code point of its own, so a forward decode can start just after one: each
+	// round decodes only the trailing run of non-ASCII bytes.
+	end := len(s)
+	for end > 0 {
+		if c := s[end-1]; c < utf8.RuneSelf {
+			if !containsRune(chars, rune(c)) {
+				return s[:end]
+			}
+			end--
+			continue
 		}
+		start := end - 1
+		for start > 0 && s[start-1] >= utf8.RuneSelf {
+			start--
+		}
+		kept := start
+		for i := start; i < end; {
+			r, size := DecodeRune(s[i:end])
+			if i += size; !containsRune(chars, r) {
+				kept = i
+			}
+		}
+		if kept > start {
+			return s[:kept]
+		}
+		end = start
 	}
-	return s[:end]
+	return ""
 }
 
 // containsRune reports whether r is one of the code points of chars.
 func containsRune(chars string, r rune) bool {
+	if 0 <= r && r < utf8.RuneSelf {
+		return strings.IndexByte(chars, byte(r)) >= 0 // an ASCII byte in chars is a code point of its own
+	}
 	for chars != "" {
 		c, size := DecodeRune(chars)
 		if c == r {
@@ -233,6 +268,24 @@ func isLineBreak(r rune) bool {
 		return true
 	}
 	return false
+}
+
+// asciiSpace and ascii hold the tables' answers for each ASCII code point, which are the hot path.
+var (
+	asciiSpace [utf8.RuneSelf]bool
+	ascii      [utf8.RuneSelf]struct {
+		cased, caseIgnorable bool
+		lower                string // what Lower maps the code point to, or "" when it maps to itself
+	}
+)
+
+func init() {
+	for r := range rune(utf8.RuneSelf) {
+		asciiSpace[r] = unicode.Is(spaceTable, r)
+		c := &ascii[r]
+		c.cased, c.caseIgnorable = unicode.Is(casedTable, r), unicode.Is(caseIgnorableTable, r)
+		c.lower, _ = caseMapping(lowerRanges, lowerSpecial, r)
+	}
 }
 
 // caseRange maps the code points lo, lo+stride, ..., hi to themselves plus delta.
@@ -290,6 +343,13 @@ func Casefold(s string) string {
 func Lower(s string) string {
 	casedBefore := false // whether the last code point that is not case-ignorable is cased
 	return mapCodePoints(s, func(at int, r rune) (string, bool) {
+		if r < utf8.RuneSelf {
+			c := ascii[r]
+			if !c.caseIgnorable {
+				casedBefore = c.cased
+			}
+			return c.lower, c.lower != ""
+		}
 		final := casedBefore
 		if !unicode.Is(caseIgnorableTable, r) {
 			casedBefore = unicode.Is(casedTable, r)
