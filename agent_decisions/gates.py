@@ -611,7 +611,7 @@ def classify(command: str) -> tuple[str, str]:
     return "misuse", ""
 
 
-_BRACE = re.compile(r"\{([^{}]*,[^{}]*)\}")
+_BRACE = re.compile(r"\{([^{},]*(?:,[^{},]*)+)\}")  # commas split the parts, so a failed match backtracks linearly
 _HOME_VARIABLE = re.compile(r"\$(?:\{HOME\}|HOME\b)")
 _GLOB = re.compile(r"[*?[]")
 

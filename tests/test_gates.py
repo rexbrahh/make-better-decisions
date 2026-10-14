@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shlex
+import time
 from unittest import mock
 
 from agent_decisions import gates, jev, policy
@@ -161,6 +162,11 @@ PY
                         "echo $HOME_DIR/x", "ls ~/agent-decisions/{README,SECURITY}.md"):
             with self.subTest(command=command):
                 self.assertIsNone(gates.guard({"command": command}))
+
+    def test_an_unclosed_brace_after_brace_groups_is_checked_in_linear_time(self):
+        start = time.perf_counter()
+        self.assertIsNone(gates.guard({"command": "echo " + "{a,b}" * 6 + "{" + "," * 5000}))
+        self.assertLess(time.perf_counter() - start, 1)  # quadratic backtracking took 6 s; the hook timeout is 15 s
 
     def test_tilde_words_for_unknown_users_do_not_raise(self):
         self.assertIsNone(gates.guard({"command": "echo ~5% faster; ls ~nosuchuser/x"}))
