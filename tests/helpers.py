@@ -74,10 +74,12 @@ class StateTestCase(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp()).resolve()
         self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
-        self._saved = {k: os.environ.get(k) for k in ("AGENT_DECISIONS_STATE", "TYPESAFE_API_KEY", "AGENT_DECISIONS_OFF")}
+        self._saved = {k: os.environ.get(k) for k in ("AGENT_DECISIONS_STATE", "TYPESAFE_API_KEY", "AGENT_DECISIONS_OFF",
+                                                      "CLAUDE_CONFIG_DIR")}
         os.environ["AGENT_DECISIONS_STATE"] = str(self.dir / "state")
         os.environ["TYPESAFE_API_KEY"] = "test-key-0123456789abcdef"
         os.environ.pop("AGENT_DECISIONS_OFF", None)
+        os.environ.pop("CLAUDE_CONFIG_DIR", None)
         self.addCleanup(self._restore)
 
     def _restore(self):

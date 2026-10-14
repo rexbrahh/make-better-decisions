@@ -21,7 +21,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from . import evidence, ledger, policy, runtime
 
 PROFILE_NAME = "agent-decisions-isolation"
-NATIVE_CODEX_SERVERS = frozenset({
+NATIVE_SERVERS = frozenset({
     "codex_app", "adrafinil", "node_repl", "cua_repl", "computer-history",
     "computer-use", "event-stream", "mcp-search", "messages",
 })
@@ -30,6 +30,7 @@ CODEX_BINARY = "/opt/homebrew/bin/codex"
 _SECRET_KEY_PARTS = ("api_key", "apikey", "access_token", "auth_token", "bearer_token", "credential", "password", "private_key", "secret", "token")
 _SECRET_CLI_FLAGS = {"api-key", "api_key", "token", "password", "secret", "bearer-token", "bearer_token", "access-token", "access_token"}
 _REDACTED = "<redacted>"
+_WRITE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 _RUNTIME_SERVER_KEYS = {"auth_status", "disabled_reason", "name", "source"}
 _CLI_SECRET_EQUALS = re.compile(r"(?i)(--(?:api[-_]?key|access[-_]?token|bearer[-_]?token|token|password|secret)=)([^\s]+)")
 _CLI_SECRET_NEXT = re.compile(r"(?i)(--(?:api[-_]?key|access[-_]?token|bearer[-_]?token|token|password|secret)\s+)([^\s]+)")
@@ -58,18 +59,29 @@ def isolate_path(install_root: Any) -> str:
     return str((Path(install_root).expanduser() / "bin" / "agent-decisions-isolate").absolute())
 
 
+def claude_config_roots(home: Optional[Path] = None) -> List[Tuple[Path, Path]]:
+    """Return each Claude config dir with its global .claude.json.
+
+    CLAUDE_CONFIG_DIR selects a dir per launch, so the installer also covers every
+    ~/.claude-* dir that holds a .claude.json, not only the one set in its own shell.
+    """
+    base = Path.home() if home is None else home
+    dirs = [path.parent for path in sorted(base.glob(".claude-*/.claude.json"))]
+    selected = os.environ.get("CLAUDE_CONFIG_DIR")
+    if selected:
+        dirs.append(Path(selected).expanduser())
+    return [(base / ".claude", base / ".claude.json"), *((root, root / ".claude.json") for root in dirs)]
+
+
 def host_config_paths(host: str, home: Optional[Path] = None) -> List[str]:
     base = Path.home() if home is None else home
     if host == "codex":
         return [canonical_path(base / ".codex" / "config.toml"),
                 *[str(path.absolute()) for path in sorted((base / ".codex").glob("*.config.toml"))]]
     if host == "claude":
-        return [
-            canonical_path(base / ".claude" / "settings.json"),
-            canonical_path(base / ".claude" / "settings.local.json"),
-            canonical_path(base / ".claude.json"),
-            canonical_path(base / ".claude" / "plugins" / "installed_plugins.json"),
-        ]
+        return [canonical_path(path) for root, config in claude_config_roots(home)
+                for path in (root / "settings.json", root / "settings.local.json", config,
+                             root / "plugins" / "installed_plugins.json")]
     raise InstallError("host must be codex or claude")
 
 
@@ -78,7 +90,7 @@ def transcript_roots(host: str, home: Optional[Path] = None) -> List[str]:
     if host == "codex":
         return [canonical_path(base / ".codex" / "sessions")]
     if host == "claude":
-        return [canonical_path(base / ".claude" / "projects")]
+        return [canonical_path(root / "projects") for root, _ in claude_config_roots(home)]
     raise InstallError("host must be codex or claude")
 
 
@@ -283,7 +295,7 @@ def codex_mcp_wrapper_config(server: Mapping[str, Any], install_root: Any,
     if transport.get("type") != "stdio":
         return None
     name = _server_name(server)
-    native = name in NATIVE_CODEX_SERVERS
+    native = name in NATIVE_SERVERS
     if native and not _is_codex_wrapper_transport(transport, name):
         return None
     value: Dict[str, Any] = {}
@@ -362,12 +374,13 @@ def claude_servers_from_settings(settings: Mapping[str, Any], source: str = "cla
     return servers
 
 
-def claude_servers_from_sources(settings: Mapping[str, Any], claude_json: Optional[Mapping[str, Any]] = None,
+def claude_servers_from_sources(settings: Mapping[str, Any],
+                                claude_configs: Optional[Iterable[Tuple[str, Mapping[str, Any]]]] = None,
                                 plugin_manifests: Optional[Iterable[Tuple[str, Mapping[str, Any]]]] = None
                                 ) -> Dict[str, Dict[str, Any]]:
     servers = claude_servers_from_settings(settings, "claude:settings.mcpServers")
-    if claude_json is not None:
-        servers.update(claude_servers_from_settings(claude_json, "claude:~/.claude.json"))
+    for source, config in claude_configs or ():
+        servers.update(claude_servers_from_settings(config, source))
     for source, manifest in plugin_manifests or ():
         servers.update(claude_servers_from_settings(manifest, source))
         raw = manifest.get("servers")
@@ -442,7 +455,9 @@ def _expand_plugin_root_macros(value: Any, plugin_root: str) -> Any:
 
 def claude_matchers_from_servers(servers: Mapping[str, Mapping[str, Any]]) -> List[List[str]]:
     matchers: List[List[str]] = []
-    for recipe in servers.values():
+    for name, recipe in servers.items():
+        if name in NATIVE_SERVERS:
+            continue  # native launchers run unwrapped, as on Codex
         args = recipe.get("args", [])
         if isinstance(recipe.get("command"), str) and isinstance(args, list):
             matchers.append([recipe["command"], *[str(item) for item in args]])
@@ -451,7 +466,8 @@ def claude_matchers_from_servers(servers: Mapping[str, Mapping[str, Any]]) -> Li
 
 def merge_claude_settings(settings: Mapping[str, Any], shell_prefix: str, state_root: Any,
                           protected_paths: Iterable[str],
-                          previous_spec: Optional[Mapping[str, Any]] = None) -> Tuple[Dict[str, Any], Optional[str]]:
+                          previous_spec: Optional[Mapping[str, Any]] = None,
+                          transcripts: Iterable[str] = ()) -> Tuple[Dict[str, Any], Optional[str]]:
     merged = copy.deepcopy(dict(settings))
     env = merged.get("env")
     if not isinstance(env, dict):
@@ -489,21 +505,27 @@ def merge_claude_settings(settings: Mapping[str, Any], shell_prefix: str, state_
         deny = []
         permissions["deny"] = deny
     _append_tool_denies(deny, state, read=True, write=True)
-    for path in protected_paths:
-        _append_tool_denies(deny, canonical_path(path), read=False, write=True)
+    transcript_paths = {canonical_path(path) for path in transcripts}
+    for path in map(canonical_path, protected_paths):
+        if path in transcript_paths:
+            _append_transcript_denies(deny, path)  # the Bash sandbox above still denies the whole root
+        else:
+            _append_tool_denies(deny, path, read=False, write=True)
     return merged, previous
 
 
 def build_claude_plan(settings: Mapping[str, Any], state_root: Any, install_root: Any,
-                      home: Optional[Path] = None, claude_json: Optional[Mapping[str, Any]] = None,
+                      home: Optional[Path] = None,
+                      claude_configs: Optional[Iterable[Tuple[str, Mapping[str, Any]]]] = None,
                       plugin_manifests: Optional[Iterable[Tuple[str, Mapping[str, Any]]]] = None,
                       previous_spec: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
     state = canonical_path(state_root)
     root = canonical_path(install_root)
     protected = protected_write_paths("claude", root, home)
     prefix = shell_prefix_path(runtime.current(home))
-    servers = claude_servers_from_sources(settings, claude_json, plugin_manifests)
-    merged, previous = merge_claude_settings(settings, prefix, state, protected, previous_spec)
+    servers = claude_servers_from_sources(settings, claude_configs, plugin_manifests)
+    merged, previous = merge_claude_settings(settings, prefix, state, protected, previous_spec,
+                                             transcript_roots("claude", home))
     matchers = claude_matchers_from_servers(servers)
     entry = installation_entry("claude", state, servers, matchers, previous, protected)
     configure_session_exceptions(entry, previous_spec)
@@ -822,7 +844,7 @@ def cli(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--codex-config", default=str(Path.home() / ".codex" / "config.toml"))
     parser.add_argument("--codex-mcp-json")
     parser.add_argument("--claude-settings", default=str(Path.home() / ".claude" / "settings.json"))
-    parser.add_argument("--claude-json", default=str(Path.home() / ".claude.json"))
+    parser.add_argument("--claude-json", action="append", default=[])
     parser.add_argument("--claude-plugin-manifest", action="append", default=[])
     args = parser.parse_args(argv)
 
@@ -843,8 +865,9 @@ def cli(argv: Optional[List[str]] = None) -> int:
         manifest_paths = [Path(path) for path in args.claude_plugin_manifest]
         if not manifest_paths:
             manifest_paths = discover_claude_plugin_manifests()
+        config_paths = args.claude_json or dict.fromkeys(canonical_path(config) for _, config in claude_config_roots())
         plans.append(build_claude_plan(read_json(args.claude_settings), args.state_root, args.install_root,
-                                       claude_json=read_json(args.claude_json),
+                                       claude_configs=[(str(path), read_json(path)) for path in config_paths],
                                        plugin_manifests=read_claude_plugin_manifests(manifest_paths),
                                        previous_spec=previous_installation_spec("claude")))
 
@@ -1066,13 +1089,25 @@ def _append_tool_denies(deny: List[Any], path: str, *, read: bool, write: bool) 
     if read:
         tools.append("Read")
     if write:
-        tools.extend(["Edit", "Write", "MultiEdit", "NotebookEdit"])
+        tools.extend(_WRITE_TOOLS)
     tool_path = _claude_tool_path(path)
     for tool in tools:
         for pattern in (tool_path, f"{tool_path}/**"):
             rule = f"{tool}({pattern})"
             if rule not in deny:
                 deny.append(rule)
+
+
+def _append_transcript_denies(deny: List[Any], path: str) -> None:
+    """Deny file-tool writes to transcripts, leaving the memory notes beside them writable."""
+    tool_path = _claude_tool_path(path)
+    # Installs before 1.2.3 denied the whole root, and Claude Code cannot carve a //-anchored deny back open.
+    stale = [f"{tool}({pattern})" for tool in _WRITE_TOOLS for pattern in (tool_path, f"{tool_path}/**")]
+    deny[:] = [rule for rule in deny if rule not in stale]
+    for tool in _WRITE_TOOLS:
+        rule = f"{tool}({tool_path}/**/*.jsonl)"
+        if rule not in deny:
+            deny.append(rule)
 
 
 def _claude_tool_path(path: str) -> str:

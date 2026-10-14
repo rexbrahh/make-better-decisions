@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import socket
 import sys
 import threading
@@ -269,15 +270,78 @@ network_access = true # comment
 
     def test_claude_inventory_reads_user_json_and_plugin_manifests_without_disabling_servers(self):
         settings = {"mcpServers": {"settings-local": {"command": "/bin/echo"}}}
-        claude_json = {"mcpServers": {"adrafinil": {"command": "/bin/echo", "args": ["a"]}}}
+        configs = [("/home/.claude.json", {"mcpServers": {"adrafinil": {"command": "/bin/echo", "args": ["a"]}}}),
+                   ("/home/.claude-primary/.claude.json", {"mcpServers": {"notes": {"command": "/bin/echo"}}})]
         manifests = [("/plugin/claude-mem/.mcp.json",
                       {"mcpServers": {"claude-mem": {"command": "/bin/echo", "args": ["m"]}}})]
 
-        servers = install.claude_servers_from_sources(settings, claude_json, manifests)
+        servers = install.claude_servers_from_sources(settings, configs, manifests)
 
-        self.assertEqual(set(servers), {"settings-local", "adrafinil", "claude-mem"})
-        self.assertEqual(servers["adrafinil"]["source"], "claude:~/.claude.json")
+        self.assertEqual(set(servers), {"settings-local", "adrafinil", "notes", "claude-mem"})
+        self.assertEqual(servers["adrafinil"]["source"], "/home/.claude.json")
+        self.assertEqual(servers["notes"]["source"], "/home/.claude-primary/.claude.json")
         self.assertEqual(servers["claude-mem"]["source"], "/plugin/claude-mem/.mcp.json")
+
+    def test_claude_config_dirs_cover_every_claude_json_and_the_selected_dir(self):
+        home = self.dir / "home"
+        selected = self.dir / "elsewhere"
+        for root in (home / ".claude-primary", home / ".claude-scratch", selected):
+            root.mkdir(parents=True)
+        (home / ".claude-primary" / ".claude.json").write_text("{}")
+        os.environ["CLAUDE_CONFIG_DIR"] = str(selected)
+
+        protected = install.protected_write_paths("claude", self.dir / "package", home)
+
+        for root, config in ((home / ".claude", home / ".claude.json"),
+                             (home / ".claude-primary", home / ".claude-primary" / ".claude.json"),
+                             (selected, selected / ".claude.json")):
+            for path in (config, root / "settings.json", root / "settings.local.json",
+                         root / "plugins" / "installed_plugins.json", root / "projects"):
+                self.assertIn(install.canonical_path(path), protected)
+        self.assertFalse(any(".claude-scratch" in path for path in protected))  # no .claude.json, not a config dir
+
+    def test_claude_transcript_denies_cover_jsonl_and_leave_memory_writable(self):
+        home = self.dir / "home"
+        projects = install.canonical_path(home / ".claude" / "projects")
+        settings = {"permissions": {"deny": [f"Write(/{projects}/**)", f"Edit(/{projects})", "Bash(rm *)"]}}
+
+        plan = install.build_claude_plan(settings, self.dir / "state", self.dir / "package", home=home)
+
+        deny = plan["merged_settings"]["permissions"]["deny"]
+        under_projects = [rule for rule in deny if f"/{projects}" in rule]
+        self.assertIn(f"Write(/{projects}/**/*.jsonl)", deny)
+        self.assertIn(f"Edit(/{projects}/**/*.jsonl)", deny)
+        self.assertTrue(all(rule.endswith("/**/*.jsonl)") for rule in under_projects), under_projects)  # memory/*.md open
+        self.assertIn("Bash(rm *)", deny)
+        self.assertIn(projects, plan["merged_settings"]["sandbox"]["filesystem"]["denyWrite"])
+
+    def test_claude_native_launchers_are_recorded_but_not_isolated(self):
+        settings = {"mcpServers": {"adrafinil": {"command": "/native/adrafinil"},
+                                   "local": {"command": "/bin/echo", "args": ["ok"]}}}
+
+        plan = install.build_claude_plan(settings, self.dir / "state", self.dir / "package", home=self.dir)
+
+        self.assertIn("adrafinil", plan["servers"])
+        self.assertEqual(plan["claude_matchers"], [["/bin/echo", "ok"]])
+
+    def test_claude_cli_reads_discovered_configs_unless_paths_are_explicit(self):
+        home = self.dir / "home"
+        (home / ".claude-primary").mkdir(parents=True)
+        (home / ".claude.json").write_text(json.dumps({"mcpServers": {"default": {"command": "/bin/echo"}}}))
+        (home / ".claude-primary" / ".claude.json").write_text(
+            json.dumps({"mcpServers": {"primary": {"command": "/bin/echo"}}}))
+        explicit = self.dir / "explicit.json"
+        explicit.write_text(json.dumps({"mcpServers": {"explicit": {"command": "/bin/echo"}}}))
+
+        def servers(*extra):
+            out = io.StringIO()
+            with mock.patch.object(Path, "home", return_value=home), mock.patch("sys.stdout", out):
+                install.cli(["--host", "claude", "--state-root", str(self.dir / "state"),
+                             "--install-root", str(self.dir / "package"), *extra])
+            return set(json.loads(out.getvalue())["plans"][0]["servers"])
+
+        self.assertEqual(servers(), {"default", "primary"})
+        self.assertEqual(servers("--claude-json", str(explicit)), {"explicit"})
 
     def test_claude_manifest_discovery_uses_install_path_not_stale_cache(self):
         home = self.dir / "home"
