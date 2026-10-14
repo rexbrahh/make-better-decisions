@@ -25,6 +25,10 @@ func TestExpandUser(t *testing.T) {
 			t.Errorf("ExpandUser(%q) with HOME=%q = %q, %v; want %q", c.path, c.home, got, err, c.want)
 		}
 	}
+	if _, err := ExpandUser("~\xed\xa0\x80/x"); err == nil || err.Error() !=
+		"'utf-8' codec can't encode character '\\ud800' in position 0: surrogates not allowed" {
+		t.Errorf("ExpandUser(~\\ud800/x) error = %v; Python raises UnicodeEncodeError", err)
+	}
 	if _, err := ExpandUser("~a\x00b/c"); err == nil {
 		t.Error("ExpandUser accepted a NUL byte in the user name; Python raises ValueError")
 	}

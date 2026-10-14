@@ -336,7 +336,10 @@ func abspath(p string) (string, error) {
 		if err != nil {
 			return "", pyerr.NewOSError(err)
 		}
-		p = cwd + "/" + p
+		if !strings.HasSuffix(cwd, "/") { // posixpath.join adds no separator after "/"
+			cwd += "/"
+		}
+		p = cwd + p
 	}
 	return normpath(p), nil
 }

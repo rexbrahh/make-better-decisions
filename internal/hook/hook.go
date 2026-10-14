@@ -82,7 +82,7 @@ const (
 func Handle(event string, payload any, host string, post jev.PostFunc) (*json.Object, error) {
 	given, ok := payload.(*json.Object)
 	if !ok {
-		return nil, typeError("'%s' object is not a mapping", typeName(payload))
+		return nil, typeError("'%s' object is not a mapping", json.TypeName(payload))
 	}
 	call := given.Copy()
 	toolUseID := given.Value("tool_use_id")
@@ -158,9 +158,8 @@ func preToolUse(payload *json.Object, host string, post jev.PostFunc) (*json.Obj
 	if !json.Truthy(nameValue) {
 		nameValue = ""
 	}
-	switch nameValue.(type) {
-	case []any, *json.Object:
-		return nil, typeError("cannot use '%s' as a set element (unhashable type: '%s')", typeName(nameValue), typeName(nameValue))
+	if err := json.Unhashable(nameValue, "set element"); err != nil {
+		return nil, err
 	}
 	name, _ := nameValue.(string) // another hashable value is in no tool set
 	toolInput, ok := payload.Value("tool_input").(*json.Object)
@@ -300,8 +299,7 @@ func requestContracts(request string) ([]string, error) {
 		}
 		return contracts, nil
 	}()
-	switch pyClass(err) {
-	case "ValueError", "JSONDecodeError", "AttributeError", "RequestError":
+	if pyerr.IsInstance(err, "ValueError", "AttributeError", "RequestError") {
 		return nil, nil
 	}
 	return contracts, err
@@ -1080,7 +1078,7 @@ func savedUsers(payload *json.Object, host string, t transcript.Transcript, entr
 		text, ok := message.(string)
 		if host == "codex" && !ok {
 			return nil, &pyerr.Error{Class: "AttributeError",
-				Msg: fmt.Sprintf("'%s' object has no attribute 'lstrip'", typeName(message))}
+				Msg: fmt.Sprintf("'%s' object has no attribute 'lstrip'", json.TypeName(message))}
 		}
 		if host != "codex" || !transcript.IsCodexHookFeedback(text) {
 			users = append(users, message)
@@ -1373,27 +1371,6 @@ func typeError(format string, args ...any) error {
 	return &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf(format, args...)}
 }
 
-// typeName returns type(v).__name__ for a decoded value.
-func typeName(v any) string {
-	switch v.(type) {
-	case nil:
-		return "NoneType"
-	case bool:
-		return "bool"
-	case json.Int:
-		return "int"
-	case float64:
-		return "float"
-	case string:
-		return "str"
-	case []any:
-		return "list"
-	case *json.Object:
-		return "dict"
-	}
-	return fmt.Sprintf("%T", v)
-}
-
 // sameValue returns a == b, treating a comparison that Python would fail on as unequal.
 func sameValue(a, b any) bool {
 	same, err := json.Equal(a, b)
@@ -1417,7 +1394,7 @@ func orUnknown(value any) any {
 func sessionEntries(session any) ([]*json.Object, error) {
 	text, ok := session.(string)
 	if !ok {
-		return nil, typeError("expected string or bytes-like object, got '%s'", typeName(session))
+		return nil, typeError("expected string or bytes-like object, got '%s'", json.TypeName(session))
 	}
 	limit := policy.CachedReviews
 	return ledger.Entries(text, &limit)
@@ -1429,7 +1406,7 @@ func sessionEntries(session any) ([]*json.Object, error) {
 func pathArgument(value any) (string, error) {
 	text, ok := value.(string)
 	if !ok {
-		return "", typeError("expected str, bytes or os.PathLike object, not %s", typeName(value))
+		return "", typeError("expected str, bytes or os.PathLike object, not %s", json.TypeName(value))
 	}
 	return text, nil
 }
@@ -1449,7 +1426,7 @@ func pyStr(v any) (string, error) {
 		}
 		return "False", nil
 	}
-	return "", typeError("agent_id of type %s is not supported", typeName(v))
+	return "", typeError("agent_id of type %s is not supported", json.TypeName(v))
 }
 
 // get returns v.get(key, fallback), or the AttributeError that Python raises when v is not a dict.
@@ -1457,7 +1434,7 @@ func get(v any, key string, fallback any) (any, error) {
 	object, ok := v.(*json.Object)
 	if !ok {
 		return nil, &pyerr.Error{Class: "AttributeError",
-			Msg: fmt.Sprintf("'%s' object has no attribute 'get'", typeName(v))}
+			Msg: fmt.Sprintf("'%s' object has no attribute 'get'", json.TypeName(v))}
 	}
 	if value, ok := object.Get(key); ok {
 		return value, nil
@@ -1469,7 +1446,7 @@ func get(v any, key string, fallback any) (any, error) {
 func index(v any, key string) (any, error) {
 	object, ok := v.(*json.Object)
 	if !ok {
-		return nil, typeError("'%s' object is not subscriptable", typeName(v))
+		return nil, typeError("'%s' object is not subscriptable", json.TypeName(v))
 	}
 	value, ok := object.Get(key)
 	if !ok {
@@ -1496,7 +1473,7 @@ func iterate(v any) ([]any, error) {
 		}
 		return chars, nil
 	}
-	return nil, typeError("'%s' object is not iterable", typeName(v))
+	return nil, typeError("'%s' object is not iterable", json.TypeName(v))
 }
 
 // contains returns `item in container` for a list, dict or str container.
@@ -1519,11 +1496,11 @@ func contains(container, item any) (bool, error) {
 	case string:
 		text, ok := item.(string)
 		if !ok {
-			return false, typeError("'in <string>' requires string as left operand, not %s", typeName(item))
+			return false, typeError("'in <string>' requires string as left operand, not %s", json.TypeName(item))
 		}
 		return strings.Contains(container, text), nil
 	}
-	return false, typeError("argument of type '%s' is not iterable", typeName(container))
+	return false, typeError("argument of type '%s' is not iterable", json.TypeName(container))
 }
 
 // appendStrings appends values, which must be str, to list.
@@ -1531,7 +1508,7 @@ func appendStrings(list []string, values []any) ([]string, error) {
 	for _, value := range values {
 		text, ok := value.(string)
 		if !ok {
-			return nil, typeError("path of type %s is not supported", typeName(value))
+			return nil, typeError("path of type %s is not supported", json.TypeName(value))
 		}
 		list = append(list, text)
 	}

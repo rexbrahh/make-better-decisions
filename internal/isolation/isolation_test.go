@@ -566,3 +566,11 @@ func TestExecvpeSearchErrors(t *testing.T) {
 		t.Errorf("bytesRepr = %s", got)
 	}
 }
+
+// TestAbspathAtRootCwd checks os.path.abspath from cwd "/": posixpath.join adds no second separator.
+func TestAbspathAtRootCwd(t *testing.T) {
+	t.Chdir("/")
+	if got, err := abspath("x/y"); got != "/x/y" || err != nil {
+		t.Fatalf("abspath = %q, %v; want /x/y", got, err)
+	}
+}

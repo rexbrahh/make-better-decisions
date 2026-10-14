@@ -34,7 +34,10 @@ func ExpandUser(path string) (string, error) {
 			home = entry.HomeDir
 		}
 	} else {
-		name := path[1:i]
+		name, err := pyerr.Fsencode(path[1:i]) // pwd.getpwnam encodes the name before it checks for a NUL
+		if err != nil {
+			return "", err
+		}
 		if strings.IndexByte(name, 0) >= 0 {
 			return "", &pyerr.Error{Class: "ValueError", Msg: "embedded null byte"}
 		}
