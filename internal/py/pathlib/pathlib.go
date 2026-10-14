@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/rexbrahh/make-better-decisions/internal/py/json"
 	"github.com/rexbrahh/make-better-decisions/internal/py/ospath"
 	"github.com/rexbrahh/make-better-decisions/internal/py/pyerr"
 )
@@ -134,4 +135,46 @@ func ExpandUser(p string) (string, error) {
 		return Str(home), nil
 	}
 	return Join(Str(home), rest), nil
+}
+
+// Absolute returns str(Path(p).absolute()) for a normalized p: a relative p joins os.getcwd(), which is the
+// kernel's path (syscall.Getwd, not $PWD).
+//
+// py: Lib/pathlib/_local.py Path.absolute (Python 3.15)
+func Absolute(p string) (string, error) {
+	if strings.HasPrefix(p, "/") {
+		return p, nil
+	}
+	cwd, err := syscall.Getwd()
+	if err != nil {
+		return "", pyerr.NewOSError(err)
+	}
+	if p == "." {
+		return cwd, nil
+	}
+	return Join(cwd, p), nil
+}
+
+// ReadText returns Path(p).read_text(encoding="utf-8"): the path encoded with os.fsencode, then strict UTF-8
+// and universal newlines. Python 3.15 runs in UTF-8 mode, so read_text() without an encoding is the same.
+//
+// py: Lib/pathlib/_local.py Path.read_text (Python 3.15)
+func ReadText(p string) (string, error) {
+	encoded, err := pyerr.Fsencode(p)
+	if err != nil {
+		return "", err
+	}
+	if strings.IndexByte(encoded, 0) >= 0 {
+		return "", &pyerr.Error{Class: "ValueError", Msg: "embedded null byte"}
+	}
+	data, err := os.ReadFile(encoded)
+	if err != nil {
+		return "", pyerr.NewOSError(err, p)
+	}
+	text, err := json.DecodeUTF8Strict(data)
+	if err != nil {
+		return "", err
+	}
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	return strings.ReplaceAll(text, "\r", "\n"), nil
 }

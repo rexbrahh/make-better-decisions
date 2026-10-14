@@ -997,3 +997,30 @@ func TestDefaultInstallRoot(t *testing.T) {
 	check(t, err)
 	wantEqual(t, got, "/plugin/root")
 }
+
+// TestLauncherPathAtRootCwd checks that a relative install root under the working directory "/" gives
+// "/x/...", as Path.absolute does, not "//x/...".
+func TestLauncherPathAtRootCwd(t *testing.T) {
+	t.Chdir("/")
+	if got, err := IsolatePath("x"); got != "/x/bin/agent-decisions-isolate" || err != nil {
+		t.Fatalf("IsolatePath = %q, %v", got, err)
+	}
+}
+
+// TestMainPrintsTracebackLastLine checks the last traceback line of an exception that escapes cli: CPython
+// names a class outside builtins by its module.
+func TestMainPrintsTracebackLastLine(t *testing.T) {
+	dir := setUp(t)
+	for text, want := range map[string]string{
+		"{":   "json.decoder.JSONDecodeError: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)\n",
+		`"x"`: "agent_decisions.install.InstallError: MCP JSON must be an object or list\n",
+	} {
+		writeFile(t, dir+"/mcp.json", text)
+		var stdout, stderr bytes.Buffer
+		code := Main([]string{"--host", "codex", "--state-root", dir + "/state", "--install-root", dir + "/installed",
+			"--codex-mcp-json", dir + "/mcp.json"}, &stdout, &stderr)
+		if code != 1 || stderr.String() != want {
+			t.Errorf("exit %d, stderr %q, want %q", code, stderr.String(), want)
+		}
+	}
+}

@@ -367,3 +367,28 @@ func TestRecursionLimits(t *testing.T) {
 		}
 	}
 }
+
+// TestUnhashable checks the CPython 3.15 texts of `x in a_set`, set.add, dict.get, `x in a_dict` and
+// d[x] = v, which name the role as "a set element" or "a dict key".
+func TestUnhashable(t *testing.T) {
+	cases := []struct {
+		v    any
+		use  string
+		want string
+	}{
+		{[]any{}, "set element", "cannot use 'list' as a set element (unhashable type: 'list')"},
+		{[]string{"a"}, "set element", "cannot use 'list' as a set element (unhashable type: 'list')"},
+		{NewObject(), "dict key", "cannot use 'dict' as a dict key (unhashable type: 'dict')"},
+	}
+	for _, c := range cases {
+		err := Unhashable(c.v, c.use)
+		if err == nil || err.Error() != c.want || err.(interface{ PyType() string }).PyType() != "TypeError" {
+			t.Errorf("Unhashable(%v, %q) = %v, want TypeError %q", c.v, c.use, err, c.want)
+		}
+	}
+	for _, v := range []any{nil, true, Int("1"), 1.5, "s"} {
+		if err := Unhashable(v, "dict key"); err != nil {
+			t.Errorf("Unhashable(%v) = %v, want nil", v, err)
+		}
+	}
+}

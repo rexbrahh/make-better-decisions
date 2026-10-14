@@ -5,9 +5,11 @@ import (
 	"encoding/hex"
 	stdjson "encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -38,7 +40,7 @@ func TestNewOSError(t *testing.T) {
 }
 
 func TestError(t *testing.T) {
-	err := error(&Error{"ValueError", "embedded null byte"})
+	err := error(&Error{Class: "ValueError", Msg: "embedded null byte"})
 	if err.Error() != "embedded null byte" || err.(*Error).PyType() != "ValueError" {
 		t.Errorf("Error = %s %q", err.(*Error).PyType(), err)
 	}
@@ -144,6 +146,92 @@ print(json.dumps(out))`
 			if got != want[i][j] {
 				t.Errorf("case %q handler %d: Go %v; Python %v", c[0], j, got, want[i][j])
 			}
+		}
+	}
+}
+
+func TestIsInstance(t *testing.T) {
+	Register("RequestErrorForTest", "ValueError")
+	cases := []struct {
+		err   error
+		class string
+		want  bool
+	}{
+		{&Error{Class: "JSONDecodeError"}, "ValueError", true},
+		{&Error{Class: "UnicodeDecodeError"}, "ValueError", true},
+		{&Error{Class: "UnicodeEncodeError"}, "UnicodeError", true},
+		{&Error{Class: "RequestErrorForTest"}, "ValueError", true},
+		{&Error{Class: "RequestErrorForTest"}, "Exception", true},
+		{&Error{Class: "ValueError"}, "RequestErrorForTest", false},
+		{&Error{Class: "TypeError"}, "ValueError", false},
+		{&OSError{Class: "BrokenPipeError"}, "OSError", true},
+		{&OSError{Class: "TimeoutError"}, "TimeoutExpired", false},
+		{fmt.Errorf("wrapped: %w", &Error{Class: "KeyError"}), "LookupError", true},
+		{errors.New("plain Go error"), "Exception", false},
+		{nil, "Exception", false},
+	}
+	for _, c := range cases {
+		if got := IsInstance(c.err, c.class); got != c.want {
+			t.Errorf("IsInstance(%v, %s) = %v, want %v", c.err, c.class, got, c.want)
+		}
+	}
+}
+
+// TestBasesMatchPython compares the base of every builtin and stdlib class in the table with CPython.
+func TestBasesMatchPython(t *testing.T) {
+	python := os.Getenv("AGENT_DECISIONS_PYTHON")
+	if python == "" {
+		t.Skip("set AGENT_DECISIONS_PYTHON to a CPython 3.15 interpreter to compare with the oracle")
+	}
+	script := `import builtins, json, subprocess
+classes = dict(vars(builtins), JSONDecodeError=json.JSONDecodeError, SubprocessError=subprocess.SubprocessError,
+               TimeoutExpired=subprocess.TimeoutExpired)
+print(json.dumps({name: [b.__name__ for b in c.__bases__] for name, c in classes.items()
+                  if isinstance(c, type) and issubclass(c, BaseException)}))`
+	output, err := exec.Command(python, "-I", "-c", script).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want map[string][]string
+	if err := stdjson.Unmarshal(output, &want); err != nil {
+		t.Fatal(err)
+	}
+	for class, base := range bases {
+		if class == "RequestErrorForTest" {
+			continue
+		}
+		wantBases, ok := want[class]
+		if !ok {
+			t.Errorf("%s is not a Python builtin or table class", class)
+			continue
+		}
+		wantBase := strings.Join(wantBases, ", ")
+		if wantBase == "object" {
+			wantBase = ""
+		}
+		if base != wantBase {
+			t.Errorf("base of %s = %q, want %q", class, base, wantBase)
+		}
+	}
+}
+
+func TestWriteUncaught(t *testing.T) {
+	cases := []struct {
+		err  error
+		want string
+	}{
+		{&Error{Class: "ValueError"}, "ValueError\n"},
+		{&Error{Class: "InstallError", Msg: "bad", Module: "agent_decisions.install"}, "agent_decisions.install.InstallError: bad\n"},
+		{&OSError{Class: "FileNotFoundError", Msg: "[Errno 2] x"}, "FileNotFoundError: [Errno 2] x\n"},
+		{&Error{Class: "RuntimeError", Msg: "a\xed\xa0\x80b\xff", Module: "agent_decisions.runtime"},
+			`agent_decisions.runtime.RuntimeError: a\ud800b\udcff` + "\n"},
+		{errors.New("go"), "Exception: go\n"},
+	}
+	for _, c := range cases {
+		var out bytes.Buffer
+		WriteUncaught(&out, c.err)
+		if out.String() != c.want {
+			t.Errorf("WriteUncaught(%v) = %q, want %q", c.err, out.String(), c.want)
 		}
 	}
 }

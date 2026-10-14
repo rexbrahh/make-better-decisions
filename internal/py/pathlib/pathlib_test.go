@@ -46,6 +46,16 @@ func TestParentNameJoin(t *testing.T) {
 	}
 }
 
+// TestAbsolute covers the working directory "/", where joining with a second "/" would spell the root "//".
+func TestAbsolute(t *testing.T) {
+	t.Chdir("/")
+	for p, want := range map[string]string{"x": "/x", "a/b": "/a/b", ".": "/", "/y": "/y", "//y": "//y"} {
+		if got, err := Absolute(p); got != want || err != nil {
+			t.Errorf("Absolute(%q) = %q, %v, want %q", p, got, err, want)
+		}
+	}
+}
+
 func TestMkdir(t *testing.T) {
 	root := t.TempDir()
 	deep := Join(root, "a/b/c")
@@ -137,4 +147,33 @@ func TestPathsMatchPython(t *testing.T) {
 		}
 	}
 	t.Logf("%d paths compared", len(paths))
+}
+
+// TestReadText checks the texts and errors of Path.read_text() in CPython 3.15, which encodes the path with
+// os.fsencode before it opens the file.
+func TestReadText(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/ok", []byte("a\r\nb\rc\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/bad", []byte("a\r\nb\rc\xff"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ReadText(dir + "/ok"); got != "a\nb\nc\n" || err != nil {
+		t.Errorf("ReadText(ok) = %q, %v", got, err)
+	}
+	for path, want := range map[string]string{
+		dir + "/bad":    "UnicodeDecodeError 'utf-8' codec can't decode byte 0xff in position 6: invalid start byte",
+		"a\x00b":        "ValueError embedded null byte",
+		"x\xed\xa0\x80": `UnicodeEncodeError 'utf-8' codec can't encode character '\ud800' in position 1: surrogates not allowed`,
+		dir:             "IsADirectoryError [Errno 21] Is a directory: '" + dir + "'",
+		dir + "/none":   "FileNotFoundError [Errno 2] No such file or directory: '" + dir + "/none'",
+	} {
+		_, err := ReadText(path)
+		if err == nil {
+			t.Errorf("ReadText(%q) succeeded, want %s", path, want)
+		} else if got := pyerr.Class(err) + " " + err.Error(); got != want {
+			t.Errorf("ReadText(%q) error = %s, want %s", path, got, want)
+		}
+	}
 }

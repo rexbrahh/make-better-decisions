@@ -2,6 +2,7 @@ package json
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	stdjson "encoding/json"
@@ -664,4 +665,61 @@ func TestLoadsBytesLimitMatchesPython(t *testing.T) {
 	if raised == 0 || raised == len(documents) {
 		t.Errorf("%d of %d documents raised; the depths miss the limit", raised, len(documents))
 	}
+}
+
+// TestDecodeUTF8StrictMatchesPython compares DecodeUTF8Strict with bytes.decode("utf-8") on byte strings
+// built from byteChunks. It runs its own interpreter: a longer oracleScript moves the C stack limit that
+// TestReprNoteGapMatchesPython measures.
+func TestDecodeUTF8StrictMatchesPython(t *testing.T) {
+	python := os.Getenv("AGENT_DECISIONS_PYTHON")
+	if python == "" {
+		t.Skip("set AGENT_DECISIONS_PYTHON to a CPython 3.15 interpreter to compare with the oracle")
+	}
+	g := newGenerator(5)
+	datas := make([]string, 10000)
+	for i := range datas {
+		var data strings.Builder
+		for range g.pick(9) {
+			if g.pick(4) == 0 {
+				data.WriteByte(byte(g.rand.UintN(256)))
+			} else {
+				data.WriteString(byteChunks[g.pick(len(byteChunks))])
+			}
+		}
+		datas[i] = wire(data.String())
+	}
+	input, err := stdjson.Marshal(datas)
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := `import json, sys
+out = []
+for data in json.load(sys.stdin):
+    try:
+        out.append(["ok", bytes.fromhex(data).decode("utf-8").encode("utf-8", "surrogatepass").hex()])
+    except UnicodeDecodeError as error:
+        out.append(["UnicodeDecodeError", str(error)])
+print(json.dumps(out))`
+	command := exec.Command(python, "-I", "-c", script)
+	command.Stdin = bytes.NewReader(input)
+	output, err := command.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want [][2]string
+	if err := stdjson.Unmarshal(output, &want); err != nil {
+		t.Fatal(err)
+	}
+	for i, data := range datas {
+		raw, _ := hex.DecodeString(data)
+		text, err := DecodeUTF8Strict(raw)
+		got := [2]string{"ok", wire(text)}
+		if err != nil {
+			got = [2]string{errorClass(err), err.Error()}
+		}
+		if got != want[i] {
+			t.Errorf("DecodeUTF8Strict(%q) = %q; Python %q", raw, got, want[i])
+		}
+	}
+	t.Logf("%d byte strings", len(datas))
 }

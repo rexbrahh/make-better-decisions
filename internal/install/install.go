@@ -94,8 +94,13 @@ var (
 	defaultAppServerSocket = appServerSocket
 )
 
+func init() { pyerr.Register("InstallError", "RuntimeError") }
+
+// installError is install.InstallError, a RuntimeError subclass.
+//
+// py: agent_decisions/install.py InstallError
 func installError(msg string) error {
-	return &pyerr.Error{Class: "InstallError", Msg: msg}
+	return &pyerr.Error{Class: "InstallError", Msg: msg, Module: "agent_decisions.install"}
 }
 
 // DefaultInstallRoot returns the plugin root. The bootstrap launcher sets AGENT_DECISIONS_SOURCE to it;
@@ -147,7 +152,7 @@ func launcherPath(installRoot, relative string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return absolute(pathlib.Join(root, relative))
+	return pathlib.Absolute(pathlib.Join(root, relative))
 }
 
 // ClaudeConfigRoots returns each Claude config dir with its global .claude.json.
@@ -193,7 +198,7 @@ func HostConfigPaths(host, home string) ([]string, error) {
 		}
 		paths := []string{config}
 		for _, path := range globCodexProfiles(pathlib.Join(base, ".codex")) {
-			absolutePath, err := absolute(path)
+			absolutePath, err := pathlib.Absolute(path)
 			if err != nil {
 				return nil, err
 			}
@@ -520,11 +525,11 @@ func ReadCodexServers(codexBinary string) ([]*json.Object, error) {
 	if err != nil && !errors.As(err, &exitErr) {
 		return nil, spawnError(err, codexBinary)
 	}
-	text, decodeErr := decodeStrict(stdout.Bytes())
+	text, decodeErr := json.DecodeUTF8Strict(stdout.Bytes())
 	if decodeErr != nil {
 		return nil, decodeErr
 	}
-	if _, decodeErr := decodeStrict(stderr.Bytes()); decodeErr != nil {
+	if _, decodeErr := json.DecodeUTF8Strict(stderr.Bytes()); decodeErr != nil {
 		return nil, decodeErr
 	}
 	if exitErr != nil {
@@ -535,7 +540,7 @@ func ReadCodexServers(codexBinary string) ([]*json.Object, error) {
 	}
 	parsed, err := json.Loads(text)
 	if err != nil {
-		if isValueError(err) {
+		if pyerr.IsInstance(err, "ValueError") {
 			return nil, installError("codex mcp list --json returned invalid JSON")
 		}
 		return nil, err
@@ -545,7 +550,7 @@ func ReadCodexServers(codexBinary string) ([]*json.Object, error) {
 
 // py: agent_decisions/install.py read_codex_servers_file
 func ReadCodexServersFile(path string) ([]*json.Object, error) {
-	text, err := readText(pathlib.Str(path))
+	text, err := pathlib.ReadText(pathlib.Str(path))
 	if err != nil {
 		return nil, err
 	}
@@ -904,13 +909,13 @@ func ReadClaudePluginManifests(paths []string) ([]Sourced, error) {
 // py: agent_decisions/install.py _read_claude_plugin_registry
 func readClaudePluginRegistry(home string) (*json.Object, error) {
 	registry := pathlib.Join(home, ".claude/plugins/installed_plugins.json")
-	text, err := readText(registry)
+	text, err := pathlib.ReadText(registry)
 	var data any
 	if err == nil {
 		data, err = json.Loads(text)
 	}
 	if err != nil {
-		if errors.Is(err, syscall.ENOENT) || isValueError(err) {
+		if pyerr.IsInstance(err, "FileNotFoundError", "ValueError") {
 			return json.NewObject(), nil
 		}
 		return nil, err
@@ -980,7 +985,7 @@ func ClaudeMatchersFromServers(servers *json.Object, ownerSources []string) ([]a
 		recipe, ok := servers.Value(name).(*json.Object)
 		if !ok {
 			return nil, &pyerr.Error{Class: "AttributeError",
-				Msg: fmt.Sprintf("'%s' object has no attribute 'get'", typeName(servers.Value(name)))}
+				Msg: fmt.Sprintf("'%s' object has no attribute 'get'", json.TypeName(servers.Value(name)))}
 		}
 		// A native name exempts only the owner's own config; a plugin manifest could claim any name.
 		if source, ok := recipe.Value("source").(string); ok && NativeServers[name] && slices.Contains(ownerSources, source) {
@@ -1325,7 +1330,7 @@ func callJSONRPC(command []string, request *json.Object, timeoutS float64, initi
 			}
 			message, err := json.Loads(*line)
 			if err != nil {
-				if isValueError(err) {
+				if pyerr.IsInstance(err, "ValueError") {
 					continue
 				}
 				return nil, err
@@ -1515,7 +1520,7 @@ func startReader(stream io.Reader, queue *lineQueue) {
 
 // emit queues one line and reports whether it was valid UTF-8.
 func emit(queue *lineQueue, line []byte) bool {
-	text, err := decodeStrict(line)
+	text, err := json.DecodeUTF8Strict(line)
 	if err != nil {
 		return false
 	}
@@ -1534,7 +1539,7 @@ func terminateProcess(p *process, command []string) error {
 		if !p.wait(2 * time.Second) {
 			p.cmd.Process.Kill()
 			if !p.wait(2 * time.Second) {
-				err = &pyerr.Error{Class: "TimeoutExpired",
+				err = &pyerr.Error{Class: "TimeoutExpired", Module: "subprocess",
 					Msg: fmt.Sprintf("Command '%s' timed out after 2 seconds", reprList(command))}
 			}
 		}
@@ -1666,7 +1671,7 @@ func publish(plan *json.Object) error {
 	root, ok := rootValue.(string)
 	if !ok {
 		return &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf(
-			"argument should be a str or an os.PathLike object where __fspath__ returns a str, not '%s'", typeName(rootValue))}
+			"argument should be a str or an os.PathLike object where __fspath__ returns a str, not '%s'", json.TypeName(rootValue))}
 	}
 	home, _ := plan.Value("runtime_home").(string)
 	_, err = bundle.Publish(root, home)
@@ -1686,7 +1691,7 @@ func signEntry(entry any) error {
 // py: agent_decisions/install.py read_json
 func ReadJSON(path string) (*json.Object, error) {
 	target := pathlib.Str(path)
-	text, err := readText(target)
+	text, err := pathlib.ReadText(target)
 	if errors.Is(err, syscall.ENOENT) {
 		return json.NewObject(), nil
 	}
@@ -2000,11 +2005,7 @@ func parseArgs(parser *argparse.Parser, argv []string) (*cliArgs, int, bool) {
 func Main(args []string, stdout, stderr io.Writer) int {
 	status, err := cli(args, stdout, stderr)
 	if err != nil {
-		line := pyerr.Class(err)
-		if msg := err.Error(); msg != "" {
-			line += ": " + msg
-		}
-		io.WriteString(stderr, line+"\n")
+		pyerr.WriteUncaught(stderr, err)
 		return 1
 	}
 	return status
@@ -2537,7 +2538,7 @@ func dedupe(paths []string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		lexical, err := absolute(expanded)
+		lexical, err := pathlib.Absolute(expanded)
 		if err != nil {
 			return nil, err
 		}

@@ -357,6 +357,19 @@ func TypeName(v any) string {
 	panic(fmt.Sprintf("json.TypeName: unsupported type %T", v))
 }
 
+// Unhashable returns the TypeError that hashing v raises when v is a list or dict used as a "set element" or a
+// "dict key", and nil for any other value.
+//
+// py: Objects/setobject.c set_unhashable_type, Objects/dictobject.c dict_unhashable_type (Python 3.15)
+func Unhashable(v any, use string) error {
+	switch v.(type) {
+	case []any, []string, *Object:
+		name := TypeName(v)
+		return &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf("cannot use '%s' as a %s (unhashable type: '%s')", name, use, name)}
+	}
+	return nil
+}
+
 // Repr returns repr(v) for a value of the value model. It panics on a Go type outside it.
 //
 // py: Objects/object.c PyObject_Repr (Python 3.15)

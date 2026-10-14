@@ -56,7 +56,7 @@ var (
 )
 
 func runtimeError(format string, args ...any) error {
-	return &pyerr.Error{Class: "RuntimeError", Msg: fmt.Sprintf(format, args...)}
+	return &pyerr.Error{Class: "RuntimeError", Msg: fmt.Sprintf(format, args...), Module: "agent_decisions.runtime"}
 }
 
 // Namespace returns the directory that holds every bundle and the current pointer. An empty home means
@@ -70,7 +70,7 @@ func Namespace(home string) (string, error) {
 			return "", err
 		}
 	}
-	base, err := absolute(pathlib.Str(home))
+	base, err := pathlib.Absolute(pathlib.Str(home))
 	if err != nil {
 		return "", err
 	}
@@ -133,7 +133,7 @@ func files(source string) ([]origin, error) {
 //
 // py: agent_decisions/runtime.py publish
 func Publish(source, home string) (current string, err error) {
-	if source, err = absolute(pathlib.Str(source)); err != nil {
+	if source, err = pathlib.Absolute(pathlib.Str(source)); err != nil {
 		return "", err
 	}
 	sources, err := files(source)
@@ -316,22 +316,4 @@ func readBytes(path string) ([]byte, error) {
 func isSymlink(path string) bool {
 	info, err := os.Lstat(path)
 	return err == nil && info.Mode()&os.ModeSymlink != 0
-}
-
-// absolute ports Path.absolute for a normalized path: a relative path joins the kernel's working
-// directory.
-//
-// py: Lib/pathlib/__init__.py Path.absolute (Python 3.15)
-func absolute(path string) (string, error) {
-	if strings.HasPrefix(path, "/") {
-		return path, nil
-	}
-	cwd, err := syscall.Getwd()
-	if err != nil {
-		return "", pyerr.NewOSError(err)
-	}
-	if path == "." {
-		return cwd, nil
-	}
-	return pathlib.Str(cwd + "/" + path), nil
 }

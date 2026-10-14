@@ -263,7 +263,7 @@ func Append(entry *json.Object) error {
 	}
 	sessionID, ok := sessionValue.(string)
 	if !ok {
-		return &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf("expected string or bytes-like object, got '%s'", typeName(sessionValue))}
+		return &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf("expected string or bytes-like object, got '%s'", json.TypeName(sessionValue))}
 	}
 	path, err := sessionFile(sessionID)
 	if err != nil {
@@ -509,7 +509,7 @@ func RememberArchitecture(repoID string, decisions []*json.Object) error {
 	var known []any // a set: every member is hashable
 	for _, row := range rows {
 		receipt := row.Value("source_receipt")
-		if err := hashable(receipt, "a set element"); err != nil {
+		if err := json.Unhashable(receipt, "set element"); err != nil {
 			return err
 		}
 		known = append(known, receipt)
@@ -612,7 +612,7 @@ func optionOf(options any, pick any) (any, error) {
 	if _, err := get(options, "", nil); err != nil {
 		return nil, err
 	}
-	if err := hashable(pick, "a dict key"); err != nil {
+	if err := json.Unhashable(pick, "dict key"); err != nil {
 		return nil, err
 	}
 	name, isStr := pick.(string)

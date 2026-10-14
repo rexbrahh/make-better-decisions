@@ -20,29 +20,6 @@ import (
 	"github.com/rexbrahh/make-better-decisions/internal/py/str"
 )
 
-// isValueError reports whether Python's `except ValueError` catches err.
-func isValueError(err error) bool {
-	class := pyerr.Class(err)
-	return class == "ValueError" || class == "UnicodeEncodeError"
-}
-
-// pathAbsolute returns str(Path(p).absolute()) for a p that pathlib.Str normalized.
-//
-// py: Lib/pathlib/__init__.py Path.absolute (Python 3.15)
-func pathAbsolute(p string) (string, error) {
-	if strings.HasPrefix(p, "/") {
-		return p, nil
-	}
-	cwd, err := syscall.Getwd() // os.getcwd() is the kernel's path, not $PWD
-	if err != nil {
-		return "", pyerr.NewOSError(err)
-	}
-	if p == "." {
-		return cwd, nil
-	}
-	return pathlib.Join(cwd, p), nil
-}
-
 // globSuffix returns Path(dir).glob("*" + suffix) for a dir that pathlib.Str normalized and an ASCII
 // suffix without "/" or glob characters. Names come in directory order, as os.scandir lists them.
 //

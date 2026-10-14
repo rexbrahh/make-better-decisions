@@ -21,6 +21,7 @@ import (
 	"github.com/rexbrahh/make-better-decisions/internal/evidence"
 	"github.com/rexbrahh/make-better-decisions/internal/policy"
 	"github.com/rexbrahh/make-better-decisions/internal/py/json"
+	"github.com/rexbrahh/make-better-decisions/internal/py/pathlib"
 	"github.com/rexbrahh/make-better-decisions/internal/py/pyerr"
 	pystr "github.com/rexbrahh/make-better-decisions/internal/py/str"
 )
@@ -49,7 +50,10 @@ func (e *JevError) Error() string {
 	return e.Reason
 }
 
-func (e *JevError) PyType() string { return "JevError" }
+func (e *JevError) PyType() string   { return "JevError" }
+func (e *JevError) PyModule() string { return "agent_decisions.jev" }
+
+func init() { pyerr.Register("JevError", "Exception") }
 
 // LoadKey returns the API key from TYPESAFE_API_KEY, else from the key file.
 //
@@ -61,7 +65,7 @@ func LoadKey() (string, error) {
 		if err != nil {
 			return "", err
 		}
-		key, err = readText(path)
+		key, err = pathlib.ReadText(path)
 		if err != nil {
 			if !errors.As(err, new(*pyerr.OSError)) {
 				return "", err
@@ -74,80 +78,6 @@ func LoadKey() (string, error) {
 		return "", &JevError{Reason: "no_key"}
 	}
 	return key, nil
-}
-
-// readText ports Path.read_text() in Python 3.15's default UTF-8 mode: strict UTF-8 and universal newlines.
-//
-// py: Lib/pathlib/_local.py Path.read_text (Python 3.15)
-func readText(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", pyerr.NewOSError(err, path)
-	}
-	if err := utf8DecodeError(data); err != nil {
-		return "", err
-	}
-	text := strings.ReplaceAll(string(data), "\r\n", "\n")
-	return strings.ReplaceAll(text, "\r", "\n"), nil
-}
-
-// utf8DecodeError returns the UnicodeDecodeError that bytes.decode("utf-8") raises for data, or nil.
-//
-// py: Objects/unicodeobject.c unicode_decode_utf8 (Python 3.15)
-func utf8DecodeError(data []byte) error {
-	for i := 0; i < len(data); {
-		r, size := utf8.DecodeRune(data[i:])
-		if r != utf8.RuneError || size > 1 {
-			i += size
-			continue
-		}
-		valid, needed := continuationBytes(data[i:])
-		start, end, reason := i, i+1+valid, "invalid continuation byte"
-		switch {
-		case needed == 0:
-			end, reason = i+1, "invalid start byte"
-		case i+1+valid == len(data):
-			reason = "unexpected end of data"
-		}
-		if end-start == 1 {
-			return &pyerr.Error{Class: "UnicodeDecodeError", Msg: fmt.Sprintf(
-				"'utf-8' codec can't decode byte 0x%02x in position %d: %s", data[start], start, reason)}
-		}
-		return &pyerr.Error{Class: "UnicodeDecodeError", Msg: fmt.Sprintf(
-			"'utf-8' codec can't decode bytes in position %d-%d: %s", start, end-1, reason)}
-	}
-	return nil
-}
-
-// continuationBytes returns how many continuation bytes after the lead byte of seq are valid, and how
-// many the lead byte needs (0 for an invalid lead byte), with the second-byte ranges of RFC 3629.
-func continuationBytes(seq []byte) (valid, needed int) {
-	lo, hi := byte(0x80), byte(0xBF)
-	switch lead := seq[0]; {
-	case lead >= 0xC2 && lead <= 0xDF:
-		needed = 1
-	case lead >= 0xE0 && lead <= 0xEF:
-		needed = 2
-		if lead == 0xE0 {
-			lo = 0xA0
-		} else if lead == 0xED {
-			hi = 0x9F
-		}
-	case lead >= 0xF0 && lead <= 0xF4:
-		needed = 3
-		if lead == 0xF0 {
-			lo = 0x90
-		} else if lead == 0xF4 {
-			hi = 0x8F
-		}
-	default:
-		return 0, 0
-	}
-	for valid < needed && 1+valid < len(seq) && seq[1+valid] >= lo && seq[1+valid] <= hi {
-		valid++
-		lo, hi = 0x80, 0xBF
-	}
-	return valid, needed
 }
 
 // PostFunc is the transport that Ask calls: Post, or a fake in tests.
@@ -403,8 +333,7 @@ func Ask(state, questions *json.Object, key string, post PostFunc, metrics *json
 			err = check(answer, questions.Value(id))
 		}
 		if err != nil {
-			var pyError *pyerr.Error
-			if !errors.As(err, &pyError) || !caught[pyError.Class] {
+			if !pyerr.IsInstance(err, "ValueError", "KeyError", "TypeError") {
 				return nil, err
 			}
 			label := "question"
@@ -412,8 +341,8 @@ func Ask(state, questions *json.Object, key string, post PostFunc, metrics *json
 				label = id
 			}
 			reason := "missing or invalid fields"
-			if pyError.Class == "ValueError" {
-				reason = pyError.Msg
+			if pyerr.IsInstance(err, "ValueError") {
+				reason = err.Error()
 			}
 			return nil, &JevError{Reason: "malformed", Detail: label + ": " + reason}
 		}
@@ -442,9 +371,6 @@ func Ask(state, questions *json.Object, key string, post PostFunc, metrics *json
 	}
 	return answers, nil
 }
-
-// caught holds the exception classes that ask's `except (ValueError, KeyError, TypeError)` catches.
-var caught = map[string]bool{"ValueError": true, "KeyError": true, "TypeError": true}
 
 func malformed() error {
 	return &JevError{Reason: "malformed", Detail: "response JSON or answers object"}
@@ -621,10 +547,8 @@ func check(answer, question any) error {
 	if !ok { // gates.py always sends a dict
 		return &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf("criteria is a '%s', not a dict", json.TypeName(criteriaValue))}
 	}
-	switch choice.(type) {
-	case []any, *json.Object:
-		name := json.TypeName(choice)
-		return &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf("cannot use '%s' as a dict key (unhashable type: '%s')", name, name)}
+	if err := json.Unhashable(choice, "dict key"); err != nil {
+		return err
 	}
 	choiceKey, isString := choice.(string)
 	if _, inCriteria := criteria.Get(choiceKey); !isString || !inCriteria {

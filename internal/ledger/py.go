@@ -11,41 +11,9 @@ import (
 	"github.com/rexbrahh/make-better-decisions/internal/py/str"
 )
 
-// typeName returns type(v).__name__ for a value of the JSON value model.
-func typeName(v any) string {
-	switch v.(type) {
-	case nil:
-		return "NoneType"
-	case bool:
-		return "bool"
-	case json.Int, int, int64:
-		return "int"
-	case float64:
-		return "float"
-	case string:
-		return "str"
-	case []any, []string:
-		return "list"
-	case *json.Object:
-		return "dict"
-	}
-	return fmt.Sprintf("%T", v)
-}
-
-// hashable returns the TypeError that Python raises when v cannot be used as a set element or dict key;
-// use names the role, "a set element" or "a dict key".
-func hashable(v any, use string) error {
-	switch v.(type) {
-	case []any, []string, *json.Object:
-		name := typeName(v)
-		return &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf("cannot use '%s' as %s (unhashable type: '%s')", name, use, name)}
-	}
-	return nil
-}
-
 // contains returns `v in members` for a set of hashable members.
 func contains(v any, members ...any) (bool, error) {
-	if err := hashable(v, "a set element"); err != nil {
+	if err := json.Unhashable(v, "set element"); err != nil {
 		return false, err
 	}
 	for _, member := range members {
@@ -60,7 +28,7 @@ func contains(v any, members ...any) (bool, error) {
 func get(v any, key string, fallback any) (any, error) {
 	object, ok := v.(*json.Object)
 	if !ok {
-		return nil, &pyerr.Error{Class: "AttributeError", Msg: fmt.Sprintf("'%s' object has no attribute 'get'", typeName(v))}
+		return nil, &pyerr.Error{Class: "AttributeError", Msg: fmt.Sprintf("'%s' object has no attribute 'get'", json.TypeName(v))}
 	}
 	if value, present := object.Get(key); present {
 		return value, nil
@@ -78,7 +46,7 @@ func head(v any, n int) (any, error) {
 	case *json.Object:
 		return nil, &pyerr.Error{Class: "KeyError", Msg: fmt.Sprintf("slice(None, %d, None)", n)}
 	}
-	return nil, &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf("'%s' object is not subscriptable", typeName(v))}
+	return nil, &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf("'%s' object is not subscriptable", json.TypeName(v))}
 }
 
 // iterate returns the items that `for x in v` yields for a str (its code points) or a list.

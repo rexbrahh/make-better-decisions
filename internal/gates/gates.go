@@ -102,11 +102,13 @@ type Outcome struct {
 	Note    string       // shown to the user as a systemMessage
 }
 
+func init() { pyerr.Register("RequestError", "ValueError") }
+
 // requestError is gates.RequestError, a ValueError subclass.
 //
 // py: agent_decisions/gates.py RequestError
 func requestError(format string, args ...any) error {
-	return &pyerr.Error{Class: "RequestError", Msg: fmt.Sprintf(format, args...)}
+	return &pyerr.Error{Class: "RequestError", Msg: fmt.Sprintf(format, args...), Module: "agent_decisions.gates"}
 }
 
 // py: agent_decisions/gates.py _noul
@@ -194,7 +196,7 @@ func Consulted(ctx Context) ([]*json.Object, error) {
 				candidates = append(candidates, &call)
 			}
 		} else {
-			id, found := e.key(entry.Value("tool_use_id"), "a dict key")
+			id, found := e.key(entry.Value("tool_use_id"), "dict key")
 			if e.err != nil {
 				return nil, e.err
 			}
@@ -297,7 +299,7 @@ func ParseRequest(raw string) (decision string, options *json.Object, facts []st
 	}
 	value, err := json.Loads(raw)
 	if err != nil {
-		if isValueError(err) {
+		if pyerr.IsInstance(err, "ValueError") {
 			return "", nil, nil, requestError("not JSON (%s)", err)
 		}
 		return "", nil, nil, err
@@ -611,7 +613,7 @@ var evidenceChecks = map[string]string{
 
 // lookup returns m[key] for a decoded key, or the KeyError or TypeError that Python raises.
 func (e *expr) lookup(m map[string]string, key any) string {
-	name, found := e.key(key, "a dict key")
+	name, found := e.key(key, "dict key")
 	if e.err != nil {
 		return ""
 	}
@@ -781,8 +783,7 @@ func thresholds() []any {
 func Decide(raw string, ctx Context, ask Ask) (Outcome, error) {
 	decision, options, facts, scope, contracts, err := decideRequest(raw)
 	if err != nil {
-		var typed interface{ PyType() string }
-		if errors.As(err, &typed) && typed.PyType() == "RequestError" {
+		if pyerr.IsInstance(err, "RequestError") {
 			return Outcome{Action: "invalid", Message: "ts-decide: invalid request: " + err.Error() + "\n" + Usage}, nil
 		}
 		return Outcome{}, err
@@ -833,7 +834,7 @@ func Decide(raw string, ctx Context, ask Ask) (Outcome, error) {
 		observed := &json.Object{}
 		for _, item := range e.iter(e.get(ctx.Evidence, "source_files", []any{})) {
 			if is(e.get(item, "trust", nil), "verified_file_observation") {
-				path, found := e.key(e.item(item, "path"), "a dict key") // another hashable key matches no contract
+				path, found := e.key(e.item(item, "path"), "dict key") // another hashable key matches no contract
 				digest := e.item(item, "sha256")
 				if found {
 					observed.Set(path, digest)
@@ -1066,7 +1067,7 @@ func judge(ctx Context, answers, record *json.Object, decision string, options, 
 		}
 	}
 	// invariant_checks.get(pick, ()) hashes pick.
-	pickID, found := e.key(pick, "a dict key")
+	pickID, found := e.key(pick, "dict key")
 	var pickChecks []string
 	if _, ok := options.Get(pickID); found && ok {
 		pickChecks = checksOf(pickID)
@@ -2305,7 +2306,7 @@ func decisionSummaries(ctx Context, subject string, frame int) ([]any, error) {
 func scopeMatches(scope *json.Object, subject string, root any, frame int) (bool, error) {
 	value, err := json.Loads(subject)
 	if err != nil {
-		if isValueError(err) {
+		if pyerr.IsInstance(err, "ValueError") {
 			return true, nil // final prose has no executable target paths
 		}
 		return false, err
@@ -2409,9 +2410,9 @@ func EditGate(name string, toolInput *json.Object, ctx Context, ask Ask, frame i
 	}
 	parts, err := pendingParts(toolInput, frame+1)
 	if err != nil {
-		if typed, ok := err.(*pyerr.Error); ok && typed.Class == "RequestError" {
-			return Outcome{Action: "deny", Message: typed.Msg,
-				Record: json.NewObject("gate", "edit", "input_error", typed.Msg)}, nil
+		if pyerr.IsInstance(err, "RequestError") {
+			return Outcome{Action: "deny", Message: err.Error(),
+				Record: json.NewObject("gate", "edit", "input_error", err.Error())}, nil
 		}
 		return Outcome{}, err
 	}

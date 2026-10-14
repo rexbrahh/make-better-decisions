@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/rexbrahh/make-better-decisions/internal/py/pyerr"
 )
 
 // maxDepth is the deepest nesting CPython 3.15's C scanner decodes on the main thread. The scanner checks
@@ -43,7 +45,8 @@ func (e *DecodeError) Error() string {
 	return fmt.Sprintf("%s: line %d column %d (char %d)", e.Msg, e.Lineno, e.Colno, e.Pos)
 }
 
-func (e *DecodeError) PyType() string { return "JSONDecodeError" }
+func (e *DecodeError) PyType() string   { return "JSONDecodeError" }
+func (e *DecodeError) PyModule() string { return "json.decoder" }
 
 // RecursionError is a Python RecursionError: nesting too deep for CPython's C stack check (Loads, Dumps,
 // Equal) or for its recursion limit (LoadsBytes). Python callers that catch ValueError do not catch it.
@@ -472,6 +475,35 @@ func DecodeUTF8(data []byte) string {
 		i += size
 	}
 	return decoded.String()
+}
+
+// DecodeUTF8Strict returns data.decode("utf-8"), or the UnicodeDecodeError of its first maximal invalid
+// subpart.
+//
+// py: Objects/unicodeobject.c unicode_decode_utf8 (Python 3.15)
+func DecodeUTF8Strict(data []byte) (string, error) {
+	for i := 0; i < len(data); {
+		r, size := utf8.DecodeRune(data[i:])
+		if r != utf8.RuneError || size > 1 {
+			i += size
+			continue
+		}
+		n := invalidPrefixLength(data[i:])
+		reason := "invalid continuation byte"
+		switch {
+		case data[i] < 0xc2 || data[i] > 0xf4:
+			reason = "invalid start byte"
+		case i+n == len(data):
+			reason = "unexpected end of data"
+		}
+		if n == 1 {
+			return "", &pyerr.Error{Class: "UnicodeDecodeError", Msg: fmt.Sprintf(
+				"'utf-8' codec can't decode byte 0x%02x in position %d: %s", data[i], i, reason)}
+		}
+		return "", &pyerr.Error{Class: "UnicodeDecodeError", Msg: fmt.Sprintf(
+			"'utf-8' codec can't decode bytes in position %d-%d: %s", i, i+n-1, reason)}
+	}
+	return string(data), nil
 }
 
 // invalidPrefixLength returns the length of the maximal subpart at the start of data, which does not begin

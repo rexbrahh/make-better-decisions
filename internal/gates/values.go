@@ -69,7 +69,7 @@ func (e *expr) get(v, key, def any) any {
 		e.fail("AttributeError", "'%s' object has no attribute 'get'", json.TypeName(v))
 		return nil
 	}
-	name, found := e.key(key, "a dict key")
+	name, found := e.key(key, "dict key")
 	if !found {
 		return def
 	}
@@ -85,19 +85,16 @@ func (e *expr) key(key any, as string) (name string, found bool) {
 	if e.err != nil {
 		return "", false
 	}
-	switch key := key.(type) {
-	case string:
-		return key, true
-	case []any, *json.Object:
-		name := json.TypeName(key)
-		e.fail("TypeError", "cannot use '%s' as %s (unhashable type: '%s')", name, as, name)
+	if name, ok := key.(string); ok {
+		return name, true
 	}
+	e.err = json.Unhashable(key, as)
 	return "", false
 }
 
 // in returns `v in set` for a set of str elements.
 func (e *expr) in(v any, set map[string]bool) bool {
-	name, found := e.key(v, "a set element")
+	name, found := e.key(v, "set element")
 	return found && set[name]
 }
 
@@ -282,19 +279,6 @@ func display(v any) string {
 		return text
 	}
 	return json.Repr(v)
-}
-
-// isValueError reports whether err is a Python ValueError or one of its subclasses.
-func isValueError(err error) bool {
-	typed, ok := err.(interface{ PyType() string })
-	if !ok {
-		return false
-	}
-	switch typed.PyType() {
-	case "ValueError", "RequestError", "JSONDecodeError", "UnicodeDecodeError", "UnicodeEncodeError":
-		return true
-	}
-	return false
 }
 
 // getcwd ports os.getcwd(), which reads the kernel's path rather than $PWD.

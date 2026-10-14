@@ -12,31 +12,12 @@ import (
 	"slices"
 	"strings"
 	"syscall"
-	"unicode/utf8"
 
 	"github.com/rexbrahh/make-better-decisions/internal/py/json"
 	"github.com/rexbrahh/make-better-decisions/internal/py/pathlib"
 	"github.com/rexbrahh/make-better-decisions/internal/py/pyerr"
 	"github.com/rexbrahh/make-better-decisions/internal/py/str"
 )
-
-// absolute returns str(Path(p).absolute()) for a normalized p: a relative path joins the kernel's working
-// directory.
-//
-// py: Lib/pathlib/_local.py Path.absolute (Python 3.15)
-func absolute(p string) (string, error) {
-	if strings.HasPrefix(p, "/") {
-		return p, nil
-	}
-	cwd, err := syscall.Getwd()
-	if err != nil {
-		return "", pyerr.NewOSError(err)
-	}
-	if p == "." {
-		return cwd, nil
-	}
-	return pathlib.Str(cwd + "/" + p), nil
-}
 
 // baseDir returns `Path.home() if home is None else home` for the "" spelling of None.
 func baseDir(home string) (string, error) {
@@ -99,79 +80,6 @@ func lexists(path string) bool {
 	return err == nil
 }
 
-// readText returns Path(path).read_text(encoding="utf-8"): strict UTF-8 with universal newlines.
-func readText(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", pyerr.NewOSError(err, path)
-	}
-	text, err := decodeStrict(data)
-	if err != nil {
-		return "", err
-	}
-	text = strings.ReplaceAll(text, "\r\n", "\n")
-	return strings.ReplaceAll(text, "\r", "\n"), nil
-}
-
-// decodeStrict returns data.decode("utf-8"), or the UnicodeDecodeError of its first invalid sequence.
-//
-// py: Objects/unicodeobject.c unicode_decode_utf8 (Python 3.15)
-func decodeStrict(data []byte) (string, error) {
-	for i := 0; i < len(data); {
-		r, size := utf8.DecodeRune(data[i:])
-		if r != utf8.RuneError || size > 1 {
-			i += size
-			continue
-		}
-		reason, length := invalidUTF8(data[i:])
-		if length == 1 {
-			return "", &pyerr.Error{Class: "UnicodeDecodeError", Msg: fmt.Sprintf(
-				"'utf-8' codec can't decode byte 0x%02x in position %d: %s", data[i], i, reason)}
-		}
-		return "", &pyerr.Error{Class: "UnicodeDecodeError", Msg: fmt.Sprintf(
-			"'utf-8' codec can't decode bytes in position %d-%d: %s", i, i+length-1, reason)}
-	}
-	return string(data), nil
-}
-
-// invalidUTF8 returns CPython's reason and length for the invalid sequence at the start of b: the lead byte
-// and the continuation bytes that were valid before the error.
-//
-// py: Objects/stringlib/codecs.h utf8_decode (Python 3.15)
-func invalidUTF8(b []byte) (string, int) {
-	lead, need := b[0], 0
-	low, high := byte(0x80), byte(0xbf) // the range of the second byte
-	switch {
-	case lead >= 0xc2 && lead <= 0xdf:
-		need = 2
-	case lead >= 0xe0 && lead <= 0xef:
-		need = 3
-		if lead == 0xe0 {
-			low = 0xa0
-		} else if lead == 0xed {
-			high = 0x9f // surrogates
-		}
-	case lead >= 0xf0 && lead <= 0xf4:
-		need = 4
-		if lead == 0xf0 {
-			low = 0x90
-		} else if lead == 0xf4 {
-			high = 0x8f
-		}
-	default:
-		return "invalid start byte", 1
-	}
-	for k := 1; k < need; k++ {
-		if k == len(b) {
-			return "unexpected end of data", k
-		}
-		if k == 1 && (b[k] < low || b[k] > high) || k > 1 && (b[k] < 0x80 || b[k] > 0xbf) {
-			return "invalid continuation byte", k
-		}
-	}
-	panic("install: invalidUTF8 called on valid UTF-8")
-}
-
 // spawnError returns the OSError that subprocess raises when binary cannot start. A binary that PATH does
 // not hold is FileNotFoundError, as the last execve of Python's PATH search reports.
 func spawnError(err error, binary string) error {
@@ -180,15 +88,6 @@ func spawnError(err error, binary string) error {
 		err = syscall.ENOENT
 	}
 	return pyerr.NewOSError(err, binary)
-}
-
-// isValueError reports whether err is a ValueError or one of its subclasses.
-func isValueError(err error) bool {
-	switch pyerr.Class(err) {
-	case "ValueError", "JSONDecodeError", "UnicodeDecodeError", "UnicodeEncodeError":
-		return true
-	}
-	return false
 }
 
 // lastCodePoint returns the last code point of s as a string, or "" for an empty s.
@@ -287,27 +186,6 @@ func deepCopy(v any) any {
 		return out
 	}
 	return v
-}
-
-// typeName returns type(v).__name__ for a value of the JSON value model.
-func typeName(v any) string {
-	switch v.(type) {
-	case nil:
-		return "NoneType"
-	case bool:
-		return "bool"
-	case json.Int:
-		return "int"
-	case float64:
-		return "float"
-	case string:
-		return "str"
-	case []any:
-		return "list"
-	case *json.Object:
-		return "dict"
-	}
-	return fmt.Sprintf("%T", v)
 }
 
 // reprList returns repr(values) for a list of str.

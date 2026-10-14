@@ -324,3 +324,12 @@ func TestNamespaceUsesHomeAndWorkingDirectory(t *testing.T) {
 		t.Errorf("Current(relative) = %q", got)
 	}
 }
+
+// TestNamespaceAtRootCwd checks that a relative home under the working directory "/" gives "/x/...", as
+// Path.absolute does, not "//x/...".
+func TestNamespaceAtRootCwd(t *testing.T) {
+	t.Chdir("/")
+	if got, err := Namespace("x"); got != "/x/.local/share/agent-decisions" || err != nil {
+		t.Fatalf("Namespace = %q, %v", got, err)
+	}
+}

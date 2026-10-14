@@ -2,6 +2,7 @@ package install
 
 import (
 	"bytes"
+	stdjson "encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	_ "github.com/rexbrahh/make-better-decisions/internal/gates"
 	"github.com/rexbrahh/make-better-decisions/internal/py/json"
 	"github.com/rexbrahh/make-better-decisions/internal/py/pyerr"
 )
@@ -19,7 +21,7 @@ import (
 // ["ok", json.dumps(result, sort_keys=True)] or [error class, str(error)]. The clock is fixed at
 // oracleEpoch. The request and reply are ASCII JSON, so lone surrogates cross as escapes.
 const oracleDriver = `
-import io, json, os, sys, time
+import io, json, os, sys, time, traceback
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 gmtime = time.gmtime
@@ -55,10 +57,9 @@ def run(op, *a):
         except SystemExit as exit:
             code = exit.code
         except Exception as error:
-            text = type(error).__name__
-            if str(error):
-                text += ": " + str(error)
-            err.write(text + "\n")
+            # The last traceback line, as sys.excepthook writes it to a backslashreplace sys.stderr.
+            line = traceback.format_exception_only(error)[-1]
+            err.write(line.encode("utf-8", "backslashreplace").decode("utf-8"))
             code = 1
         finally:
             sys.stdout, sys.stderr = sys.__stdout__, sys.__stderr__
@@ -528,4 +529,45 @@ func toAnyList(values []string) []any {
 		out[i] = value
 	}
 	return out
+}
+
+// TestModuleExceptionClassesMatchPython checks the classes that the ported modules register with pyerr
+// against each Python class's MRO. Importing gates also registers jev.JevError.
+func TestModuleExceptionClassesMatchPython(t *testing.T) {
+	python := os.Getenv("AGENT_DECISIONS_PYTHON")
+	if python == "" {
+		t.Skip("set AGENT_DECISIONS_PYTHON to a CPython 3.15 interpreter to compare with the oracle")
+	}
+	repoRoot, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := `import json, sys
+sys.path.insert(0, sys.argv[1])
+from agent_decisions import gates, install, isolation, jev
+classes = [gates.RequestError, install.InstallError, isolation.IsolationError, isolation.ConfigurationError,
+           isolation.UnsupportedIsolationError, jev.JevError]
+print(json.dumps({c.__name__: [b.__name__ for b in c.__mro__[1:-1]] for c in classes}))`
+	output, err := exec.Command(python, "-I", "-c", script, repoRoot).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mros map[string][]string
+	if err := stdjson.Unmarshal(output, &mros); err != nil {
+		t.Fatal(err)
+	}
+	others := []string{"ValueError", "RuntimeError", "OSError", "TypeError", "LookupError", "IsolationError"}
+	for class, mro := range mros {
+		err := &pyerr.Error{Class: class}
+		for _, base := range append(mro, class) {
+			if !pyerr.IsInstance(err, base) {
+				t.Errorf("%s is not an instance of %s", class, base)
+			}
+		}
+		for _, other := range others {
+			if other != class && !slices.Contains(mro, other) && pyerr.IsInstance(err, other) {
+				t.Errorf("%s is an instance of %s", class, other)
+			}
+		}
+	}
 }

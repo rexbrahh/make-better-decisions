@@ -378,7 +378,7 @@ func text(content any) (string, error) {
 			part, ok := block.ValueOr("text", "").(string)
 			if !ok {
 				return "", &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf("sequence item %d: expected str instance, %s found",
-					len(parts), typeName(block.ValueOr("text", "")))}
+					len(parts), json.TypeName(block.ValueOr("text", "")))}
 			}
 			parts = append(parts, part)
 		}
@@ -449,7 +449,7 @@ func (b *builder) parent(text string) {
 func (b *builder) call(callID, name, toolInput any) error {
 	id, ok := callID.(string)
 	if !ok {
-		if err := unhashable(callID, "set element"); err != nil {
+		if err := json.Unhashable(callID, "set element"); err != nil {
 			return err
 		}
 		return notStr("tool call id", callID)
@@ -494,7 +494,7 @@ func (b *builder) output(callID, output any) error {
 		b.outputs[id] = value
 		return nil
 	}
-	return unhashable(callID, "dict key")
+	return json.Unhashable(callID, "dict key")
 }
 
 // questions returns the question tool calls read so far, with their outputs.
@@ -987,7 +987,7 @@ func orEmpty(v any) (*json.Object, error) {
 	if object, ok := v.(*json.Object); ok {
 		return object, nil
 	}
-	return nil, &pyerr.Error{Class: "AttributeError", Msg: fmt.Sprintf("'%s' object has no attribute 'get'", typeName(v))}
+	return nil, &pyerr.Error{Class: "AttributeError", Msg: fmt.Sprintf("'%s' object has no attribute 'get'", json.TypeName(v))}
 }
 
 // originKind returns (record.get("origin") or {}).get("kind", fallback).
@@ -1008,32 +1008,11 @@ func shellJoin(args []any) (string, error) {
 	for i, arg := range args {
 		word, ok := arg.(string)
 		if !ok && json.Truthy(arg) {
-			return "", &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf("expected string object, got '%s'", typeName(arg))}
+			return "", &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf("expected string object, got '%s'", json.TypeName(arg))}
 		}
 		words[i] = word
 	}
 	return shlex.Join(words), nil
-}
-
-// typeName returns type(v).__name__ for a decoded JSON value.
-func typeName(v any) string {
-	switch v.(type) {
-	case nil:
-		return "NoneType"
-	case bool:
-		return "bool"
-	case json.Int:
-		return "int"
-	case float64:
-		return "float"
-	case string:
-		return "str"
-	case []any:
-		return "list"
-	case *json.Object:
-		return "dict"
-	}
-	panic(fmt.Sprintf("transcript: %T is outside the JSON value model", v))
 }
 
 // display returns str(v), as an f-string formats a decoded JSON value.
@@ -1044,20 +1023,9 @@ func display(v any) string {
 	return json.Repr(v)
 }
 
-// unhashable returns the TypeError Python raises for a list or dict used as a set element or dict key,
-// and nil for any other value.
-func unhashable(v any, use string) error {
-	switch v.(type) {
-	case []any, *json.Object:
-		name := typeName(v)
-		return &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf("cannot use '%s' as a %s (unhashable type: '%s')", name, use, name)}
-	}
-	return nil
-}
-
 // notStr reports a value that Python keeps but this port cannot hold in a str field. No host writes one.
 func notStr(what string, v any) error {
-	return &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf("%s is a '%s', not a str", what, typeName(v))}
+	return &pyerr.Error{Class: "TypeError", Msg: fmt.Sprintf("%s is a '%s', not a str", what, json.TypeName(v))}
 }
 
 // notValueError returns nil for a json error that Python's `except ValueError` catches, and err for the

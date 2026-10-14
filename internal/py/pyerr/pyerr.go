@@ -1,12 +1,15 @@
 // Package pyerr holds the Go forms of Python exceptions. Each type returns str(exception) from Error and
 // the Python class name from PyType, so a hook can print both as Python does.
 //
-// Port `except OSError` as errors.As(err, new(*OSError)). Every other class is an *Error.
+// Every OSError class is an *OSError; every other class is an *Error. Port `except C` as
+// IsInstance(err, "C"), which also catches the subclasses of C.
 package pyerr
 
 import (
 	"errors"
 	"fmt"
+	"io"
+	"slices"
 	"strings"
 	"syscall"
 	"unicode/utf8"
@@ -16,12 +19,14 @@ import (
 
 // Error is a Python exception outside the OSError family, such as ValueError or TypeError.
 type Error struct {
-	Class string // the Python class name, such as "TypeError"
-	Msg   string // str(exception)
+	Class  string // the Python class name, such as "TypeError"
+	Msg    string // str(exception)
+	Module string // the module that defines Class, such as "agent_decisions.install"; "" for a builtin
 }
 
-func (e *Error) Error() string  { return e.Msg }
-func (e *Error) PyType() string { return e.Class }
+func (e *Error) Error() string    { return e.Msg }
+func (e *Error) PyType() string   { return e.Class }
+func (e *Error) PyModule() string { return e.Module }
 
 // OSError is a Python OSError or one of its errno subclasses, such as FileNotFoundError.
 type OSError struct {
@@ -111,6 +116,111 @@ func Class(err error) string {
 		return typed.PyType()
 	}
 	return ""
+}
+
+// bases maps each Python exception class that the port raises, and each class between it and
+// BaseException, to its base class. A ported module adds the classes it defines with Register.
+//
+// runtime.py defines its own RuntimeError(Exception). It shares the name and the base of the builtin, so
+// this one entry stands for both. No Python module has `except RuntimeError`, so the two never differ here.
+//
+// py: Objects/exceptions.c, Lib/json/decoder.py JSONDecodeError, Lib/subprocess.py TimeoutExpired (Python 3.15)
+var bases = map[string]string{
+	"BaseException": "",
+	"Exception":     "BaseException",
+
+	"ArithmeticError": "Exception",
+	"OverflowError":   "ArithmeticError",
+
+	"AttributeError": "Exception",
+
+	"LookupError": "Exception",
+	"KeyError":    "LookupError",
+
+	"OSError":                "Exception",
+	"BlockingIOError":        "OSError",
+	"ChildProcessError":      "OSError",
+	"ConnectionError":        "OSError",
+	"BrokenPipeError":        "ConnectionError",
+	"ConnectionAbortedError": "ConnectionError",
+	"ConnectionRefusedError": "ConnectionError",
+	"ConnectionResetError":   "ConnectionError",
+	"FileExistsError":        "OSError",
+	"FileNotFoundError":      "OSError",
+	"InterruptedError":       "OSError",
+	"IsADirectoryError":      "OSError",
+	"NotADirectoryError":     "OSError",
+	"PermissionError":        "OSError",
+	"ProcessLookupError":     "OSError",
+	"TimeoutError":           "OSError",
+
+	"RuntimeError":   "Exception",
+	"RecursionError": "RuntimeError",
+
+	"TypeError": "Exception",
+
+	"ValueError":         "Exception",
+	"UnicodeError":       "ValueError",
+	"UnicodeDecodeError": "UnicodeError",
+	"UnicodeEncodeError": "UnicodeError",
+	"JSONDecodeError":    "ValueError",
+
+	"SubprocessError": "Exception",
+	"TimeoutExpired":  "SubprocessError",
+}
+
+// Register declares class, an exception class that a ported module defines, as a direct subclass of base.
+// Call it from an init function. It panics on an unknown base or on a second declaration with another
+// base.
+func Register(class, base string) {
+	if _, ok := bases[base]; !ok {
+		panic("pyerr.Register: unknown base class " + base)
+	}
+	if old, ok := bases[class]; ok && old != base {
+		panic("pyerr.Register: " + class + " already derives from " + old)
+	}
+	bases[class] = base
+}
+
+// IsInstance reports whether Python's `except (class, ...)` catches err: whether the class of err is one
+// of classes or a subclass of one. An error outside the Python model is an instance of no class. It panics
+// on a class that is neither in the builtin table nor registered, because that is a gap in the port.
+func IsInstance(err error, classes ...string) bool {
+	for _, class := range classes {
+		if _, ok := bases[class]; !ok {
+			panic("pyerr.IsInstance: unknown class " + class)
+		}
+	}
+	for c := Class(err); c != ""; c = bases[c] {
+		if _, ok := bases[c]; !ok {
+			panic("pyerr.IsInstance: unknown class " + c)
+		}
+		if slices.Contains(classes, c) {
+			return true
+		}
+	}
+	return false
+}
+
+// WriteUncaught writes the last line of the traceback that CPython prints for an uncaught err:
+// "module.Class: message", with the module left out for a builtin class and ": message" left out for an
+// empty message. It encodes the line as sys.stderr does, with backslashreplace. A Go error without a
+// Python class prints as Exception. The module comes from a PyModule method beside PyType.
+//
+// py: Lib/traceback.py TracebackException.format_exception_only, through sys.excepthook (Python 3.15)
+func WriteUncaught(w io.Writer, err error) {
+	line := "Exception"
+	var typed interface{ PyType() string }
+	if errors.As(err, &typed) {
+		line = typed.PyType()
+		if module, ok := typed.(interface{ PyModule() string }); ok && module.PyModule() != "" {
+			line = module.PyModule() + "." + line
+		}
+	}
+	if msg := err.Error(); msg != "" {
+		line += ": " + msg
+	}
+	io.WriteString(w, EncodeBackslashReplace(line+"\n"))
 }
 
 // EncodeUTF8 returns s.encode() with the strict error handler: a lone surrogate is a UnicodeEncodeError.

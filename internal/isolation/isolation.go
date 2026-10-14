@@ -43,18 +43,18 @@ const (
 	unsupportedErrorClass   = "UnsupportedIsolationError"
 )
 
+func init() {
+	pyerr.Register("IsolationError", "RuntimeError")
+	pyerr.Register(configurationErrorClass, "IsolationError")
+	pyerr.Register(unsupportedErrorClass, "IsolationError")
+}
+
 func configurationError(msg string) error {
-	return &pyerr.Error{Class: configurationErrorClass, Msg: msg}
+	return &pyerr.Error{Class: configurationErrorClass, Msg: msg, Module: "agent_decisions.isolation"}
 }
 
 func unsupportedIsolationError(msg string) error {
-	return &pyerr.Error{Class: unsupportedErrorClass, Msg: msg}
-}
-
-// isIsolationError reports whether Python's `except IsolationError` catches err.
-func isIsolationError(err error) bool {
-	class := pyerr.Class(err)
-	return class == "IsolationError" || class == configurationErrorClass || class == unsupportedErrorClass
+	return &pyerr.Error{Class: unsupportedErrorClass, Msg: msg, Module: "agent_decisions.isolation"}
 }
 
 // WrapArgv returns argv wrapped in the filesystem isolator of this platform. Python's defaults are
@@ -141,7 +141,7 @@ func CommandToArgv(command string) ([]string, error) {
 		return nil, nil // shlex raises ValueError
 	}
 	argv, err := NormalizeArgv(words)
-	if err != nil && (pyerr.Class(err) == configurationErrorClass || isValueError(err)) {
+	if err != nil && (pyerr.IsInstance(err, "ValueError", configurationErrorClass)) {
 		return nil, nil
 	}
 	return argv, err
@@ -170,7 +170,7 @@ func MainIsolate(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if err == nil {
 		return 1
 	}
-	if isIsolationError(err) {
+	if pyerr.IsInstance(err, "IsolationError") {
 		io.WriteString(stderr, pyerr.EncodeBackslashReplace(fmt.Sprintf("agent-decisions-isolate: %s\n", err)))
 		return 78
 	}
@@ -212,7 +212,7 @@ func MainShellPrefix(args []string, stdin io.Reader, stdout, stderr io.Writer) i
 	command := args[0]
 	spec, err := LatestInstallationSpec("claude")
 	if err != nil {
-		if !isIsolationError(err) {
+		if !pyerr.IsInstance(err, "IsolationError") {
 			return uncaught(stderr, err)
 		}
 		return exited(stderr, execShell(command, ""))
@@ -242,7 +242,7 @@ func MainShellPrefix(args []string, stdin io.Reader, stdout, stderr io.Writer) i
 		isolated, err = wrapArgv(target, spec.Value("state_root").(string), true, false, protected)
 	}
 	if err != nil {
-		if !isIsolationError(err) {
+		if !pyerr.IsInstance(err, "IsolationError") {
 			return uncaught(stderr, err)
 		}
 		io.WriteString(stderr, pyerr.EncodeBackslashReplace(fmt.Sprintf("agent-decisions-shell-prefix: %s\n", err)))
@@ -263,14 +263,7 @@ func exited(stderr io.Writer, err error) int {
 // uncaught prints the last line of the traceback of an exception that escapes main, and returns 1, the
 // status of an uncaught exception. The traceback frames are Python file positions and have no Go form.
 func uncaught(stderr io.Writer, err error) int {
-	line := pyerr.Class(err)
-	if line == "" {
-		line = "Exception"
-	}
-	if msg := err.Error(); msg != "" {
-		line += ": " + msg
-	}
-	io.WriteString(stderr, pyerr.EncodeBackslashReplace(line+"\n"))
+	pyerr.WriteUncaught(stderr, err)
 	return 1
 }
 
@@ -507,7 +500,7 @@ func protectedWritePaths(protectCode bool, extraPaths []string) ([]string, error
 		paths = append(paths, path)
 	}
 	for _, path := range globSuffix(codex, ".config.toml") { // Path.glob("*.config.toml")
-		absolute, err := pathAbsolute(path)
+		absolute, err := pathlib.Absolute(path)
 		if err != nil {
 			return nil, err
 		}
@@ -534,7 +527,7 @@ func protectedWritePaths(protectCode bool, extraPaths []string) ([]string, error
 		if err != nil {
 			return nil, err
 		}
-		absolute, err := pathAbsolute(expanded)
+		absolute, err := pathlib.Absolute(expanded)
 		if err != nil {
 			return nil, err
 		}
@@ -657,7 +650,7 @@ func matchesAny(argv []string, matchers any) (bool, error) {
 	for _, matcher := range list {
 		normalized, err := NormalizeArgv(matcher)
 		if err != nil {
-			if pyerr.Class(err) == configurationErrorClass {
+			if pyerr.IsInstance(err, configurationErrorClass) {
 				continue
 			}
 			return false, err
