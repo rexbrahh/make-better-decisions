@@ -26,6 +26,7 @@ NATIVE_SERVERS = frozenset({
     "computer-use", "event-stream", "mcp-search", "messages",
 })
 CODEX_BINARY = "/opt/homebrew/bin/codex"
+CLAUDE_SETTINGS_SOURCE = "claude:settings.mcpServers"
 
 _SECRET_KEY_PARTS = ("api_key", "apikey", "access_token", "auth_token", "bearer_token", "credential", "password", "private_key", "secret", "token")
 _SECRET_CLI_FLAGS = {"api-key", "api_key", "token", "password", "secret", "bearer-token", "bearer_token", "access-token", "access_token"}
@@ -346,7 +347,7 @@ def build_codex_plan(servers: Iterable[Mapping[str, Any]], state_root: Any, inst
     return plan
 
 
-def claude_servers_from_settings(settings: Mapping[str, Any], source: str = "claude:settings.mcpServers") -> Dict[str, Dict[str, Any]]:
+def claude_servers_from_settings(settings: Mapping[str, Any], source: str = CLAUDE_SETTINGS_SOURCE) -> Dict[str, Dict[str, Any]]:
     servers: Dict[str, Dict[str, Any]] = {}
     raw = settings.get("mcpServers", {})
     if not isinstance(raw, dict):
@@ -378,7 +379,7 @@ def claude_servers_from_sources(settings: Mapping[str, Any],
                                 claude_configs: Optional[Iterable[Tuple[str, Mapping[str, Any]]]] = None,
                                 plugin_manifests: Optional[Iterable[Tuple[str, Mapping[str, Any]]]] = None
                                 ) -> Dict[str, Dict[str, Any]]:
-    servers = claude_servers_from_settings(settings, "claude:settings.mcpServers")
+    servers = claude_servers_from_settings(settings, CLAUDE_SETTINGS_SOURCE)
     for source, config in claude_configs or ():
         servers.update(claude_servers_from_settings(config, source))
     for source, manifest in plugin_manifests or ():
@@ -453,11 +454,14 @@ def _expand_plugin_root_macros(value: Any, plugin_root: str) -> Any:
     return value
 
 
-def claude_matchers_from_servers(servers: Mapping[str, Mapping[str, Any]]) -> List[List[str]]:
+def claude_matchers_from_servers(servers: Mapping[str, Mapping[str, Any]],
+                                 owner_sources: Iterable[str] = ()) -> List[List[str]]:
+    owned = set(owner_sources)
     matchers: List[List[str]] = []
     for name, recipe in servers.items():
-        if name in NATIVE_SERVERS:
-            continue  # native launchers run unwrapped, as on Codex
+        # A native name exempts only the owner's own config; a plugin manifest could claim any name.
+        if name in NATIVE_SERVERS and recipe.get("source") in owned:
+            continue
         args = recipe.get("args", [])
         if isinstance(recipe.get("command"), str) and isinstance(args, list):
             matchers.append([recipe["command"], *[str(item) for item in args]])
@@ -523,10 +527,11 @@ def build_claude_plan(settings: Mapping[str, Any], state_root: Any, install_root
     root = canonical_path(install_root)
     protected = protected_write_paths("claude", root, home)
     prefix = shell_prefix_path(runtime.current(home))
-    servers = claude_servers_from_sources(settings, claude_configs, plugin_manifests)
+    configs = list(claude_configs or ())
+    servers = claude_servers_from_sources(settings, configs, plugin_manifests)
     merged, previous = merge_claude_settings(settings, prefix, state, protected, previous_spec,
                                              transcript_roots("claude", home))
-    matchers = claude_matchers_from_servers(servers)
+    matchers = claude_matchers_from_servers(servers, [CLAUDE_SETTINGS_SOURCE, *(source for source, _ in configs)])
     entry = installation_entry("claude", state, servers, matchers, previous, protected)
     configure_session_exceptions(entry, previous_spec)
     return {"host": "claude", "state_root": state, "install_root": root,

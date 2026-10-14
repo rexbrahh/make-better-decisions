@@ -4,7 +4,7 @@
 
 The goal is useful, enforceable review. Jev evaluates a material choice against observed evidence. Code checks receipt identity, scope, constraints, and failure policy. Exact instructions and routine operations need no invented choice.
 
-Version 1.2.3 makes the Claude installer cover every Claude config dir, leave native launchers such as Adrafinil unwrapped, as on Codex, and let Claude save auto memory notes again. Ordinary tools remain independent of Jev. Required review remains the default on the declared sensitive surface. See the [release notes](docs/releases/v1.2.3.md).
+Version 1.2.4 leaves a native launcher unwrapped on Claude only when the owner's own config defines it, so a plugin cannot claim a native name to skip isolation. Version 1.2.3 covered every Claude config dir and let Claude save auto memory notes again. Ordinary tools remain independent of Jev. Required review remains the default on the declared sensitive surface. See the [release notes](docs/releases/v1.2.4.md).
 
 The hook builds the evidence. The agent cannot choose the source set by itself.
 

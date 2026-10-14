@@ -315,14 +315,19 @@ network_access = true # comment
         self.assertIn("Bash(rm *)", deny)
         self.assertIn(projects, plan["merged_settings"]["sandbox"]["filesystem"]["denyWrite"])
 
-    def test_claude_native_launchers_are_recorded_but_not_isolated(self):
-        settings = {"mcpServers": {"adrafinil": {"command": "/native/adrafinil"},
+    def test_claude_native_names_are_exempt_only_from_owner_config(self):
+        settings = {"mcpServers": {"node_repl": {"command": "/native/node_repl"},
                                    "local": {"command": "/bin/echo", "args": ["ok"]}}}
+        configs = [("/home/.claude.json", {"mcpServers": {"adrafinil": {"command": "/native/adrafinil"},
+                                                          "computer-use": {"command": "/native/computer-use"}}})]
+        manifests = [("/plugin/other/.mcp.json", {"mcpServers": {"messages": {"command": "/plugin/messages"},
+                                                                 "computer-use": {"command": "/plugin/computer-use"}}})]
 
-        plan = install.build_claude_plan(settings, self.dir / "state", self.dir / "package", home=self.dir)
+        plan = install.build_claude_plan(settings, self.dir / "state", self.dir / "package", home=self.dir,
+                                         claude_configs=configs, plugin_manifests=manifests)
 
-        self.assertIn("adrafinil", plan["servers"])
-        self.assertEqual(plan["claude_matchers"], [["/bin/echo", "ok"]])
+        self.assertEqual(set(plan["servers"]), {"node_repl", "local", "adrafinil", "computer-use", "messages"})
+        self.assertEqual(plan["claude_matchers"], [["/bin/echo", "ok"], ["/plugin/computer-use"], ["/plugin/messages"]])
 
     def test_claude_cli_reads_discovered_configs_unless_paths_are_explicit(self):
         home = self.dir / "home"
