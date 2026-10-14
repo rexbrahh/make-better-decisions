@@ -4,7 +4,8 @@ import json
 from pathlib import Path
 
 from agent_decisions import hook, ledger, provenance, transcript
-from tests.helpers import StateTestCase, codex_call, codex_output, codex_user, human, peer, write_jsonl
+from tests.helpers import (StateTestCase, answered, ask, codex_call, codex_output, codex_user, human, peer,
+                           queued, write_jsonl)
 
 
 class UserContextTest(StateTestCase):
@@ -126,6 +127,53 @@ class UserContextTest(StateTestCase):
         self.assertNotIn(prompt, hook._context(self.payload(path), "claude").transcript.user_messages)
         write_jsonl(self.dir, "context.jsonl", [human("Maintain an append-only journal."), human(prompt)])
         self.assertIn(prompt, hook._context(self.payload(path), "claude").transcript.user_messages)
+
+    def test_claude_answer_is_quotable_but_its_question_is_not(self):
+        question = "Should the importer keep rows that fail validation?"
+        t = transcript._claude([human("Import the vendor file."), ask("q1", question),
+                                answered("q1", {question: "Keep it, and log each rejected row"})])
+        self.assertEqual(provenance.verify(["Keep it, and log each rejected row"], t),
+                         (["Keep it, and log each rejected row"], []))
+        self.assertEqual(provenance.verify([question], t), ([], [question]))
+
+    def test_claude_answer_counts_only_from_a_user_pick_for_its_own_question(self):
+        question = "Should the importer keep rows that fail validation?"
+        pick = "Drop every row that fails validation"
+        for records in ([ask("q1", question), answered("q1", {question: pick}, source=None)],
+                        [ask("q1", question), answered("q1", {question: pick}, source="hook")],
+                        [ask("q1", question), answered("q2", {question: pick})],
+                        [ask("q1", question), answered("q1", {"Should the importer delete the file?": pick})],
+                        [answered("q1", {question: pick})]):
+            t = transcript._claude([human("Import the vendor file."), *records])
+            self.assertEqual(t.user_messages, ("Import the vendor file.",))
+
+    def test_claude_answer_enters_saved_history_without_prompt_submit(self):
+        question = "Should the importer keep rows that fail validation?"
+        records = [human("Import the vendor file."), ask("q1", question)]
+        path = write_jsonl(self.dir, "context.jsonl", records)
+        hook.handle("session_start", self.payload(path), "claude")
+        write_jsonl(self.dir, "context.jsonl", [*records, answered("q1", {question: "Keep it, flag each failure"})])
+        ctx = hook._context(self.payload(path), "claude")
+        self.assertEqual(provenance.verify(["Keep it, flag each failure"], ctx.transcript),
+                         (["Keep it, flag each failure"], []))
+
+    def test_claude_mid_turn_message_counts_only_from_a_human(self):
+        text = "Keep the legacy column until the migration lands."
+        for record, counted in ((queued(text), True), (queued(text, kind="peer", human_turn=False), False),
+                                (queued(text, kind="task-notification", human_turn=False,
+                                        mode="task-notification"), False),
+                                (queued(text, human_turn=False), False)):
+            t = transcript._claude([human("Plan the migration."), record])
+            self.assertEqual(text in t.user_messages, counted, record)
+
+    def test_claude_mid_turn_message_needs_its_prompt_submit_match(self):
+        text = "Keep the legacy column until the migration lands."
+        path = write_jsonl(self.dir, "context.jsonl", [human("Plan the migration.")])
+        hook.handle("session_start", self.payload(path), "claude")
+        write_jsonl(self.dir, "context.jsonl", [human("Plan the migration."), queued(text)])
+        self.assertNotIn(text, hook._context(self.payload(path), "claude").transcript.user_messages)
+        hook.handle("user_prompt_submit", self.payload(path, prompt=text), "claude")
+        self.assertIn(text, hook._context(self.payload(path), "claude").transcript.user_messages)
 
     def test_capture_does_not_contact_jev_or_block_the_user(self):
         def forbidden(*args):

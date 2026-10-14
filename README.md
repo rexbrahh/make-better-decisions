@@ -4,7 +4,7 @@
 
 The goal is useful, enforceable review. Jev evaluates a material choice against observed evidence. Code checks receipt identity, scope, constraints, and failure policy. Exact instructions and routine operations need no invented choice.
 
-Version 1.2.4 leaves a native launcher unwrapped on Claude only when the owner's own config defines it, so a plugin cannot claim a native name to skip isolation. Version 1.2.3 covered every Claude config dir and let Claude save auto memory notes again. Ordinary tools remain independent of Jev. Required review remains the default on the declared sensitive surface. See the [release notes](docs/releases/v1.2.4.md).
+Version 1.2.5 lets Claude agents quote two more kinds of user text to Jev: answers that the user picks or types in a question box, and messages that the user types while the agent works. Version 1.2.4 leaves a native launcher unwrapped on Claude only when the owner's own config defines it. Ordinary tools remain independent of Jev. Required review remains the default on the declared sensitive surface. See the [release notes](docs/releases/v1.2.5.md).
 
 The hook builds the evidence. The agent cannot choose the source set by itself.
 
@@ -105,6 +105,10 @@ The hook supplies these evidence groups:
 `UserPromptSubmit` is not user authority by itself. The hook adds it to signed user history only after it matches a new human-origin host transcript record. This matters because Claude can emit prompt-submit events for peer or background messages.
 
 Codex question replies can arrive during a running turn without `UserPromptSubmit`. The hook captures those host records after matching every reply to its earlier completed question call, question text, and item index. It preserves the saved history when the host transcript is replaced. Quote verification decodes the answers, including quotes and line breaks. The agent's repeated question text is not a user quotation.
+
+Claude question-box answers also arrive without `UserPromptSubmit`. The hook accepts an answer only when Claude Code records it as the user's own pick (`permissionDecision` source `user_temporary`), and only for a question that the earlier call asked. Agents can quote the selected label or the text that the user typed. A hook or an SDK callback can also fill in answers, and the hook does not accept those as user text.
+
+Claude stores a message that the user types while the agent works as a `queued_command` record. The hook reads it as user text only when the record has a human origin. Peer messages and task notifications use the same record type, and the hook ignores them. A forwarded side-agent note looks the same as a typed message, so agents can quote it.
 
 Source-file contents are observations. They are not proof that statements inside those files are true.
 

@@ -61,6 +61,10 @@ Codex `<hook_prompt>` records are automatic feedback. They do not become human h
 
 Codex asynchronous question replies do not require a separate prompt-submit event. Each answer must match its earlier completed question call and item index. Quote verification uses the decoded answer, rather than the repeated agent question.
 
+Claude question-box answers also do not require a separate prompt-submit event. The hook accepts an `AskUserQuestion` answer only when the host records the permission decision `accept` with the source `user_temporary`. Each answered question must match a question of the earlier call. Quote verification uses the recorded answer: the selected option label or the text that the user typed. The question text is not a user quotation. A hook or an SDK callback can also supply answers, and those answers are not user text. Answer records from Claude Code 2.1.292 and earlier have no permission decision, so the hook does not accept them.
+
+Claude records a message that the user types during a running turn as a `queued_command` attachment. The parser reads this attachment as a user message only when it has `origin.kind` `human`, `humanTurn` true, and `commandMode` `prompt`. Peer messages, task notifications, and automatic continuations use the same record type, and the parser ignores them. The message joins signed user history only after it matches a `UserPromptSubmit` observation, as a typed prompt does. A side-agent note that the user forwards has the same record as a typed message, so the hook accepts it as user text.
+
 Subagent contexts use main-agent user messages. This lets subagents see signed user history without trusting parent-agent summaries.
 
 ## Decisions

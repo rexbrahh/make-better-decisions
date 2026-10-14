@@ -231,6 +231,43 @@ class _Builder:
                           self.brief, tuple(self.user_keys), tuple(self.question_reply_keys))
 
 
+def _claude_queued_prompt(record: dict) -> str:
+    """Text the user typed while the agent worked. Peer messages and task notifications queue the same way."""
+    queued = record.get("attachment") or {}
+    if queued.get("type") != "queued_command" or queued.get("commandMode") != "prompt" \
+            or queued.get("humanTurn") is not True or (queued.get("origin") or {}).get("kind") != "human":
+        return ""
+    return _text(queued.get("prompt"))
+
+
+def _claude_answers(record: dict, call_id: str, calls: list[tuple[str, str, str]]) -> list[str]:
+    """Answers the user picked or typed in a question box, without the agent's question.
+
+    A hook or an SDK callback can also fill in answers, so only a user permission decision counts.
+    """
+    decision = record.get("permissionDecision")
+    if not isinstance(decision, dict) or (decision.get("decision"), decision.get("source")) != ("accept", "user_temporary"):
+        return []
+    result = record.get("toolUseResult")
+    answers = result.get("answers") if isinstance(result, dict) else None
+    request = next((tool_input for i, name, tool_input in calls if i == call_id and name == "AskUserQuestion"), None)
+    if not isinstance(answers, dict) or request is None:
+        return []
+    try:
+        asked = {question.get("question") for question in json.loads(request)["questions"]}
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return []
+    words = []
+    for question, answer in answers.items():
+        if question not in asked:
+            return []
+        if isinstance(answer, list) and all(isinstance(label, str) for label in answer):
+            answer = ", ".join(answer)  # an SDK host can return multi-select labels as a list
+        if isinstance(answer, str) and answer.strip():
+            words.append(answer)
+    return words
+
+
 def _claude(records: Iterable[dict]) -> Transcript:
     b = _Builder()
     for r in records:
@@ -243,11 +280,17 @@ def _claude(records: Iterable[dict]) -> Transcript:
                     b.call(block.get("id", ""), block.get("name", ""), block.get("input"))
                 elif block.get("type") == "text" and block.get("text"):
                     b.last_text = block["text"]
+        elif r.get("type") == "attachment" and not r.get("isSidechain"):
+            text = _claude_queued_prompt(r)
+            if text:
+                b.user(text, r)
         elif r.get("type") == "user":
             results = [x for x in content if isinstance(x, dict) and x.get("type") == "tool_result"] \
                 if isinstance(content, list) else []
             for x in results:
                 b.output(x.get("tool_use_id", ""), x.get("content"))
+                for answer in _claude_answers(r, x.get("tool_use_id", ""), b.calls):
+                    b.user(answer, r, question_reply=True)
             text = _text(content)
             if results or not text or r.get("isCompactSummary") or r.get("isMeta"):
                 continue

@@ -336,7 +336,7 @@ def _saved_users(payload: dict, host: str, t: transcript.Transcript, entries: li
     new_users = [(key, message) for key, message in zip(raw_keys, raw_users) if key not in seen]
     prompts = [entry.get("prompt") for entry in entries[index + 1:]
                if entry.get("host") == host and entry.get("gate") == "user_prompt"]
-    reply_keys = set(t.question_reply_keys) if host == "codex" and set(seen).intersection(raw_keys) else set()
+    reply_keys = set(t.question_reply_keys) if set(seen).intersection(raw_keys) else set()
     for key, message in new_users:
         if message in prompts:
             prompts.remove(message)

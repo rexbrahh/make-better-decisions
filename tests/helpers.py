@@ -36,6 +36,30 @@ def assistant_text(text):
     return {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}
 
 
+def queued(text, kind="human", human_turn=True, mode="prompt"):
+    """A message queued while the agent works (observed 2026-10-14). Peers and notifications queue the same way."""
+    attachment = {"type": "queued_command", "commandMode": mode, "prompt": text, "origin": {"kind": kind}}
+    if human_turn:
+        attachment["humanTurn"] = True
+    return {"type": "attachment", "attachment": attachment}
+
+
+def ask(call_id, *questions):
+    return tool_use(call_id, "AskUserQuestion", {"questions": [
+        {"question": q, "header": "Choice", "multiSelect": False,
+         "options": [{"label": "Keep it", "description": ""}, {"label": "Drop it", "description": ""}]}
+        for q in questions]})
+
+
+def answered(call_id, answers, source="user_temporary"):
+    """An AskUserQuestion result (observed 2026-10-14). Claude Code 2.1.295+ records a human pick as user_temporary."""
+    record = tool_result(call_id, "Your questions have been answered.")
+    record["toolUseResult"] = {"questions": [], "answers": answers, "annotations": {}}
+    if source is not None:
+        record["permissionDecision"] = {"decision": "accept", "source": source}
+    return record
+
+
 def codex_user(text):
     return {"type": "response_item", "payload": {
         "type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}}
