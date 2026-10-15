@@ -1234,14 +1234,15 @@ type Writer interface {
 	Call(method string, params *json.Object) (*json.Object, error)
 }
 
-// CodexRpcWriter calls the Codex app server through `codex app-server proxy`, or `--stdio` when no
-// control socket exists.
+// CodexRpcWriter uses the control socket, with local stdio recovery when automatic socket initialization
+// fails. Explicit sockets and failures after initialization are never retried.
 //
 // py: agent_decisions/install.py CodexRpcWriter
 type CodexRpcWriter struct {
-	CodexBinary string
-	SocketPath  *string // nil: no control socket
-	TimeoutS    float64
+	CodexBinary     string
+	SocketPath      *string // nil: no control socket
+	TimeoutS        float64
+	automaticSocket bool
 }
 
 // NewCodexRpcWriter ports CodexRpcWriter.__init__. A nil socketPath looks for the default control socket.
@@ -1249,7 +1250,7 @@ type CodexRpcWriter struct {
 //
 // py: agent_decisions/install.py CodexRpcWriter.__init__
 func NewCodexRpcWriter(codexBinary string, socketPath *string, timeoutS float64) (*CodexRpcWriter, error) {
-	writer := &CodexRpcWriter{CodexBinary: codexBinary, TimeoutS: timeoutS}
+	writer := &CodexRpcWriter{CodexBinary: codexBinary, TimeoutS: timeoutS, automaticSocket: socketPath == nil}
 	if socketPath != nil {
 		path, err := CanonicalPath(*socketPath)
 		if err != nil {
@@ -1273,8 +1274,19 @@ func (w *CodexRpcWriter) Call(method string, params *json.Object) (*json.Object,
 	if w.SocketPath != nil {
 		command = []string{w.CodexBinary, "app-server", "proxy", "--sock", *w.SocketPath}
 	}
-	return callJSONRPC(command, request, w.TimeoutS, true)
+	response, err := callJSONRPC(command, request, w.TimeoutS, true)
+	var initialization *rpcInitializationError
+	if w.automaticSocket && w.SocketPath != nil && errors.As(err, &initialization) {
+		return callJSONRPC([]string{w.CodexBinary, "app-server", "--stdio"}, request, w.TimeoutS, true)
+	}
+	return response, err
 }
+
+// Only an initialization failure proves the requested operation was not sent.
+type rpcInitializationError struct{ cause error }
+
+func (e *rpcInitializationError) Error() string { return e.cause.Error() }
+func (e *rpcInitializationError) Unwrap() error { return e.cause }
 
 // py: agent_decisions/install.py _default_app_server_socket
 func appServerSocket() (*string, error) {
@@ -1356,7 +1368,7 @@ func callJSONRPC(command []string, request *json.Object, timeoutS float64, initi
 		_, err := sendAndWait(json.NewObject("id", newID(), "method", "initialize",
 			"params", json.NewObject("clientInfo", client, "capabilities", json.NewObject())))
 		if err != nil {
-			return nil, err
+			return nil, &rpcInitializationError{cause: err}
 		}
 	}
 	return sendAndWait(request)

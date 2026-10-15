@@ -72,6 +72,9 @@ Use per-host commands when you need separate evidence or rollback. The protected
 
 The Codex helper registers an optional isolation profile. It preserves the default sandbox, approval policy, and reviewer. Select the profile explicitly to apply its native filesystem restrictions.
 
+If an automatically detected Codex socket fails initialization, the installer retries through local stdio.
+An explicit socket stays authoritative. The installer never retries after it sends the requested configuration operation.
+
 Run the helper again after each plugin upgrade or stdio MCP configuration change. The helper copies verified runtime files into `~/.local/share/agent-decisions/runtimes/` and atomically activates `current`. It retains earlier bundles for running processes. Plugin cache removal does not remove these entrypoints. Cache updates alone do not activate new runtime code.
 
 Hooks run the binary in the installed runtime. Before installation, hooks deny reviewed tool calls and report that the engine is not installed. A runtime from a release before 2.0.0 runs its Python hook until you run the helper again. A broken installed runtime reports a startup failure. The runtime namespace, pointer, and bundles are write-protected by the configured boundary. Required decision review remains active.

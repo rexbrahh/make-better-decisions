@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rexbrahh/make-better-decisions/internal/bundle"
 	"github.com/rexbrahh/make-better-decisions/internal/isolation"
@@ -22,6 +23,7 @@ import (
 // fakeCodexArgs names the file where the fake Codex records its arguments. When it is set, the test
 // binary is the fake Codex: it answers two JSON-RPC requests on stdin with {"method": <method>}.
 const fakeCodexArgs = "INSTALL_TEST_FAKE_CODEX_ARGS"
+const fakeCodexBehavior = "INSTALL_TEST_FAKE_CODEX_BEHAVIOR"
 
 func TestMain(m *testing.M) {
 	if path := os.Getenv(fakeCodexArgs); path != "" {
@@ -35,6 +37,20 @@ func TestMain(m *testing.M) {
 func fakeCodex(argsPath string) {
 	args, _ := json.Dumps(toAnyList(os.Args[1:]), json.Options{})
 	os.WriteFile(argsPath, []byte(args), 0o600)
+	behavior := os.Getenv(fakeCodexBehavior)
+	proxy := len(os.Args) > 2 && os.Args[2] == "proxy"
+	if behavior != "" {
+		file, err := os.OpenFile(argsPath+".launches", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+		if err != nil {
+			os.Exit(5)
+		}
+		file.WriteString(args + "\n")
+		file.Close()
+	}
+	if proxy && behavior == "stall_initialize" {
+		time.Sleep(2 * time.Second)
+		return
+	}
 	methods := []any{}
 	stdin := bufio.NewReader(os.Stdin)
 	for range 2 {
@@ -50,8 +66,16 @@ func fakeCodex(argsPath string) {
 		methods = append(methods, request.Value("method"))
 		text, _ := json.Dumps(methods, json.Options{})
 		os.WriteFile(argsPath+".methods", []byte(text), 0o600)
-		reply, _ := json.Dumps(json.NewObject("id", request.Value("id"),
-			"result", json.NewObject("method", request.Value("method"))), json.Options{})
+		if proxy && behavior == "stall_operation" && len(methods) == 2 {
+			time.Sleep(2 * time.Second)
+			return
+		}
+		response := json.NewObject("id", request.Value("id"), "result", json.NewObject("method", request.Value("method")))
+		if proxy && behavior == "reject_initialize" && len(methods) == 1 {
+			response.Delete("result")
+			response.Set("error", json.NewObject("code", json.Int("-32600"), "message", "fixture initialization error"))
+		}
+		reply, _ := json.Dumps(response, json.Options{})
 		os.Stdout.WriteString(reply + "\n")
 	}
 }
@@ -914,6 +938,58 @@ func TestCodexWriterUsesStdioFallbackWhenNoSocketExists(t *testing.T) {
 	check(t, err)
 	wantEqual(t, load(t, string(data)), []any{"initialize", "config/read"})
 	wantEqual(t, response.Value("result"), json.NewObject("method", "config/read"))
+}
+
+func TestCodexWriterRecoversOnlyAutomaticInitializationFailures(t *testing.T) {
+	for _, c := range []struct {
+		name, behavior string
+		explicit       bool
+		recover        bool
+	}{
+		{"default_socket_timeout", "stall_initialize", false, true},
+		{"default_socket_rpc_error", "reject_initialize", false, true},
+		{"explicit_socket_timeout", "stall_initialize", true, false},
+		{"operation_timeout", "stall_operation", false, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := setUp(t)
+			socket := filepath.Join(os.Getenv("HOME"), ".codex/app-server-control/app-server-control.sock")
+			writeFile(t, socket, "")
+			t.Setenv(fakeCodexBehavior, c.behavior)
+			var selected *string
+			if c.explicit {
+				selected = &socket
+			}
+			writer, argsPath := fakeCodexWriter(t, dir, selected)
+			writer.TimeoutS = 0.25
+			response, err := writer.Call("config/batchWrite", json.NewObject("edits", []any{}))
+			if c.recover {
+				check(t, err)
+				wantEqual(t, response.Value("result"), json.NewObject("method", "config/batchWrite"))
+			} else if pyerr.Class(err) != "InstallError" {
+				t.Fatalf("error = %v, want InstallError", err)
+			}
+			data, readErr := os.ReadFile(argsPath + ".launches")
+			check(t, readErr)
+			launches := strings.Split(strings.TrimSpace(string(data)), "\n")
+			want := 1
+			if c.recover {
+				want = 2
+			}
+			if len(launches) != want {
+				t.Fatalf("started %d transports, want %d", len(launches), want)
+			}
+			wantEqual(t, load(t, launches[0]), []any{"app-server", "proxy", "--sock", socket})
+			if c.recover {
+				wantEqual(t, load(t, launches[1]), []any{"app-server", "--stdio"})
+			}
+			if c.recover || c.behavior == "stall_operation" {
+				data, err := os.ReadFile(argsPath + ".methods")
+				check(t, err)
+				wantEqual(t, load(t, string(data)), []any{"initialize", "config/batchWrite"})
+			}
+		})
+	}
 }
 
 // py: tests/test_install.py::test_cli_dry_run_uses_sanitized_output_and_does_not_apply
