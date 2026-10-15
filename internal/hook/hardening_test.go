@@ -3,6 +3,7 @@ package hook
 import (
 	"errors"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -31,8 +32,11 @@ func edHardeningRequest() *json.Object {
 // py: tests/test_hardening.py::test_indirect_and_case_variant_paths_are_denied
 func TestIndirectAndCaseVariantPathsAreDenied(t *testing.T) {
 	setUp(t)
-	for _, command := range []string{"cd ~/.local/state && cat agent-decisions/sessions/*",
-		"ls ~/.local/state/agent*", "cat ~/.Local/State/Agent-Decisions/sessions/x"} {
+	commands := []string{"cd ~/.local/state && cat agent-decisions/sessions/*", "ls ~/.local/state/agent*"}
+	if runtime.GOOS == "darwin" { // only darwin casefolds: a case variant is another directory on linux
+		commands = append(commands, "cat ~/.Local/State/Agent-Decisions/sessions/x")
+	}
+	for _, command := range commands {
 		outcome, err := gates.Guard(json.NewObject("command", command), nil, guardFrame)
 		if err != nil {
 			t.Fatal(err)

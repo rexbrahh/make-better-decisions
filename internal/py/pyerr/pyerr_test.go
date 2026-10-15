@@ -9,19 +9,24 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
 )
 
 func TestNewOSError(t *testing.T) {
+	crossDevice := "Cross-device link" // the libc strerror text differs by platform
+	if runtime.GOOS == "linux" {
+		crossDevice = "Invalid cross-device link"
+	}
 	cases := []struct {
 		err        error
 		filenames  []string
 		class, msg string
 	}{
 		{syscall.ENOENT, []string{"/tmp/x"}, "FileNotFoundError", "[Errno 2] No such file or directory: '/tmp/x'"},
-		{syscall.EXDEV, []string{"a", "b"}, "OSError", "[Errno 18] Cross-device link: 'a' -> 'b'"},
+		{syscall.EXDEV, []string{"a", "b"}, "OSError", "[Errno 18] " + crossDevice + ": 'a' -> 'b'"},
 		{syscall.EACCES, nil, "PermissionError", "[Errno 13] Permission denied"},
 		{&fs.PathError{Op: "open", Path: "p", Err: syscall.EISDIR}, []string{"it's"}, "IsADirectoryError",
 			`[Errno 21] Is a directory: "it's"`},

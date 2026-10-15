@@ -214,16 +214,22 @@ func mkdir(t *testing.T, path string) {
 	}
 }
 
-// requireSandbox skips a live test where sandbox-exec cannot confine a child. That includes a process that
-// already runs inside a sandbox, where sandbox_apply fails with EPERM.
+// requireSandbox skips a live test where sandbox-exec (macOS) or bwrap (Linux) cannot confine a child. That
+// includes a process that already runs inside a sandbox, where sandbox_apply fails with EPERM, and a Linux
+// container without user namespaces.
 func requireSandbox(t *testing.T) {
 	t.Helper()
-	if runtime.GOOS != "darwin" || !ospath.Exists("/usr/bin/sandbox-exec") {
-		t.Skip("live sandbox proof needs macOS sandbox-exec")
+	var probe *exec.Cmd
+	switch bwrap, _ := exec.LookPath("bwrap"); {
+	case runtime.GOOS == "darwin" && ospath.Exists("/usr/bin/sandbox-exec"):
+		probe = exec.Command("/usr/bin/sandbox-exec", "-p", "(version 1)\n(allow default)", "/usr/bin/true")
+	case runtime.GOOS == "linux" && bwrap != "":
+		probe = exec.Command(bwrap, "--die-with-parent", "--bind", "/", "/", "/bin/true")
+	default:
+		t.Skip("live sandbox proof needs macOS sandbox-exec or Linux bwrap")
 	}
-	probe := exec.Command("/usr/bin/sandbox-exec", "-p", "(version 1)\n(allow default)", "/usr/bin/true")
 	if output, err := probe.CombinedOutput(); err != nil {
-		t.Skipf("sandbox-exec cannot apply a profile here: %v: %s", err, output)
+		t.Skipf("%s cannot confine a child here: %v: %s", probe.Path, err, output)
 	}
 }
 
