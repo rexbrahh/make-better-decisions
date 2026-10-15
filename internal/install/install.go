@@ -859,7 +859,7 @@ func ClaudeServersFromSources(settings *json.Object, claudeConfigs, pluginManife
 	return servers, nil
 }
 
-// DiscoverClaudePluginManifests returns the .mcp.json of each enabled plugin in Claude's registry.
+// DiscoverClaudePluginManifests returns sorted, unique .mcp.json paths from supported registry entries.
 //
 // py: agent_decisions/install.py discover_claude_plugin_manifests
 func DiscoverClaudePluginManifests(home string) ([]string, error) {
@@ -877,20 +877,25 @@ func DiscoverClaudePluginManifests(home string) ([]string, error) {
 	}
 	manifests := []string{}
 	for _, key := range plugins.Keys() {
-		entry := plugins.Value(key)
-		installPath, err := claudePluginInstallPath(entry)
-		if err != nil {
-			return nil, err
+		entries, ok := plugins.Value(key).([]any)
+		if !ok {
+			entries = []any{plugins.Value(key)}
 		}
-		if installPath == "" || claudePluginDisabled(entry) {
-			continue
-		}
-		if manifest := pathlib.Join(installPath, ".mcp.json"); ospath.IsFile(manifest) {
-			manifests = append(manifests, manifest)
+		for _, entry := range entries {
+			installPath, err := claudePluginInstallPath(entry)
+			if err != nil {
+				return nil, err
+			}
+			if installPath == "" || claudePluginDisabled(entry) {
+				continue
+			}
+			if manifest := pathlib.Join(installPath, ".mcp.json"); ospath.IsFile(manifest) {
+				manifests = append(manifests, manifest)
+			}
 		}
 	}
 	sortPaths(manifests)
-	return manifests, nil
+	return slices.Compact(manifests), nil
 }
 
 // py: agent_decisions/install.py read_claude_plugin_manifests

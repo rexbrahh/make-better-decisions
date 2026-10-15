@@ -1222,3 +1222,28 @@ func TestSanitizeInlineSecretArgumentIncludesWhitespace(t *testing.T) {
 		})
 	}
 }
+
+func TestClaudeManifestDiscoverySupportsScopedRegistryArrays(t *testing.T) {
+	dir := setUp(t)
+	home := filepath.Join(dir, "home")
+	legacy, scoped, disabled := filepath.Join(dir, "legacy"), filepath.Join(dir, "scoped"), filepath.Join(dir, "disabled")
+	for _, path := range []string{legacy, scoped, disabled} {
+		writeFile(t, filepath.Join(path, ".mcp.json"), "{}")
+	}
+	registry := json.NewObject("plugins", json.NewObject(
+		"legacy@local", json.NewObject("installPath", legacy),
+		"scoped@local", []any{
+			json.NewObject("scope", "user", "installPath", scoped),
+			json.NewObject("scope", "project", "installPath", scoped),
+			json.NewObject("installPath", disabled, "settings", json.NewObject("enabledPlugins", false)),
+			json.NewObject("installPath", disabled, "enabledPlugins", false),
+			json.NewObject("installPath", legacy), nil, "malformed",
+		},
+	))
+	text, err := json.Dumps(registry, json.Options{})
+	check(t, err)
+	writeFile(t, filepath.Join(home, ".claude/plugins/installed_plugins.json"), text)
+	got, err := DiscoverClaudePluginManifests(home)
+	check(t, err)
+	wantEqual(t, toAnyList(got), []any{filepath.Join(legacy, ".mcp.json"), filepath.Join(scoped, ".mcp.json")})
+}
