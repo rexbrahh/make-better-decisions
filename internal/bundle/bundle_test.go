@@ -333,3 +333,59 @@ func TestNamespaceAtRootCwd(t *testing.T) {
 		t.Fatalf("Namespace = %q, %v", got, err)
 	}
 }
+
+func TestFailedPublishLeavesOnlyPreviousRuntime(t *testing.T) {
+	for _, failure := range []string{"pointer_entropy", "bundle_entropy", "activation"} {
+		t.Run(failure, func(t *testing.T) {
+			f := newFixture(t)
+			active, err := Publish(f.source, f.home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Publish(f.source, f.home); err != nil {
+				t.Fatal(err)
+			}
+			previous := resolve(t, active)
+			runtimes := filepath.Dir(previous)
+			before, err := os.ReadDir(runtimes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			oldRandom, oldReplace := random, replace
+			t.Cleanup(func() { random, replace = oldRandom, oldReplace })
+			switch failure {
+			case "pointer_entropy":
+				random = bytes.NewReader(make([]byte, 8))
+			case "bundle_entropy":
+				random = bytes.NewReader(make([]byte, 24))
+			case "activation":
+				replace = func(string, string) error { return syscall.EINTR }
+			}
+			if _, err := Publish(f.source, f.home); err == nil {
+				t.Fatal("injected failure succeeded")
+			}
+			if resolve(t, active) != previous {
+				t.Fatal("failure changed the active runtime")
+			}
+			after, err := os.ReadDir(runtimes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(after) != len(before) || len(after) != 2 {
+				t.Fatalf("failed publication changed runtime count: %d to %d", len(before), len(after))
+			}
+			for i, entry := range after {
+				if entry.Name() != before[i].Name() {
+					t.Fatalf("failed publication replaced runtime %s with %s", before[i].Name(), entry.Name())
+				}
+				if _, err := os.Stat(filepath.Join(runtimes, entry.Name(), Binary)); err != nil {
+					t.Fatal("previous runtime lost its binary", err)
+				}
+			}
+			pointers, err := filepath.Glob(filepath.Join(filepath.Dir(active), ".current-*"))
+			if err != nil || len(pointers) != 0 {
+				t.Fatalf("temporary pointers remain: %v, %v", pointers, err)
+			}
+		})
+	}
+}

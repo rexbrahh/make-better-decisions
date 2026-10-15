@@ -165,17 +165,18 @@ func Publish(source, home string) (current string, err error) {
 	if err != nil {
 		return "", err
 	}
-	pointerID, err := uuid4Hex()
-	if err != nil {
-		return "", err
-	}
-	pointer := pathlib.Join(root, ".current-"+pointerID)
+	pointer := ""
 	defer func() {
 		// A failed cleanup replaces the original error, as an exception raised in a finally block does.
 		if cleanupErr := cleanup(pointer, stage); cleanupErr != nil {
 			current, err = "", cleanupErr
 		}
 	}()
+	pointerID, err := uuid4Hex()
+	if err != nil {
+		return "", err
+	}
+	pointer = pathlib.Join(root, ".current-"+pointerID)
 	for i, file := range sources {
 		target := pathlib.Join(stage, file.relative)
 		if err := pathlib.Mkdir(pathlib.Parent(target), 0o700, true); err != nil {
@@ -225,6 +226,7 @@ func Publish(source, home string) (current string, err error) {
 	if err := syscall.Rename(stage, bundle); err != nil {
 		return "", pyerr.NewOSError(err, stage, bundle)
 	}
+	stage = bundle
 	if err := syscall.Symlink("runtimes/"+bundleID, pointer); err != nil {
 		return "", pyerr.NewOSError(err, "runtimes/"+bundleID, pointer)
 	}
@@ -234,16 +236,18 @@ func Publish(source, home string) (current string, err error) {
 	if err := replace(pointer, current); err != nil {
 		return "", pyerr.NewOSError(err, pointer, current)
 	}
+	stage = ""
 	return current, nil
 }
 
-// cleanup ports the finally block of publish: pointer.unlink(missing_ok=True), then shutil.rmtree(stage)
-// when the stage still exists.
+// cleanup removes only artifacts still owned by an incomplete publication.
 func cleanup(pointer, stage string) error {
-	if err := syscall.Unlink(pointer); err != nil && err != syscall.ENOENT {
-		return pyerr.NewOSError(err, pointer)
+	if pointer != "" {
+		if err := syscall.Unlink(pointer); err != nil && err != syscall.ENOENT {
+			return pyerr.NewOSError(err, pointer)
+		}
 	}
-	if _, err := os.Stat(stage); err == nil {
+	if stage != "" {
 		if err := os.RemoveAll(stage); err != nil {
 			return pyerr.NewOSError(err, stage)
 		}
