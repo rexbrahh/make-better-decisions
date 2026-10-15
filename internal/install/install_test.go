@@ -1210,3 +1210,15 @@ func TestSanitizePreservesLiteralAndDecodedURLMarkers(t *testing.T) {
 		})
 	}
 }
+
+func TestSanitizeInlineSecretArgumentIncludesWhitespace(t *testing.T) {
+	for flag := range secretCLIFlags {
+		t.Run(flag, func(t *testing.T) {
+			prefix := "--" + strings.ToUpper(flag)
+			args := []any{prefix + "=fixture secret\twith\nspaces", "--safe=visible words", prefix, "fixture next value", "visible"}
+			got, err := Sanitize(args)
+			check(t, err)
+			wantEqual(t, got, []any{prefix + "=" + redacted, "--safe=visible words", prefix, redacted, "visible"})
+		})
+	}
+}

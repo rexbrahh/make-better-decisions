@@ -1822,12 +1822,18 @@ func sanitizeList(values []any) ([]any, error) {
 			redactNext = false
 			continue
 		}
+		text, ok := value.(string)
+		if ok {
+			if flag, _, inline := strings.Cut(text, "="); inline && isSecretCLIFlag(flag) {
+				sanitized = append(sanitized, flag+"="+redacted)
+				continue
+			}
+		}
 		item, err := Sanitize(value)
 		if err != nil {
 			return nil, err
 		}
 		sanitized = append(sanitized, item)
-		text, ok := value.(string)
 		redactNext = ok && isSecretCLIFlag(text)
 	}
 	return sanitized, nil
