@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/rexbrahh/make-better-decisions/internal/ledger"
+	"github.com/rexbrahh/make-better-decisions/internal/oracletest"
 	"github.com/rexbrahh/make-better-decisions/internal/py/json"
 )
 
@@ -457,10 +458,7 @@ func layouts(t *testing.T, base string) map[string]string {
 		"cache":  filepath.Join(base, "plugins/cache/market/agent-decisions/1.2.3"),
 		"bundle": filepath.Join(base, "bundle"),
 	}
-	repoPackage, err := filepath.Abs("../../agent_decisions")
-	if err != nil {
-		t.Fatal(err)
-	}
+	repoPackage := filepath.Join(oracletest.Source(t), "agent_decisions")
 	for name, root := range roots {
 		target := root
 		if name == "bundle" {

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rexbrahh/make-better-decisions/internal/oracletest"
 	"github.com/rexbrahh/make-better-decisions/internal/provenance"
 	"github.com/rexbrahh/make-better-decisions/internal/py/json"
 	pystr "github.com/rexbrahh/make-better-decisions/internal/py/str"
@@ -117,10 +118,7 @@ func askPython(t *testing.T, requests [][]any) []string {
 	if python == "" {
 		t.Skip("set AGENT_DECISIONS_PYTHON to a CPython 3.15 interpreter to compare with the oracle")
 	}
-	repoRoot, err := filepath.Abs("../..")
-	if err != nil {
-		t.Fatal(err)
-	}
+	repoRoot := oracletest.Source(t)
 	var input strings.Builder
 	for _, request := range requests {
 		line, err := stdjson.Marshal(request)

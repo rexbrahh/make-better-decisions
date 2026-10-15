@@ -21,6 +21,7 @@ import (
 	"github.com/rexbrahh/make-better-decisions/internal/evidence"
 	"github.com/rexbrahh/make-better-decisions/internal/jev"
 	"github.com/rexbrahh/make-better-decisions/internal/jev/jevtest"
+	"github.com/rexbrahh/make-better-decisions/internal/oracletest"
 	"github.com/rexbrahh/make-better-decisions/internal/py/json"
 	"github.com/rexbrahh/make-better-decisions/internal/transcript"
 )
@@ -158,10 +159,7 @@ func compareWithPython(t *testing.T, cases []oracleCase) {
 	if python == "" {
 		t.Skip("set AGENT_DECISIONS_PYTHON to a CPython 3.15 interpreter to compare with the oracle")
 	}
-	repoRoot, err := filepath.Abs("../..")
-	if err != nil {
-		t.Fatal(err)
-	}
+	repoRoot := oracletest.Source(t)
 	var input strings.Builder
 	for _, c := range cases {
 		line, err := stdjson.Marshal(c.request)

@@ -1,8 +1,6 @@
-#!/usr/bin/env -S python3 -I -B
-from pathlib import Path
-import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from agent_decisions.isolation import main_shell_prefix
-
-if __name__ == "__main__":
-    raise SystemExit(main_shell_prefix())
+#!/bin/sh
+# Run `agent-decisions shell-prefix`. A runtime bundle holds the binary beside this file. A plugin root does not, so
+# use the binary of the active runtime that bin/agent-decisions-install published.
+binary="${0%/*}/agent-decisions"
+[ -x "$binary" ] || binary="$HOME/.local/share/agent-decisions/current/bin/agent-decisions"
+exec "$binary" shell-prefix "$@"

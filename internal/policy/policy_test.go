@@ -3,11 +3,11 @@ package policy
 import (
 	"os"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/rexbrahh/make-better-decisions/internal/oracletest"
 	"github.com/rexbrahh/make-better-decisions/internal/py/json"
 )
 
@@ -45,10 +45,7 @@ func TestOracleValues(t *testing.T) {
 	if python == "" {
 		t.Skip("set AGENT_DECISIONS_PYTHON to a CPython 3.15 interpreter to compare with the oracle")
 	}
-	repoRoot, err := filepath.Abs("../..")
-	if err != nil {
-		t.Fatal(err)
-	}
+	repoRoot := oracletest.Source(t)
 	for _, env := range [][2]string{
 		{"/Users/x", ""}, {"/Users/x/", ""}, {"/", ""}, {"//", ""}, {"/h", "/tmp/state"}, {"/h", "/tmp//a/./b/"},
 		{"/h", "//net/state"}, {"/h", "rel/../state"}, {"/h", "."}, {"/h", "\u00e9t\u00e9"},

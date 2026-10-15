@@ -6,11 +6,11 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	stdjson "encoding/json"
+	"github.com/rexbrahh/make-better-decisions/internal/oracletest"
 	"math"
 	"math/rand/v2"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -130,10 +130,7 @@ func askPython(t *testing.T, requests [][]string) []stdjson.RawMessage {
 	if python == "" {
 		t.Skip("set AGENT_DECISIONS_PYTHON to a CPython 3.15 interpreter to compare with the oracle")
 	}
-	repoRoot, err := filepath.Abs("../../..")
-	if err != nil {
-		t.Fatal(err)
-	}
+	repoRoot := oracletest.Source(t)
 	var input strings.Builder
 	for _, request := range requests {
 		line, err := stdjson.Marshal(request)

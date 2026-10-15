@@ -1,0 +1,30 @@
+#!/bin/sh
+# Build the release binaries into dist/ and write their SHA-256 pins to bin/agent-decisions.sha256.
+# The build is reproducible: the same commit and Go toolchain give the same bytes on any host.
+# Check a release with: scripts/build-release && git diff --exit-code bin/agent-decisions.sha256
+set -eu
+
+root=$(cd "${0%/*}/.." && pwd -P)
+cd "$root"
+version=$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' .claude-plugin/plugin.json | head -n 1)
+[ -n "$version" ] || { echo "build-release: cannot read the version from .claude-plugin/plugin.json" >&2; exit 1; }
+
+toolchain=go1.27.2 # the pins hold only for this toolchain
+[ "$(GOTOOLCHAIN=local go env GOVERSION)" = "$toolchain" ] ||
+	{ echo "build-release: need $toolchain, have $(GOTOOLCHAIN=local go env GOVERSION)" >&2; exit 1; }
+
+rm -rf dist
+mkdir dist
+pins=$(mktemp)
+trap 'rm -f "$pins"' EXIT
+for target in darwin/arm64 linux/amd64; do
+	asset="agent-decisions-${target%/*}-${target#*/}"
+	GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 GOFLAGS= GOTOOLCHAIN=local \
+		go build -trimpath -buildvcs=false -ldflags "-s -w -buildid= -X main.version=$version" \
+		-o "dist/$asset" ./cmd/agent-decisions
+	(cd dist && shasum -a 256 "$asset") >>"$pins"
+done
+mv "$pins" bin/agent-decisions.sha256
+trap - EXIT
+chmod 644 bin/agent-decisions.sha256
+cat bin/agent-decisions.sha256

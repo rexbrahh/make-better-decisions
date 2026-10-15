@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/rexbrahh/make-better-decisions/internal/ledger"
+	"github.com/rexbrahh/make-better-decisions/internal/oracletest"
 	"github.com/rexbrahh/make-better-decisions/internal/policy"
 	"github.com/rexbrahh/make-better-decisions/internal/py/json"
 	pystr "github.com/rexbrahh/make-better-decisions/internal/py/str"
@@ -510,7 +511,8 @@ func runPythonQuietly(t *testing.T, python string, steps []replayStep) []*stepRe
 		wire[i] = json.NewObject("kind", "handle", "event", step.event, "host", step.host,
 			"payload", step.payload, "fake", step.fake.wire())
 	}
-	command := exec.Command(python, "-I", "-c", replayScript, repoRoot)
+	source := oracletest.Source(t)
+	command := exec.Command(python, "-I", "-c", replayScript, source)
 	command.Stdin = strings.NewReader(dumps(t, json.NewObject("time", json.IntOf(oracleTime), "uuid", oracleUUID,
 		"steps", wire)))
 	output, err := command.Output()
@@ -521,6 +523,8 @@ func runPythonQuietly(t *testing.T, python string, steps []replayStep) []*stepRe
 		}
 		t.Fatalf("python replay driver: %v", err)
 	}
+	// The Python engine reports paths under its own checkout; the Go engine reports them under this repo.
+	output = bytes.ReplaceAll(output, []byte(source), []byte(repoRoot))
 	replies, ok := loads(t, string(output)).([]any)
 	if !ok || len(replies) != len(steps) {
 		t.Fatalf("python replay driver: %d results for %d steps", len(replies), len(steps))

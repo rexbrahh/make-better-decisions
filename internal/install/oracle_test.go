@@ -13,6 +13,7 @@ import (
 	"time"
 
 	_ "github.com/rexbrahh/make-better-decisions/internal/gates"
+	"github.com/rexbrahh/make-better-decisions/internal/oracletest"
 	"github.com/rexbrahh/make-better-decisions/internal/py/json"
 	"github.com/rexbrahh/make-better-decisions/internal/py/pyerr"
 )
@@ -100,10 +101,7 @@ func compareWithPython(t *testing.T, ops []oracleOp) {
 	if python == "" {
 		t.Skip("set AGENT_DECISIONS_PYTHON to a CPython 3.15 interpreter to compare with the oracle")
 	}
-	repoRoot, err := filepath.Abs("../..")
-	if err != nil {
-		t.Fatal(err)
-	}
+	repoRoot := oracletest.Source(t)
 	request := make([]any, len(ops))
 	for i, op := range ops {
 		env := json.NewObject()
@@ -326,10 +324,7 @@ func oracleFixture(t *testing.T) (string, map[string]any) {
 			t.Fatal(err)
 		}
 	}
-	repoRoot, err := filepath.Abs("../..")
-	if err != nil {
-		t.Fatal(err)
-	}
+	repoRoot := oracletest.Source(t)
 	env := map[string]any{"HOME": home, "AGENT_DECISIONS_STATE": filepath.Join(dir, "state"),
 		"TYPESAFE_API_KEY": "test-key-0123456789abcdef", "AGENT_DECISIONS_SOURCE": repoRoot, "COLUMNS": "80"}
 	return dir, env
@@ -538,10 +533,7 @@ func TestModuleExceptionClassesMatchPython(t *testing.T) {
 	if python == "" {
 		t.Skip("set AGENT_DECISIONS_PYTHON to a CPython 3.15 interpreter to compare with the oracle")
 	}
-	repoRoot, err := filepath.Abs("../..")
-	if err != nil {
-		t.Fatal(err)
-	}
+	repoRoot := oracletest.Source(t)
 	script := `import json, sys
 sys.path.insert(0, sys.argv[1])
 from agent_decisions import gates, install, isolation, jev

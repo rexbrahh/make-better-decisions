@@ -1,10 +1,6 @@
-#!/usr/bin/env python3
-"""Entry point named in hooks.json: hook.py <event> --host claude|codex, payload on stdin."""
-
+"""Run the Go engine for a host session that loaded a hooks.json from before version 2.0.0."""
+import os
 import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from agent_decisions.hook import main  # noqa: E402
-
-sys.exit(main())
+binary = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "bin", "agent-decisions")
+os.execv(binary, [binary, "hook"] + sys.argv[1:])

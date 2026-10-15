@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rexbrahh/make-better-decisions/internal/oracletest"
 	"github.com/rexbrahh/make-better-decisions/internal/py/json"
 )
 
@@ -53,10 +54,7 @@ func runPython(t *testing.T, ops [][]any) []any {
 	if python == "" {
 		t.Skip("set AGENT_DECISIONS_PYTHON to a CPython 3.15 interpreter to compare with the oracle")
 	}
-	repoRoot, err := filepath.Abs("../..")
-	if err != nil {
-		t.Fatal(err)
-	}
+	repoRoot := oracletest.Source(t)
 	request := filepath.Join(t.TempDir(), "ops.json")
 	if err := os.WriteFile(request, []byte(dumps(t, toAny(ops), json.Options{})), 0o600); err != nil {
 		t.Fatal(err)

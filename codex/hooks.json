@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ad_runtime=\"$HOME/.local/share/agent-decisions/current\"; if [ -e \"$ad_runtime\" ] || [ -L \"$ad_runtime\" ]; then ad_hook=\"$ad_runtime/hooks/hook.py\"; else ad_hook=\"${PLUGIN_ROOT}/hooks/hook.py\"; fi; if ad_hook_output=$(python3 -I -B \"$ad_hook\" pre_tool_use --host codex); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"agent-decisions: hook startup failed; required review unavailable. Restore the plugin and retry.\"}}'; fi",
+            "command": "ad_runtime=\"$HOME/.local/share/agent-decisions/current\"; if [ -x \"$ad_runtime/bin/agent-decisions\" ]; then set -- \"$ad_runtime/bin/agent-decisions\" hook; elif [ -f \"$ad_runtime/hooks/hook.py\" ]; then set -- python3 -I -B \"$ad_runtime/hooks/hook.py\"; else set --; fi; if [ \"$#\" -eq 0 ]; then printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"agent-decisions: engine not installed; required review unavailable. Run bin/agent-decisions-install --apply from the agent-decisions plugin.\"}}'; elif ad_hook_output=$(\"$@\" pre_tool_use --host codex); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"agent-decisions: hook startup failed; required review unavailable. Restore the plugin and retry.\"}}'; fi",
             "timeout": 15
           }
         ]
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ad_runtime=\"$HOME/.local/share/agent-decisions/current\"; if [ -e \"$ad_runtime\" ] || [ -L \"$ad_runtime\" ]; then ad_hook=\"$ad_runtime/hooks/hook.py\"; else ad_hook=\"${PLUGIN_ROOT}/hooks/hook.py\"; fi; if ad_hook_output=$(python3 -I -B \"$ad_hook\" session_start --host codex); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"systemMessage\":\"agent-decisions: hook startup failed; required review unavailable. Restore the plugin and retry.\"}'; fi",
+            "command": "ad_runtime=\"$HOME/.local/share/agent-decisions/current\"; if [ -x \"$ad_runtime/bin/agent-decisions\" ]; then set -- \"$ad_runtime/bin/agent-decisions\" hook; elif [ -f \"$ad_runtime/hooks/hook.py\" ]; then set -- python3 -I -B \"$ad_runtime/hooks/hook.py\"; else set --; fi; if [ \"$#\" -eq 0 ]; then printf '%s\\n' '{\"systemMessage\":\"agent-decisions: engine not installed; required review unavailable. Run bin/agent-decisions-install --apply from the agent-decisions plugin.\"}'; elif ad_hook_output=$(\"$@\" session_start --host codex); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"systemMessage\":\"agent-decisions: hook startup failed; required review unavailable. Restore the plugin and retry.\"}'; fi",
             "timeout": 10
           }
         ]
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ad_runtime=\"$HOME/.local/share/agent-decisions/current\"; if [ -e \"$ad_runtime\" ] || [ -L \"$ad_runtime\" ]; then ad_hook=\"$ad_runtime/hooks/hook.py\"; else ad_hook=\"${PLUGIN_ROOT}/hooks/hook.py\"; fi; if ad_hook_output=$(python3 -I -B \"$ad_hook\" user_prompt_submit --host codex); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"systemMessage\":\"agent-decisions: hook startup failed; required review unavailable. Restore the plugin and retry.\"}'; fi",
+            "command": "ad_runtime=\"$HOME/.local/share/agent-decisions/current\"; if [ -x \"$ad_runtime/bin/agent-decisions\" ]; then set -- \"$ad_runtime/bin/agent-decisions\" hook; elif [ -f \"$ad_runtime/hooks/hook.py\" ]; then set -- python3 -I -B \"$ad_runtime/hooks/hook.py\"; else set --; fi; if [ \"$#\" -eq 0 ]; then printf '%s\\n' '{\"systemMessage\":\"agent-decisions: engine not installed; required review unavailable. Run bin/agent-decisions-install --apply from the agent-decisions plugin.\"}'; elif ad_hook_output=$(\"$@\" user_prompt_submit --host codex); then printf '%s\\n' \"$ad_hook_output\"; else printf '%s\\n' '{\"systemMessage\":\"agent-decisions: hook startup failed; required review unavailable. Restore the plugin and retry.\"}'; fi",
             "timeout": 5
           }
         ]

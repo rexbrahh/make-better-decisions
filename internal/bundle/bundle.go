@@ -35,7 +35,9 @@ var sourceFiles = []string{
 	"bin/agent-decisions-install",
 	"bin/agent-decisions-isolate",
 	"bin/agent-decisions-shell-prefix",
+	"bin/agent-decisions.sha256", // the bundled bin/agent-decisions-install checks the binary against it
 	"bin/ts-decide",
+	"hooks/hook.py", // runs the binary for host sessions that loaded a hooks.json from before 2.0.0
 	"skills/deciding/SKILL.md",
 }
 

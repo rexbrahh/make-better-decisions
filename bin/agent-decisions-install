@@ -1,8 +1,59 @@
-#!/usr/bin/env python3
-from pathlib import Path
-import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from agent_decisions.install import cli
+#!/bin/sh
+# Install the agent-decisions engine: get the pinned release binary for this platform, check its SHA-256,
+# and run its installer. The arguments go to `agent-decisions install` unchanged.
+#
+# AGENT_DECISIONS_BINARY=<file> uses a local binary instead of the download. It must match the pin too.
+set -eu
 
-if __name__ == "__main__":
-    raise SystemExit(cli())
+fail() {
+	printf 'agent-decisions-install: %s\n' "$1" >&2
+	exit 1
+}
+
+root=$(cd "${0%/*}/.." && pwd -P)
+version=$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$root/.claude-plugin/plugin.json" | head -n 1)
+[ -n "$version" ] || fail "cannot read the version from $root/.claude-plugin/plugin.json"
+
+case $(uname -s) in
+Darwin) os=darwin ;;
+Linux) os=linux ;;
+*) fail "unsupported system: $(uname -s)" ;;
+esac
+case $(uname -m) in
+arm64 | aarch64) arch=arm64 ;;
+x86_64 | amd64) arch=amd64 ;;
+*) fail "unsupported machine: $(uname -m)" ;;
+esac
+asset="agent-decisions-$os-$arch"
+
+pin=$(awk -v asset="$asset" '$2 == asset { print $1 }' "$root/bin/agent-decisions.sha256")
+[ -n "$pin" ] || fail "no pinned binary for $asset in $root/bin/agent-decisions.sha256"
+
+sha256() {
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256sum "$1" | awk '{ print $1 }'
+	else
+		shasum -a 256 "$1" | awk '{ print $1 }'
+	fi
+}
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+binary="$work/agent-decisions"
+if [ -n "${AGENT_DECISIONS_BINARY:-}" ]; then
+	cp "$AGENT_DECISIONS_BINARY" "$binary"
+elif [ -f "$root/bin/agent-decisions" ]; then
+	cp "$root/bin/agent-decisions" "$binary" # an installed bundle carries its own binary
+else
+	url="https://github.com/rexbrahh/make-better-decisions/releases/download/v$version/$asset"
+	curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --output "$binary" "$url" ||
+		fail "download failed: $url"
+fi
+
+actual=$(sha256 "$binary")
+[ "$actual" = "$pin" ] || fail "SHA-256 mismatch for $asset: expected $pin, got $actual"
+chmod 700 "$binary"
+
+status=0
+AGENT_DECISIONS_SOURCE="$root" "$binary" install "$@" || status=$?
+exit "$status"

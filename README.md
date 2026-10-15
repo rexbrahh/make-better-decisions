@@ -1,17 +1,17 @@
-# make-better-decisions v1.1
+# make-better-decisions v2.0
 
 `agent-decisions` supplements Claude Code and Codex with selective decision review. Agents consult TypeSafe Jev before a new material choice. Hooks enforce review on declared edit and patch tools, filesystem write/edit tools, and plan acceptance.
 
 The goal is useful, enforceable review. Jev evaluates a material choice against observed evidence. Code checks receipt identity, scope, constraints, and failure policy. Exact instructions and routine operations need no invented choice.
 
-Version 1.2.8 ships precompiled bytecode in the runtime bundle, so each hook call starts about 33 ms faster. Version 1.2.7 checks brace spellings in linear time. Version 1.2.6 denies glob, `~`, `$HOME`, and `{a,b}` spellings of the private state path, and reads bad UTF-8 or a lone surrogate in hook input as a replacement character instead of failing. Version 1.2.5 lets Claude agents quote two more kinds of user text to Jev: answers that the user picks or types in a question box, and messages that the user types while the agent works. Ordinary tools remain independent of Jev. Required review remains the default on the declared sensitive surface. See the [release notes](docs/releases/v1.2.8.md).
+Version 2.0.0 replaces the Python engine with one Go binary, `agent-decisions`. The hook output, ledger rows and seals stay byte-identical to version 1.2.8. On 6,206 hook calls replayed from real transcripts, the Go engine took 1 min 40 s and the Python engine took 2 min 5 s. Ordinary tools remain independent of Jev. Required review remains the default on the declared sensitive surface. See the [release notes](docs/releases/v2.0.0.md).
 
 The hook builds the evidence. The agent cannot choose the source set by itself.
 
 ## Requirements
 
-- Python 3.9 or later.
-- Standard library only.
+- macOS on Apple silicon (darwin-arm64) or Linux on x86-64 (linux-amd64).
+- `curl`, and `sha256sum` or `shasum`, for the installer. Python is not necessary.
 - A TypeSafe key in `TYPESAFE_API_KEY`, or in `~/.config/sops-nix/secrets/typesafe_api_key`.
 - Local Claude Code or local Codex on macOS or Linux.
 
@@ -58,11 +58,13 @@ Do not keep a legacy manual hook entry for this plugin. Keep other plugins' hook
 The boundary helper is required for the stated tamper protection. Install the native plugin first. Then run the helper from the installed plugin root. If you run it from a checkout, pass `--install-root` with the installed root.
 
 ```sh
-python3 bin/agent-decisions-install --host codex --install-root /path/to/installed/agent-decisions
-python3 bin/agent-decisions-install --host codex --install-root /path/to/installed/agent-decisions --apply
-python3 bin/agent-decisions-install --host claude --install-root /path/to/installed/agent-decisions
-python3 bin/agent-decisions-install --host claude --install-root /path/to/installed/agent-decisions --apply
+bin/agent-decisions-install --host codex --install-root /path/to/installed/agent-decisions
+bin/agent-decisions-install --host codex --install-root /path/to/installed/agent-decisions --apply
+bin/agent-decisions-install --host claude --install-root /path/to/installed/agent-decisions
+bin/agent-decisions-install --host claude --install-root /path/to/installed/agent-decisions --apply
 ```
+
+The helper downloads the release binary for this platform and the version in `.claude-plugin/plugin.json`. It compares the SHA-256 of the binary with the pin in `bin/agent-decisions.sha256`. If the hashes are different, the helper stops and installs nothing. To use a local binary, set `AGENT_DECISIONS_BINARY` to its path. The helper checks a local binary against the same pin.
 
 Use per-host commands when you need separate evidence or rollback. The protected authority cache is sealed while the development checkout stays editable.
 
@@ -70,16 +72,16 @@ The Codex helper registers an optional isolation profile. It preserves the defau
 
 Run the helper again after each plugin upgrade or stdio MCP configuration change. The helper copies verified runtime files into `~/.local/share/agent-decisions/runtimes/` and atomically activates `current`. It retains earlier bundles for running processes. Plugin cache removal does not remove these entrypoints. Cache updates alone do not activate new runtime code.
 
-Hooks use the protected runtime after installation. Before installation, they use the plugin entrypoint. A broken installed runtime reports a startup failure. The runtime namespace, pointer, and bundles are write-protected by the configured boundary. Required decision review remains active.
+Hooks run the binary in the installed runtime. Before installation, hooks deny reviewed tool calls and report that the engine is not installed. A runtime from a release before 2.0.0 runs its Python hook until you run the helper again. A broken installed runtime reports a startup failure. The runtime namespace, pointer, and bundles are write-protected by the configured boundary. Required decision review remains active.
 
 The Codex helper preserves native `codex_app`, `adrafinil`, `node_repl`, and `cua_repl` registrations. It also preserves the bundled computer-history, computer-use, event-stream, mcp-search, and messages launchers. It restores legacy wrapped registrations from signed original recipes. Other stdio servers retain isolation. A source value of `null` limits automatic refresh. Repeat runs preserve signed recipes, so they do not prove that every upstream command change was tracked.
 
 Useful verified help commands:
 
 ```sh
-python3 bin/agent-decisions-install --help
-python3 bin/agent-decisions-isolate --help
-python3 bin/agent-decisions-isolate exec --help
+bin/agent-decisions-install --help
+bin/agent-decisions-isolate --help
+bin/agent-decisions-isolate exec --help
 codex plugin marketplace add --help
 codex plugin add --help
 codex mcp list --help
@@ -201,8 +203,8 @@ The retry limits optional observation text to one sixteenth of its previous leng
 The owner can select availability mode through the protected installer. Preview the signed policy before applying it:
 
 ```sh
-python3 bin/agent-decisions-install --host codex --review-mode required --install-root /path/to/installed/agent-decisions
-python3 bin/agent-decisions-install --host codex --review-mode availability --install-root /path/to/installed/agent-decisions
+bin/agent-decisions-install --host codex --review-mode required --install-root /path/to/installed/agent-decisions
+bin/agent-decisions-install --host codex --review-mode availability --install-root /path/to/installed/agent-decisions
 ```
 
 An operator adds `--apply` to the chosen command to change host configuration and signed policy. Availability permits actions after runtime review failures and shows a warning. It weakens enforcement. Healthy denials remain binding in both modes.
@@ -212,8 +214,8 @@ Startup failures block reviewed operations because a missing interpreter cannot 
 The owner can grant a standing exception to one canonical session and its native workers. Preview the protected policy, then add `--apply` to activate it:
 
 ```sh
-python3 bin/agent-decisions-install --host codex --session-review-exception SESSION_ID
-python3 bin/agent-decisions-install --host codex --clear-session-review-exception SESSION_ID
+bin/agent-decisions-install --host codex --session-review-exception SESSION_ID
+bin/agent-decisions-install --host codex --clear-session-review-exception SESSION_ID
 ```
 
 Exceptions persist across plugin updates until explicit owner revocation. They bypass sensitive execution review, including a false semantic denial. They do not create a Jev receipt. Explicit consultations, private-state protection, native identity checks, and host approvals remain active.
@@ -236,7 +238,7 @@ Signed gate records retain context timings, initial and final request sizes, att
 
 The macOS native deny profile was verified with escalation. It denies reads and writes to the agent-decisions state root. It denies writes to protected host state and installed plugin code.
 
-Protection includes the durable runtime namespace, this plugin's cached version namespace, and existing Codex profile files. Stdio launchers use Python isolated mode before reading signed recipes.
+Protection includes the durable runtime namespace, this plugin's cached version namespace, and existing Codex profile files. Stdio launchers run the binary of the installed runtime before they read signed recipes.
 
 Linux uses bubblewrap when available. Linux bubblewrap behavior is not runtime verified in this repository.
 
@@ -258,25 +260,26 @@ Release verification uses the observed peer workflows. A successful consultation
 | Routine work | Reads, diagnostics, tests, and exact instructions proceed without unnecessary consultation. |
 | API failure | Required sensitive operations stop. Ordinary tools and completion continue. Owner session exceptions and signed availability policy control explicit exceptions. |
 
-Run unit tests with:
+Build and test with Go 1.27.2:
 
 ```sh
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -t . -v
+go test ./...
 ```
 
-Run live decision and edit cases with a real TypeSafe key:
+The oracle tests compare the Go engine with the Python engine byte for byte. They need CPython 3.15 and a checkout of the tag `python-final`:
 
 ```sh
-python3 -B probe/live_qa.py --output /private/tmp/agent-decisions-live-qa.jsonl
-python3 -B tests/live_cheat.py
-python3 -B tests/live_ergonomics.py
-python3 -B tests/live_scoped_review.py --output /private/tmp/agent-decisions-scoped-live.json
+git worktree add "$TMPDIR/agent-decisions-python" python-final
+AGENT_DECISIONS_PYTHON=/opt/homebrew/bin/python3 AGENT_DECISIONS_PYTHON_SOURCE="$TMPDIR/agent-decisions-python" go test ./...
 ```
 
-Measure local context overhead without an API call:
+To replay real transcripts through both engines, also set `AGENT_DECISIONS_REAL_TRANSCRIPTS=1` and run `TestReplayRealTranscripts` in `internal/hook` with `-timeout 0`. The test logs only counts, tool names and line numbers.
+
+Build the release binaries and their pins:
 
 ```sh
-python3 -B tests/benchmark_context.py --host codex --transcript /path/to/rollout.jsonl --cwd /path/to/repo
+scripts/build-release
+git diff --exit-code bin/agent-decisions.sha256
 ```
 
-The benchmark emits timings, evidence size, and a hash. Use `--through-bytes` to replay a fixed transcript prefix. It emits no transcript text.
+The build is reproducible. A second build of the same commit gives the same SHA-256 values.

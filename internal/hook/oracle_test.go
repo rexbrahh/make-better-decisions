@@ -16,6 +16,7 @@ import (
 	"github.com/rexbrahh/make-better-decisions/internal/jev"
 	"github.com/rexbrahh/make-better-decisions/internal/jev/jevtest"
 	"github.com/rexbrahh/make-better-decisions/internal/ledger"
+	"github.com/rexbrahh/make-better-decisions/internal/oracletest"
 	"github.com/rexbrahh/make-better-decisions/internal/py/json"
 	"github.com/rexbrahh/make-better-decisions/internal/py/shlex"
 )
@@ -215,7 +216,8 @@ func runPython(t *testing.T, python string, steps []replayStep) []*stepResult {
 				"payload", step.payload, "fake", step.fake.wire())
 		}
 	}
-	command := exec.Command(python, "-I", "-c", replayScript, repoRoot)
+	source := oracletest.Source(t)
+	command := exec.Command(python, "-I", "-c", replayScript, source)
 	command.Stdin = strings.NewReader(dumps(t, json.NewObject("time", json.IntOf(oracleTime), "uuid", oracleUUID,
 		"steps", wire)))
 	var stderr bytes.Buffer
@@ -224,6 +226,8 @@ func runPython(t *testing.T, python string, steps []replayStep) []*stepResult {
 	if err != nil {
 		t.Fatalf("python: %v\n%s", err, stderr.String())
 	}
+	// The Python engine reports paths under its own checkout; the Go engine reports them under this repo.
+	output = bytes.ReplaceAll(output, []byte(source), []byte(repoRoot))
 	replies := loads(t, string(output)).([]any)
 	results := make([]*stepResult, len(replies))
 	for i, reply := range replies {
@@ -809,7 +813,7 @@ func TestMainMatchesPython(t *testing.T) {
 				command := runProgram(t, []byte(c.stdin), env, name, args...)
 				return command, snapshot(t, state)
 			}
-			py, pyFiles := run(python, append([]string{"-I", "-B", filepath.Join(repoRoot, "hooks", "hook.py")}, c.args...)...)
+			py, pyFiles := run(python, append([]string{"-I", "-B", filepath.Join(oracletest.Source(t), "hooks", "hook.py")}, c.args...)...)
 			golang, goFiles := run(binary, append([]string{"hook"}, c.args...)...)
 			if py.code != golang.code || py.stdout != golang.stdout {
 				t.Errorf("python exit %d stdout %q\ngo     exit %d stdout %q", py.code, py.stdout, golang.code, golang.stdout)
