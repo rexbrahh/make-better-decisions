@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -24,6 +25,51 @@ import (
 // binary is the fake Codex: it answers two JSON-RPC requests on stdin with {"method": <method>}.
 const fakeCodexArgs = "INSTALL_TEST_FAKE_CODEX_ARGS"
 const fakeCodexBehavior = "INSTALL_TEST_FAKE_CODEX_BEHAVIOR"
+
+func TestCodexBinaryDefaultsAndOverride(t *testing.T) {
+	t.Run("parser", func(t *testing.T) {
+		setUp(t)
+		parser, err := newParser(&bytes.Buffer{}, &bytes.Buffer{})
+		check(t, err)
+		args, _, exited := parseArgs(parser, nil)
+		if exited {
+			t.Fatal("default parsing exited")
+		}
+		want := "codex"
+		if _, err := exec.LookPath(CodexBinary); err == nil {
+			want = CodexBinary
+		}
+		if args.codexBinary != want {
+			t.Errorf("default binary = %q, want %q", args.codexBinary, want)
+		}
+		t.Logf("selected default %q", args.codexBinary)
+		args, _, exited = parseArgs(parser, []string{"--codex-binary", "/explicit/codex", "--codex-sock", "/explicit/socket"})
+		if exited || args.codexBinary != "/explicit/codex" || args.codexSock == nil || *args.codexSock != "/explicit/socket" {
+			t.Fatalf("explicit override changed: %+v", args)
+		}
+		t.Logf("preserved explicit binary %q and socket %q", args.codexBinary, *args.codexSock)
+	})
+	t.Run("apply_uses_path_when_preferred_is_absent", func(t *testing.T) {
+		if _, err := exec.LookPath(CodexBinary); err == nil {
+			t.Skip("preferred Codex launcher is installed")
+		}
+		dir := setUp(t)
+		binary, err := os.Executable()
+		check(t, err)
+		fakeBin := filepath.Join(dir, "bin")
+		check(t, os.Mkdir(fakeBin, 0o755))
+		check(t, os.Symlink(binary, filepath.Join(fakeBin, "codex")))
+		t.Setenv("PATH", fakeBin)
+		t.Setenv(fakeCodexArgs, filepath.Join(dir, "codex-args.json"))
+		plan := codexApplyPlan(t, dir, `[]`, "")
+		_, err = ApplyCodexPlan(plan, nil)
+		check(t, err)
+		methods, err := os.ReadFile(filepath.Join(dir, "codex-args.json.methods"))
+		check(t, err)
+		wantEqual(t, load(t, string(methods)), []any{"initialize", "config/batchWrite"})
+		t.Logf("PATH fixture served %s with no preferred launcher installed", methods)
+	})
+}
 
 func TestMain(m *testing.M) {
 	if path := os.Getenv(fakeCodexArgs); path != "" {

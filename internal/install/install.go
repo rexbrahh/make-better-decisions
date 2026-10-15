@@ -44,6 +44,13 @@ const (
 	ClaudeSettingsSource = "claude:settings.mcpServers"
 )
 
+func defaultCodexBinary() string {
+	if _, err := exec.LookPath(CodexBinary); err == nil {
+		return CodexBinary
+	}
+	return "codex"
+}
+
 // NativeServers are the Codex servers whose own launchers stay unwrapped.
 var NativeServers = map[string]bool{
 	"codex_app": true, "adrafinil": true, "node_repl": true, "cua_repl": true, "computer-history": true,
@@ -1585,7 +1592,7 @@ func drainFirst(items *lineQueue) string {
 }
 
 // ApplyCodexPlan backs up the Codex config, publishes the runtime bundle, signs the installation and
-// applies the config RPC. A nil writer is a CodexRpcWriter with Python's defaults.
+// applies the config RPC. A nil writer uses the preferred launcher or Codex on PATH.
 //
 // py: agent_decisions/install.py apply_codex_plan
 func ApplyCodexPlan(plan *json.Object, writer Writer) (*json.Object, error) {
@@ -1615,7 +1622,7 @@ func ApplyCodexPlan(plan *json.Object, writer Writer) (*json.Object, error) {
 		return nil, err
 	}
 	if writer == nil {
-		if writer, err = NewCodexRpcWriter(CodexBinary, nil, 10); err != nil {
+		if writer, err = NewCodexRpcWriter(defaultCodexBinary(), nil, 10); err != nil {
 			return nil, err
 		}
 	}
@@ -1979,7 +1986,7 @@ func newParser(stdout, stderr io.Writer) (*argparse.Parser, error) {
 		appendTo("--clear-session-review-exception", "SESSION_ID", "Revoke an owner-authorized session review exception."),
 		store("--state-root", stateDir),
 		store("--install-root", installRoot),
-		store("--codex-binary", CodexBinary),
+		store("--codex-binary", defaultCodexBinary()),
 		store("--codex-sock", nil),
 		store("--codex-config", pathlib.Join(home, ".codex/config.toml")),
 		store("--codex-mcp-json", nil),
