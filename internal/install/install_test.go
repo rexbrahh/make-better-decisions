@@ -835,6 +835,35 @@ func TestWriteJsonUsesPrivatePermissions(t *testing.T) {
 	wantEqual(t, load(t, string(data)), json.NewObject("secret", "value"))
 }
 
+func TestWriteJSONPreservesSettingsSymlink(t *testing.T) {
+	for _, existing := range []bool{true, false} {
+		t.Run(map[bool]string{true: "existing_target", false: "new_target"}[existing], func(t *testing.T) {
+			dir := setUp(t)
+			target := filepath.Join(dir, "settings.json")
+			alias := filepath.Join(dir, "primary-settings.json")
+			if existing {
+				writeFile(t, target, "{}\n")
+			}
+			check(t, os.Symlink("settings.json", alias))
+			want := json.NewObject("enabledPlugins", json.NewObject("agent-decisions", true))
+			check(t, WriteJSON(alias, want))
+			link, err := os.Readlink(alias)
+			check(t, err)
+			if link != "settings.json" {
+				t.Fatalf("settings link changed: %q", link)
+			}
+			data, err := os.ReadFile(target)
+			check(t, err)
+			wantEqual(t, load(t, string(data)), want)
+			info, err := os.Stat(target)
+			check(t, err)
+			if info.Mode().Perm() != 0o600 {
+				t.Fatalf("target mode %o", info.Mode().Perm())
+			}
+		})
+	}
+}
+
 // fakeCodexWriter returns a writer whose Codex binary is this test binary acting as the fake Codex, and
 // the file where the fake records its arguments.
 func fakeCodexWriter(t *testing.T, dir string, socket *string) (*CodexRpcWriter, string) {

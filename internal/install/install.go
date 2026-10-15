@@ -1709,11 +1709,14 @@ func ReadJSON(path string) (*json.Object, error) {
 	return object, nil
 }
 
-// WriteJSON atomically replaces path with value as sorted, indented JSON with mode 0o600.
+// WriteJSON atomically updates the resolved target with private JSON and preserves settings symlinks.
 //
 // py: agent_decisions/install.py write_json
 func WriteJSON(path string, value *json.Object) (err error) {
-	target := pathlib.Str(path)
+	target, err := CanonicalPath(path)
+	if err != nil {
+		return err
+	}
 	if err := pathlib.Mkdir(pathlib.Parent(target), 0o700, true); err != nil {
 		return err
 	}
