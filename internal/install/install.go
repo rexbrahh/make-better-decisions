@@ -1842,10 +1842,11 @@ func sanitizeString(value string) (string, error) {
 	text = evidence.Redact(text, nil)
 	text = cliSecretEquals.ReplaceAllString(text, "${1}"+redacted)
 	text = cliSecretNext.ReplaceAllString(text, "${1}"+redacted)
+	replacements := make([]string, 0, 2*len(urls))
 	for _, url := range urls {
-		text = strings.ReplaceAll(text, url[0], url[1]) // the placeholders are ASCII
+		replacements = append(replacements, url[0], url[1])
 	}
-	return text, nil
+	return strings.NewReplacer(replacements...).Replace(text), nil
 }
 
 // extractRedactedURLs replaces each URL with a placeholder, and returns the placeholders with the redacted
@@ -1856,6 +1857,7 @@ func sanitizeString(value string) (string, error) {
 func extractRedactedURLs(value string) (string, [][2]string, error) {
 	var urls [][2]string
 	var out strings.Builder
+	nextID := 0
 	done := 0 // value[:done] is in out
 	for start := 0; start < len(value); {
 		match := urlToken.FindStringIndex(value[start:])
@@ -1872,7 +1874,14 @@ func extractRedactedURLs(value string) (string, [][2]string, error) {
 		if err != nil {
 			return "", nil, err
 		}
-		placeholder := fmt.Sprintf("__AD_URL_%d__", len(urls))
+		var placeholder string
+		for {
+			placeholder = fmt.Sprintf("__AD_URL_%d__", nextID)
+			nextID++
+			if !strings.Contains(value, placeholder) {
+				break
+			}
+		}
 		urls = append(urls, [2]string{placeholder, url})
 		out.WriteString(value[done:begin])
 		out.WriteString(placeholder)

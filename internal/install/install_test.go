@@ -1194,3 +1194,19 @@ func TestMainPrintsTracebackLastLine(t *testing.T) {
 		}
 	}
 }
+
+func TestSanitizePreservesLiteralAndDecodedURLMarkers(t *testing.T) {
+	for _, tc := range []struct{ name, input, want string }{
+		{"literal", "__AD_URL_0__ https://user:fixture@example.invalid/mcp?token=fixture", "__AD_URL_0__ https://<redacted>@example.invalid/mcp?token=%3Credacted%3E"},
+		{"decoded", "https://first.invalid/?q=%5F%5FAD_URL_1%5F%5F https://user:fixture@second.invalid/", "https://first.invalid/?q=__AD_URL_1__ https://<redacted>@second.invalid/"},
+		{"multiple_literals", "__AD_URL_0__ ___AD_URL_0__ https://first.invalid/ __AD_URL_1__ https://second.invalid/", "__AD_URL_0__ ___AD_URL_0__ https://first.invalid/ __AD_URL_1__ https://second.invalid/"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := sanitizeString(tc.input)
+			check(t, err)
+			if got != tc.want {
+				t.Fatalf("sanitizeString = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
