@@ -77,6 +77,10 @@ func fakeCodex(argsPath string) {
 		}
 		reply, _ := json.Dumps(response, json.Options{})
 		os.Stdout.WriteString(reply + "\n")
+		if behavior == "stall_input" && len(methods) == 1 {
+			time.Sleep(2 * time.Second)
+			return
+		}
 	}
 }
 
@@ -989,6 +993,21 @@ func TestCodexWriterRecoversOnlyAutomaticInitializationFailures(t *testing.T) {
 				wantEqual(t, load(t, string(data)), []any{"initialize", "config/batchWrite"})
 			}
 		})
+	}
+}
+
+func TestCodexWriterDeadlineIncludesRequestWrite(t *testing.T) {
+	dir := setUp(t)
+	t.Setenv(fakeCodexBehavior, "stall_input")
+	writer, _ := fakeCodexWriter(t, dir, nil)
+	writer.TimeoutS = 0.25
+	start := time.Now()
+	_, err := writer.Call("config/batchWrite", json.NewObject("payload", strings.Repeat("x", 1<<20)))
+	if pyerr.Class(err) != "InstallError" || !strings.Contains(err.Error(), "timed out for config/batchWrite") {
+		t.Fatalf("error = %v, want request-write timeout", err)
+	}
+	if elapsed := time.Since(start); elapsed > 1500*time.Millisecond {
+		t.Fatalf("blocked request write exceeded its deadline: %s", elapsed)
 	}
 }
 

@@ -1302,8 +1302,8 @@ func appServerSocket() (*string, error) {
 }
 
 // callJSONRPC starts command, sends request (after an initialize request when initialize is set) and
-// returns the response with the same id. It never waits longer than timeoutS for one response, and always
-// stops the process.
+// returns the response with the same id. Request writes and response reads share one deadline per
+// exchange. Child cleanup remains bounded separately.
 //
 // py: agent_decisions/install.py _call_json_rpc
 func callJSONRPC(command []string, request *json.Object, timeoutS float64, initialize bool) (response *json.Object, err error) {
@@ -1320,14 +1320,21 @@ func callJSONRPC(command []string, request *json.Object, timeoutS float64, initi
 	timeout := time.Duration(timeoutS * float64(time.Second))
 
 	sendAndWait := func(payload *json.Object) (*json.Object, error) {
+		method := payload.Value("method").(string)
+		deadline := time.Now().Add(timeout)
+		if err := process.stdin.SetWriteDeadline(deadline); err != nil {
+			return nil, pyerr.NewOSError(err)
+		}
 		line, err := json.Dumps(payload, json.Options{})
 		if err != nil {
 			return nil, err
 		}
 		if _, err := io.WriteString(process.stdin, line+"\n"); err != nil {
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				return nil, installError(fmt.Sprintf("codex app-server timed out for %s: %s", method, drainFirst(process.stderr)))
+			}
 			return nil, pyerr.NewOSError(err)
 		}
-		deadline := time.Now().Add(timeout)
 		var response *json.Object
 		for time.Now().Before(deadline) {
 			line, ok := process.stdout.get(50 * time.Millisecond)
@@ -1353,7 +1360,6 @@ func callJSONRPC(command []string, request *json.Object, timeoutS float64, initi
 				break
 			}
 		}
-		method := payload.Value("method").(string) // both payloads hold a str method
 		if response == nil {
 			return nil, installError(fmt.Sprintf("codex app-server timed out for %s: %s", method, drainFirst(process.stderr)))
 		}
