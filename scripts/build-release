@@ -8,6 +8,10 @@ root=$(cd "${0%/*}/.." && pwd -P)
 cd "$root"
 version=$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' .claude-plugin/plugin.json | head -n 1)
 [ -n "$version" ] || { echo "build-release: cannot read the version from .claude-plugin/plugin.json" >&2; exit 1; }
+codex_version=$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' .codex-plugin/plugin.json | head -n 1)
+[ -n "$codex_version" ] || { echo "build-release: cannot read the version from .codex-plugin/plugin.json" >&2; exit 1; }
+[ "$version" = "$codex_version" ] ||
+	{ echo "build-release: plugin manifest versions differ (Claude $version, Codex $codex_version)" >&2; exit 1; }
 
 toolchain=go1.27.2 # the pins hold only for this toolchain
 [ "$(GOTOOLCHAIN=local go env GOVERSION)" = "$toolchain" ] ||
