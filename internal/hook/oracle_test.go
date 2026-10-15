@@ -41,6 +41,7 @@ sys.path.insert(0, sys.argv[1])
 from agent_decisions import hook, jev, ledger
 from tests.helpers import FakeJev, codex_call, codex_output, tool_result, tool_use
 
+hook.__file__ = sys.argv[2]
 spec = json.loads(sys.stdin.read())
 hook.time = types.SimpleNamespace(perf_counter=lambda: 0.0, strftime=time.strftime,
                                   gmtime=lambda: time.gmtime(spec["time"]))
@@ -217,7 +218,7 @@ func runPython(t *testing.T, python string, steps []replayStep) []*stepResult {
 		}
 	}
 	source := oracletest.Source(t)
-	command := exec.Command(python, "-I", "-c", replayScript, source)
+	command := exec.Command(python, "-I", "-c", replayScript, source, filepath.Join(repoRoot, "bin", "agent-decisions"))
 	command.Stdin = strings.NewReader(dumps(t, json.NewObject("time", json.IntOf(oracleTime), "uuid", oracleUUID,
 		"steps", wire)))
 	var stderr bytes.Buffer
@@ -226,8 +227,6 @@ func runPython(t *testing.T, python string, steps []replayStep) []*stepResult {
 	if err != nil {
 		t.Fatalf("python: %v\n%s", err, stderr.String())
 	}
-	// The Python engine reports paths under its own checkout; the Go engine reports them under this repo.
-	output = bytes.ReplaceAll(output, []byte(source), []byte(repoRoot))
 	replies := loads(t, string(output)).([]any)
 	results := make([]*stepResult, len(replies))
 	for i, reply := range replies {
@@ -771,8 +770,34 @@ func TestHandleMatchesPython(t *testing.T) {
 	}
 }
 
+func TestPythonReplayPreservesSourcePaths(t *testing.T) {
+	for name, run := range map[string]func(*testing.T, string, []replayStep) []*stepResult{
+		"oracle": runPython, "private replay": runPythonQuietly,
+	} {
+		t.Run(name, func(t *testing.T) {
+			work, python := oracleSetUp(t)
+			source := oracletest.Source(t)
+			path := writeJSONL(t, work, "transcript.jsonl", []*json.Object{human("Inspect the source checkout.")}, "")
+			base := json.NewObject("session_id", "paths", "cwd", work, "transcript_path", path)
+			steps := []replayStep{
+				call("session_start", "claude", base, replayFake{}),
+				call("pre_tool_use", "claude", with(base, "tool_name", "ExitPlanMode", "tool_use_id", "plan",
+					"tool_input", json.NewObject("plan", "Inspect "+source+"/notes.")), replayFake{}),
+			}
+			resetState(t)
+			results := run(t, python, steps)
+			if results[0].out == nil || !strings.Contains(*results[0].out, filepath.Join(repoRoot, "bin", "ts-decide")) {
+				t.Fatal("SessionStart instructions do not use the shared code root")
+			}
+			if len(results[1].requests) != 1 || !strings.Contains(results[1].requests[0], source+"/notes.") {
+				t.Fatal("replay changed the source path in the plan request")
+			}
+		})
+	}
+}
+
 // TestMainMatchesPython runs hooks/hook.py and the agent-decisions binary end to end on the same stdin and
-// compares exit status, stdout, stderr and the ledger.
+// compares exit status, stdout, stderr and the ledger. Only retired argparse presentation is normalized.
 func TestMainMatchesPython(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -815,6 +840,10 @@ func TestMainMatchesPython(t *testing.T) {
 			}
 			py, pyFiles := run(python, append([]string{"-I", "-B", filepath.Join(oracletest.Source(t), "hooks", "hook.py")}, c.args...)...)
 			golang, goFiles := run(binary, append([]string{"hook"}, c.args...)...)
+			if c.name == "help" || py.code == 2 && golang.code == 2 {
+				py.stdout, golang.stdout = oracletest.CLIPresentation(py.stdout), oracletest.CLIPresentation(golang.stdout)
+				py.stderr, golang.stderr = oracletest.CLIPresentation(py.stderr), oracletest.CLIPresentation(golang.stderr)
+			}
 			if py.code != golang.code || py.stdout != golang.stdout {
 				t.Errorf("python exit %d stdout %q\ngo     exit %d stdout %q", py.code, py.stdout, golang.code, golang.stdout)
 			}

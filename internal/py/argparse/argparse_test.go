@@ -5,75 +5,54 @@ import (
 	stdjson "encoding/json"
 	"os"
 	"os/exec"
-	"slices"
 	"strings"
 	"testing"
 
+	"github.com/rexbrahh/make-better-decisions/internal/oracletest"
 	"github.com/rexbrahh/make-better-decisions/internal/py/str"
 )
 
-// Python's argparse suggests the closest choice through difflib.get_close_matches.
-func TestCloseMatch(t *testing.T) {
-	for _, c := range []struct{ word, want string }{
-		{"exce", "exec"}, {"exe", "exec"}, {"clade", "claude"}, {"codec", "codex"}, {"c", ""}, {"xyz", ""},
-		{"cod", "codex"}, {"claud", "claude"},
-	} {
-		if got := closeMatch(c.word, []string{"claude", "codex", "exec"}); got != c.want {
-			t.Errorf("closeMatch(%q) = %q, want %q", c.word, got, c.want)
+func TestPlainHelpPreservesDescriptionsAndSubcommands(t *testing.T) {
+	t.Setenv("COLUMNS", "20")
+	t.Setenv("FORCE_COLOR", "1")
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("PYTHON_COLORS", "1")
+	const description = "Explain the complete decision boundary for a native session and its workers without splitting this description across terminal lines."
+	var stdout, stderr bytes.Buffer
+	p := &Parser{Prog: "tool", Stdout: &stdout, Stderr: &stderr, Actions: []*Action{
+		HelpAction(),
+		{Kind: Store, Options: []string{"--details"}, Dest: "details", Help: description},
+		{Kind: Parsers, Dest: "mode", Choices: []string{"exec"}, Parser: &Parser{Prog: "tool exec"}, ChoiceHelp: "run the signed command"},
+	}}
+	_, err := p.ParseArgs([]string{"--help"})
+	if exit, ok := err.(*Exit); !ok || exit.Code != 0 {
+		t.Fatalf("help returned %v", err)
+	}
+	text := stdout.String()
+	for _, content := range []string{"--details DETAILS", description, "exec", "run the signed command"} {
+		if !strings.Contains(text, content) {
+			t.Errorf("help lost %q", content)
 		}
+	}
+	if strings.Contains(text, "\x1b") || stderr.Len() != 0 {
+		t.Fatalf("help is not plain stdout: %q, stderr %q", text, stderr.String())
 	}
 }
 
-// TestSplitLinesMatchesPython compares the help wrapping with HelpFormatter._split_lines on hyphenated,
-// long and spaced words at small widths.
-func TestSplitLinesMatchesPython(t *testing.T) {
-	python := os.Getenv("AGENT_DECISIONS_PYTHON")
-	if python == "" {
-		t.Skip("set AGENT_DECISIONS_PYTHON to a CPython 3.15 interpreter to compare with the oracle")
+func TestInvalidChoiceRejectsWithoutSuggestion(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	_, err := hookParser(&stdout, &stderr).ParseArgs([]string{"stop", "--host", "clade"})
+	if exit, ok := err.(*Exit); !ok || exit.Code != 2 {
+		t.Fatalf("invalid choice returned %v", err)
 	}
-	texts := []string{
-		"Owner-authorized review exception for one canonical session and its native workers.",
-		"Revoke an owner-authorized session review exception.",
-		"ab-c x-y-z ab-cd a-b-c-d ab-c-de well-known-fact -abc abc- a--b over--long",
-		"  spaced\tout \n words  ", "averyveryverylongwordwithoutanyhyphens and-a-very-long-hyphenated-word",
-		"show this help message and exit",
-		"x.--y 1--2 a_b-cd --abc a- - a---b co-op's re-run! 3-in-1 _a-_b ab-c-d-e-fgh x,--y? q--",
-	}
-	type wrapCase struct {
-		Text  string `json:"text"`
-		Width int    `json:"width"`
-	}
-	var cases []wrapCase
-	for _, text := range texts {
-		for width := 1; width <= 40; width++ {
-			cases = append(cases, wrapCase{text, width})
-		}
-	}
-	input, _ := stdjson.Marshal(cases)
-	script := `import argparse, json, sys
-f = argparse.HelpFormatter("prog")
-print(json.dumps([f._split_lines(c["text"], c["width"]) for c in json.load(sys.stdin)]))`
-	command := exec.Command(python, "-I", "-c", script)
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var want [][]string
-	if err := stdjson.Unmarshal(output, &want); err != nil {
-		t.Fatal(err)
-	}
-	for i, c := range cases {
-		got := splitLines(c.Text, c.Width)
-		if !slices.Equal(got, want[i]) && !(len(got) == 0 && len(want[i]) == 0) {
-			t.Errorf("splitLines(%q, %d) = %q, want %q", c.Text, c.Width, got, want[i])
-		}
+	if !strings.Contains(stderr.String(), "invalid choice: 'clade' (choose from 'claude', 'codex')") {
+		t.Fatalf("invalid-choice diagnostic %q", stderr.String())
 	}
 }
 
 // hookParser is the parser of agent_decisions/hook.py main.
-func hookParser(stdout, stderr *bytes.Buffer, ignoreEnvironment bool) *Parser {
-	return &Parser{Prog: "agent-decisions hook", Stdout: stdout, Stderr: stderr, IgnoreEnvironment: ignoreEnvironment,
+func hookParser(stdout, stderr *bytes.Buffer) *Parser {
+	return &Parser{Prog: "agent-decisions hook", Stdout: stdout, Stderr: stderr,
 		Actions: []*Action{
 			HelpAction(),
 			{Kind: Store, Dest: "event", Choices: []string{"pre_tool_use", "stop", "subagent_stop", "session_start", "user_prompt_submit"}},
@@ -85,7 +64,7 @@ func hookParser(stdout, stderr *bytes.Buffer, ignoreEnvironment bool) *Parser {
 var colorVariables = []string{"COLUMNS", "NO_COLOR", "FORCE_COLOR", "TERM", "PYTHON_COLORS"}
 
 // TestHookParserMatchesPython runs the parser of hook.py main on argument permutations, missing, extra and
-// invalid arguments, abbreviations, help, widths and colors, under python3 -I and without -I.
+// invalid arguments and abbreviations under python3 -I and without -I. Retired CLI presentation is normalized.
 func TestHookParserMatchesPython(t *testing.T) {
 	python := os.Getenv("AGENT_DECISIONS_PYTHON")
 	if python == "" {
@@ -179,14 +158,16 @@ print(json.dumps(out))`
 				}
 			}
 			var stdout, stderr bytes.Buffer
-			ns, err := hookParser(&stdout, &stderr, isolated).ParseArgs(c.Argv)
+			ns, err := hookParser(&stdout, &stderr).ParseArgs(c.Argv)
 			var status, namespace any
 			if err != nil {
 				status = float64(err.(*Exit).Code)
 			} else {
 				namespace = []any{[]any{"event", ns["event"]}, []any{"host", ns["host"]}}
 			}
-			got := [4]any{status, namespace, stdout.String(), stderr.String()}
+			got := [4]any{status, namespace, oracletest.CLIPresentation(stdout.String()), oracletest.CLIPresentation(stderr.String())}
+			want[i][2] = oracletest.CLIPresentation(want[i][2].(string))
+			want[i][3] = oracletest.CLIPresentation(want[i][3].(string))
 			gotJSON, _ := stdjson.Marshal(got)
 			wantJSON, _ := stdjson.Marshal(want[i])
 			if !bytes.Equal(gotJSON, wantJSON) {

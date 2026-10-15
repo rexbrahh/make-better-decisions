@@ -94,7 +94,7 @@ type oracleOp struct {
 	op  []any
 }
 
-// compareWithPython runs ops through Python and Go and fails on any byte difference in the outcomes.
+// compareWithPython compares Python and Go outcomes, normalizing only retired argparse presentation for CLI operations.
 func compareWithPython(t *testing.T, ops []oracleOp) {
 	t.Helper()
 	python := os.Getenv("AGENT_DECISIONS_PYTHON")
@@ -146,10 +146,29 @@ func compareWithPython(t *testing.T, ops []oracleOp) {
 			}
 		}
 		got := runOracleOp(t, op.op)
-		if same, err := json.Equal(got, want[i]); err != nil || !same {
-			t.Errorf("op %d %s %v\n%s", i, op.op[0], op.op[1:], firstDifference(render(got), render(want[i].([]any))))
+		expected := want[i].([]any)
+		if op.op[0] == "cli" {
+			got, expected = normalizeCLIResult(t, got), normalizeCLIResult(t, expected)
+		}
+		if same, err := json.Equal(got, expected); err != nil || !same {
+			t.Errorf("op %d %s %v\n%s", i, op.op[0], op.op[1:], firstDifference(render(got), render(expected)))
 		}
 	}
+}
+
+func normalizeCLIResult(t *testing.T, outcome []any) []any {
+	t.Helper()
+	if outcome[0] != "ok" {
+		return outcome
+	}
+	result := loads(t, outcome[1].(string)).([]any)
+	result[1] = oracletest.CLIPresentation(result[1].(string))
+	result[2] = oracletest.CLIPresentation(result[2].(string))
+	text, err := json.Dumps(result, json.Options{SortKeys: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []any{"ok", text}
 }
 
 // render returns an outcome as text: the error, or the JSON result with a cli result's streams expanded.

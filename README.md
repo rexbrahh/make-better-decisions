@@ -6,6 +6,8 @@ The goal is useful, enforceable review. Jev evaluates a material choice against 
 
 Version 2.0.0 replaces the Python engine with one Go binary, `agent-decisions`. The hook output, ledger rows and seals stay byte-identical to version 1.2.8. On 6,206 hook calls replayed from real transcripts, the Go engine took 1 min 40 s and the Python engine took 2 min 5 s. Ordinary tools remain independent of Jev. Required review remains the default on the declared sensitive surface. See the [release notes](docs/releases/v2.0.0.md).
 
+Version 2.0.1 simplifies CLI presentation, preserves release assets after a failed build, and includes the Linux error-text correction. See the [maintenance notes](docs/releases/v2.0.1.md) and [QA evidence](docs/validation/go-qa-2026-10-15.md).
+
 The hook builds the evidence. The agent cannot choose the source set by itself.
 
 ## Requirements
@@ -240,7 +242,7 @@ The macOS native deny profile was verified with escalation. It denies reads and 
 
 Protection includes the durable runtime namespace, this plugin's cached version namespace, and existing Codex profile files. Stdio launchers run the binary of the installed runtime before they read signed recipes.
 
-Linux uses bubblewrap when available. Linux bubblewrap behavior is not runtime verified in this repository.
+Linux uses bubblewrap when available. Linux amd64 isolation tests passed in a privileged Ubuntu 24.04 container on 2026-10-15. The tests pre-created protected host paths. A missing protected path still causes exit 78. See the [QA evidence and limits](docs/validation/go-qa-2026-10-15.md).
 
 The boundary helpers wrap third-party stdio MCP servers. Codex and Adrafinil retain their native launchers. The helpers do not wrap HTTP MCP servers or trusted external services.
 

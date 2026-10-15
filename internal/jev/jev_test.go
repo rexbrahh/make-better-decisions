@@ -277,9 +277,10 @@ func TestUnknownValidationDetailsAreNotEchoed(t *testing.T) {
 	}
 }
 
-type slowBody struct{}
+type slowBody struct{ done chan struct{} }
 
-func (slowBody) Read([]byte) (int, error) {
+func (body slowBody) Read([]byte) (int, error) {
+	defer close(body.done)
 	time.Sleep(250 * time.Millisecond)
 	return 0, io.EOF
 }
@@ -287,8 +288,16 @@ func (slowBody) Read([]byte) (int, error) {
 // py: tests/test_jev.py::test_deadline_includes_reading_the_response_body
 func TestDeadlineIncludesReadingTheResponseBody(t *testing.T) {
 	setUp(t)
+	done := make(chan struct{})
 	patchTransport(t, func(request *http.Request) (*http.Response, error) {
-		return respond(request, 200, slowBody{}), nil
+		return respond(request, 200, slowBody{done: done}), nil
+	})
+	t.Cleanup(func() {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("response body did not finish before transport cleanup")
+		}
 	})
 	start := time.Now()
 	_, err := Post([]byte("{}"), "k", 50*time.Millisecond)

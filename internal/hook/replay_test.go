@@ -512,7 +512,7 @@ func runPythonQuietly(t *testing.T, python string, steps []replayStep) []*stepRe
 			"payload", step.payload, "fake", step.fake.wire())
 	}
 	source := oracletest.Source(t)
-	command := exec.Command(python, "-I", "-c", replayScript, source)
+	command := exec.Command(python, "-I", "-c", replayScript, source, filepath.Join(repoRoot, "bin", "agent-decisions"))
 	command.Stdin = strings.NewReader(dumps(t, json.NewObject("time", json.IntOf(oracleTime), "uuid", oracleUUID,
 		"steps", wire)))
 	output, err := command.Output()
@@ -523,8 +523,6 @@ func runPythonQuietly(t *testing.T, python string, steps []replayStep) []*stepRe
 		}
 		t.Fatalf("python replay driver: %v", err)
 	}
-	// The Python engine reports paths under its own checkout; the Go engine reports them under this repo.
-	output = bytes.ReplaceAll(output, []byte(source), []byte(repoRoot))
 	replies, ok := loads(t, string(output)).([]any)
 	if !ok || len(replies) != len(steps) {
 		t.Fatalf("python replay driver: %d results for %d steps", len(replies), len(steps))

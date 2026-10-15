@@ -1,20 +1,16 @@
 // Package argparse ports the subset of CPython 3.15's argparse that the agent-decisions commands use: help,
 // store, store_true and append optionals, one subparsers positional, required arguments, abbreviated
-// options, the errors with their close-match suggestions, and the usage and help text with its wrapping
-// and colors.
+// options, and plain usage, help and error text.
 //
-// A Parser prints as ArgumentParser does and returns an *Exit where argparse raises SystemExit.
+// A Parser retains ArgumentParser's argument semantics and returns an *Exit where argparse raises SystemExit.
 package argparse
 
 import (
 	"fmt"
 	"io"
-	"os"
 	"regexp"
 	"slices"
 	"strings"
-	"syscall"
-	"unsafe"
 
 	"github.com/rexbrahh/make-better-decisions/internal/py/pyerr"
 	pyre "github.com/rexbrahh/make-better-decisions/internal/py/re"
@@ -57,13 +53,11 @@ func HelpAction() *Action {
 }
 
 // Parser is an ArgumentParser. Stdout and Stderr are sys.stdout and sys.stderr; a subcommand parser prints
-// to those of its parent. IgnoreEnvironment is sys.flags.ignore_environment (python3 -I or -E), which
-// makes the colors ignore PYTHON_COLORS.
+// to those of its parent.
 type Parser struct {
-	Prog              string
-	Actions           []*Action
-	Stdout, Stderr    io.Writer
-	IgnoreEnvironment bool
+	Prog           string
+	Actions        []*Action
+	Stdout, Stderr io.Writer
 }
 
 // Namespace is an argparse.Namespace: dest to value, where nil is None.
@@ -256,7 +250,7 @@ func (p *Parser) parseKnown(args []string, ns Namespace) ([]string, error) {
 			}
 			ns[a.Dest] = values[0]
 			sub := *a.Parser
-			sub.Stdout, sub.Stderr, sub.IgnoreEnvironment = p.Stdout, p.Stderr, p.IgnoreEnvironment
+			sub.Stdout, sub.Stderr = p.Stdout, p.Stderr
 			subNamespace, subExtras, err := sub.parseKnownArgs(values[1:])
 			if err != nil {
 				return err
@@ -483,10 +477,6 @@ func checkValue(a *Action, value string) error {
 		quoted[i] = str.Repr(choice)
 	}
 	choices := strings.Join(quoted, ", ")
-	if closest := closeMatch(value, a.Choices); closest != "" {
-		return &argumentError{a, fmt.Sprintf("invalid choice: %s, maybe you meant %s? (choose from %s)",
-			str.Repr(value), str.Repr(closest), choices)}
-	}
 	return &argumentError{a, fmt.Sprintf("invalid choice: %s (choose from %s)", str.Repr(value), choices)}
 }
 
@@ -495,20 +485,19 @@ func checkValue(a *Action, value string) error {
 // py: Lib/argparse.py ArgumentParser.error (Python 3.15)
 func (p *Parser) Error(message string) *Exit {
 	p.printUsage(p.Stderr)
-	t := p.themeFor(p.Stderr)
-	write(p.Stderr, fmt.Sprintf("%s: %serror:%s %s%s%s\n", p.Prog, t.error, t.reset, t.message, message, t.reset))
+	write(p.Stderr, fmt.Sprintf("%s: error: %s\n", p.Prog, message))
 	return &Exit{2}
 }
 
 // py: Lib/argparse.py ArgumentParser.print_usage (Python 3.15)
 func (p *Parser) printUsage(w io.Writer) {
-	f := newFormatter(p.Prog, p.themeFor(w))
+	f := newFormatter(p.Prog)
 	write(w, strings.Trim(f.formatUsage(p), "\n")+"\n")
 }
 
 // py: Lib/argparse.py ArgumentParser.print_help (Python 3.15)
 func (p *Parser) printHelp(w io.Writer) {
-	write(w, newFormatter(p.Prog, p.themeFor(w)).formatHelp(p))
+	write(w, newFormatter(p.Prog).formatHelp(p))
 }
 
 // write ports _print_message: it writes s with the backslashreplace error handler of sys.stderr and
@@ -517,61 +506,10 @@ func write(w io.Writer, s string) {
 	io.WriteString(w, pyerr.EncodeBackslashReplace(s))
 }
 
-// theme is the argparse section of a _colorize theme. The zero theme has no colors.
-type theme struct {
-	usage, prog, heading                                               string
-	summaryLongOption, summaryShortOption, summaryLabel, summaryAction string
-	longOption, shortOption, label, action, reset, error, message      string
-}
+// formatter prints plain help without terminal-dependent layout.
+type formatter struct{ prog string }
 
-var colorTheme = theme{
-	usage: "\x1b[1;34m", prog: "\x1b[1;35m", heading: "\x1b[1;34m",
-	summaryLongOption: "\x1b[36m", summaryShortOption: "\x1b[32m", summaryLabel: "\x1b[33m", summaryAction: "\x1b[32m",
-	longOption: "\x1b[1;36m", shortOption: "\x1b[1;32m", label: "\x1b[1;33m", action: "\x1b[1;32m",
-	reset: "\x1b[0m", error: "\x1b[1;35m", message: "\x1b[35m",
-}
-
-// themeFor returns the theme for text written to w.
-//
-// py: Lib/_colorize.py can_colorize (Python 3.15)
-func (p *Parser) themeFor(w io.Writer) *theme {
-	switch {
-	case !p.IgnoreEnvironment && os.Getenv("PYTHON_COLORS") == "0":
-	case !p.IgnoreEnvironment && os.Getenv("PYTHON_COLORS") == "1":
-		return &colorTheme
-	case os.Getenv("NO_COLOR") != "":
-	case os.Getenv("FORCE_COLOR") != "":
-		return &colorTheme
-	case os.Getenv("TERM") == "dumb":
-	case isatty(w):
-		return &colorTheme
-	}
-	return &theme{}
-}
-
-var ansiCode = regexp.MustCompile(`\x1b\[[0-9;]*m`)
-
-// decolor removes the theme's color codes. The formatted text holds no other escape sequences.
-//
-// py: Lib/_colorize.py decolor (Python 3.15)
-func decolor(text string) string {
-	return ansiCode.ReplaceAllString(text, "")
-}
-
-// formatter is argparse.HelpFormatter with its default arguments.
-type formatter struct {
-	prog            string
-	width           int
-	maxHelpPosition int
-	actionMaxLength int
-	theme           *theme
-}
-
-// py: Lib/argparse.py HelpFormatter.__init__ (Python 3.15)
-func newFormatter(prog string, t *theme) *formatter {
-	width := terminalColumns() - 2
-	return &formatter{prog: prog, width: width, maxHelpPosition: min(24, max(width-20, 4)), theme: t}
-}
+func newFormatter(prog string) *formatter { return &formatter{prog: prog} }
 
 // metavar returns the metavar of a: its metavar, its choices, or its dest (upper-cased for an option).
 //
@@ -600,94 +538,28 @@ func takesValue(a *Action) bool {
 	return a.Kind == Store || a.Kind == Append || a.Kind == Parsers
 }
 
-// usageParts returns the usage parts of the actions, optionals first, and the index of the first
-// positional.
-//
-// py: Lib/argparse.py HelpFormatter._get_actions_usage_parts (Python 3.15)
-func (f *formatter) usageParts(p *Parser) ([]string, int) {
-	t := f.theme
+// usageParts lists options before positionals, as the parser's usage does.
+func (f *formatter) usageParts(p *Parser) []string {
 	var optionals, positionals []string
 	for _, a := range p.Actions {
 		if len(a.Options) == 0 {
-			positionals = append(positionals, t.summaryAction+formatArgs(a)+t.reset)
+			positionals = append(positionals, formatArgs(a))
 			continue
 		}
-		option := a.Options[0]
-		color := t.summaryShortOption
-		if len(option) > 2 {
-			color = t.summaryLongOption
-		}
-		part := color + option + t.reset
+		part := a.Options[0]
 		if takesValue(a) {
-			part = color + option + " " + t.summaryLabel + formatArgs(a) + t.reset
+			part += " " + formatArgs(a)
 		}
 		if !a.Required {
 			part = "[" + part + "]"
 		}
 		optionals = append(optionals, part)
 	}
-	return append(optionals, positionals...), len(optionals)
+	return append(optionals, positionals...)
 }
 
-// formatUsage returns the usage block, which ends with a blank line.
-//
-// py: Lib/argparse.py HelpFormatter._format_usage (Python 3.15)
 func (f *formatter) formatUsage(p *Parser) string {
-	t := f.theme
-	const prefix = "usage: "
-	prog := f.prog
-	parts, positionalStart := f.usageParts(p)
-	usage := strings.Join(append([]string{prog}, parts...), " ")
-	textWidth := f.width
-	if len(prefix)+len(decolor(usage)) > textWidth {
-		optionals, positionals := parts[:positionalStart], parts[positionalStart:]
-		getLines := func(parts []string, indent string, withPrefix bool) []string {
-			var lines, line []string
-			lineLen := len(indent) - 1
-			if withPrefix {
-				lineLen = len(prefix) - 1
-			}
-			for _, part := range parts {
-				partLen := len(decolor(part))
-				if lineLen+1+partLen > textWidth && len(line) > 0 {
-					lines = append(lines, indent+strings.Join(line, " "))
-					line, lineLen = nil, len(indent)-1
-				}
-				line = append(line, part)
-				lineLen += partLen + 1
-			}
-			if len(line) > 0 {
-				lines = append(lines, indent+strings.Join(line, " "))
-			}
-			if withPrefix {
-				lines[0] = lines[0][len(indent):]
-			}
-			return lines
-		}
-		var lines []string
-		if float64(len(prefix)+len(prog)) <= 0.75*float64(textWidth) {
-			indent := strings.Repeat(" ", len(prefix)+len(prog)+1)
-			switch {
-			case len(optionals) > 0:
-				lines = getLines(append([]string{prog}, optionals...), indent, true)
-				lines = append(lines, getLines(positionals, indent, false)...)
-			case len(positionals) > 0:
-				lines = getLines(append([]string{prog}, positionals...), indent, true)
-			default:
-				lines = []string{prog}
-			}
-		} else {
-			indent := strings.Repeat(" ", len(prefix))
-			lines = getLines(parts, indent, false)
-			if len(lines) > 1 {
-				lines = append(getLines(optionals, indent, false), getLines(positionals, indent, false)...)
-			}
-			lines = append([]string{prog}, lines...)
-		}
-		usage = strings.Join(lines, "\n")
-	}
-	usage = t.prog + prog + t.reset + strings.TrimPrefix(usage, prog)
-	return t.usage + prefix + t.reset + usage + "\n\n"
+	return "usage: " + strings.Join(append([]string{f.prog}, f.usageParts(p)...), " ") + "\n\n"
 }
 
 // subactions returns the choice pseudo-actions of a Parsers action, which list each subcommand.
@@ -700,33 +572,19 @@ func subactions(a *Action) []*Action {
 	return []*Action{{Kind: Store, Dest: a.Choices[0], Help: a.ChoiceHelp}}
 }
 
-// py: Lib/argparse.py HelpFormatter._format_action_invocation (Python 3.15)
+// invocation lists an argument's names and value placeholder.
 func (f *formatter) invocation(a *Action) string {
-	t := f.theme
 	if len(a.Options) == 0 {
-		return t.action + metavar(a) + t.reset
+		return metavar(a)
 	}
-	var options []string
-	for _, option := range a.Options {
-		color := t.shortOption
-		if len(option) > 2 {
-			color = t.longOption
-		}
-		options = append(options, color+option+t.reset)
+	text := strings.Join(a.Options, ", ")
+	if takesValue(a) {
+		text += " " + formatArgs(a)
 	}
-	if !takesValue(a) {
-		return strings.Join(options, ", ")
-	}
-	return strings.Join(options, ", ") + " " + t.label + formatArgs(a) + t.reset
+	return text
 }
 
-var longBreak = regexp.MustCompile(`\n\n\n+`)
-
-// formatHelp returns the help text of p.
-//
-// py: Lib/argparse.py ArgumentParser.format_help, HelpFormatter.format_help (Python 3.15)
 func (f *formatter) formatHelp(p *Parser) string {
-	t := f.theme
 	var positionals, optionals []*Action
 	for _, a := range p.Actions {
 		if len(a.Options) == 0 {
@@ -739,126 +597,28 @@ func (f *formatter) formatHelp(p *Parser) string {
 		heading string
 		actions []*Action
 	}{{"positional arguments", positionals}, {"options", optionals}}
-	// HelpFormatter.add_argument: every section is indented by 2, and subactions by 2 more.
-	for _, section := range sections {
-		for _, a := range section.actions {
-			f.actionMaxLength = max(f.actionMaxLength, len(decolor(f.invocation(a)))+2)
-			for _, sub := range subactions(a) {
-				f.actionMaxLength = max(f.actionMaxLength, len(decolor(f.invocation(sub)))+4)
-			}
-		}
-	}
-	help := f.formatUsage(p)
-	for _, section := range sections {
-		var body strings.Builder
-		for _, a := range section.actions {
-			body.WriteString(f.formatAction(a, 2))
-		}
-		if body.Len() > 0 {
-			help += "\n" + t.heading + section.heading + ":" + t.reset + "\n" + body.String() + "\n"
-		}
-	}
-	help = longBreak.ReplaceAllString(help, "\n\n")
-	return strings.Trim(help, "\n") + "\n"
-}
-
-// formatAction returns the help of one action.
-// ponytail: _expand_help's %-formatting is not ported; no help text here holds "%".
-//
-// py: Lib/argparse.py HelpFormatter._format_action (Python 3.15)
-func (f *formatter) formatAction(a *Action, indent int) string {
-	helpPosition := min(f.actionMaxLength+2, f.maxHelpPosition)
-	helpWidth := max(f.width-helpPosition, 11)
-	actionWidth := helpPosition - indent - 2
-	header := f.invocation(a)
-	plain := decolor(header)
 	var out strings.Builder
-	indentFirst := 0
-	switch {
-	case a.Help == "":
-		out.WriteString(strings.Repeat(" ", indent) + header + "\n")
-	case len(plain) <= actionWidth:
-		padded := strings.Repeat(" ", indent) + plain + strings.Repeat(" ", actionWidth-len(plain)) + "  "
-		out.WriteString(strings.ReplaceAll(padded, plain, header))
-	default:
-		out.WriteString(strings.Repeat(" ", indent) + header + "\n")
-		indentFirst = helpPosition
-	}
-	if str.Strip(a.Help) != "" {
-		lines := splitLines(a.Help, helpWidth)
-		out.WriteString(strings.Repeat(" ", indentFirst) + lines[0] + "\n")
-		for _, line := range lines[1:] {
-			out.WriteString(strings.Repeat(" ", helpPosition) + line + "\n")
+	out.WriteString(strings.TrimRight(f.formatUsage(p), "\n"))
+	for _, section := range sections {
+		if len(section.actions) == 0 {
+			continue
+		}
+		out.WriteString("\n\n" + section.heading + ":\n")
+		for _, a := range section.actions {
+			out.WriteString(f.formatAction(a, 2))
 		}
 	}
+	return strings.TrimRight(out.String(), "\n") + "\n"
+}
+
+func (f *formatter) formatAction(a *Action, indent int) string {
+	text := strings.Repeat(" ", indent) + f.invocation(a)
+	if help := strings.Join(strings.Fields(a.Help), " "); help != "" {
+		text += "  " + help
+	}
+	text += "\n"
 	for _, sub := range subactions(a) {
-		out.WriteString(f.formatAction(sub, indent+2))
+		text += f.formatAction(sub, indent+2)
 	}
-	return out.String()
-}
-
-// asciiWhitespace is HelpFormatter._whitespace_matcher, re.compile(r'\s+', re.ASCII).
-var asciiWhitespace = regexp.MustCompile(`[\t\n\v\f\r ]+`)
-
-// py: Lib/argparse.py HelpFormatter._split_lines (Python 3.15)
-func splitLines(text string, width int) []string {
-	return wrap(str.Strip(asciiWhitespace.ReplaceAllString(text, " ")), width)
-}
-
-// terminalColumns ports shutil.get_terminal_size().columns: $COLUMNS when it is a positive int, else the
-// width of the terminal on file descriptor 1, else 80.
-//
-// py: Lib/shutil.py get_terminal_size (Python 3.15)
-func terminalColumns() int {
-	if columns, ok := pyInt(os.Getenv("COLUMNS")); ok && columns > 0 {
-		return columns
-	}
-	if columns, ok := winsizeColumns(1); ok && columns > 0 {
-		return columns
-	}
-	return 80
-}
-
-// pyInt ports int(s) for a str s, saturating far beyond any terminal width.
-// ponytail: only ASCII digits; int() also accepts other Unicode decimal digits.
-func pyInt(s string) (int, bool) {
-	s = str.Strip(s)
-	negative := false
-	if s != "" && (s[0] == '-' || s[0] == '+') {
-		negative, s = s[0] == '-', s[1:]
-	}
-	if s == "" || s[0] == '_' || s[len(s)-1] == '_' || strings.Contains(s, "__") {
-		return 0, false
-	}
-	n := 0
-	for i := range len(s) {
-		switch c := s[i]; {
-		case c == '_':
-		case c >= '0' && c <= '9':
-			n = min(n*10+int(c-'0'), 1<<40)
-		default:
-			return 0, false
-		}
-	}
-	if negative {
-		n = -n
-	}
-	return n, true
-}
-
-// winsizeColumns returns the terminal width on fd, as os.get_terminal_size(fd) does.
-func winsizeColumns(fd uintptr) (int, bool) {
-	var size struct{ rows, columns, xpixels, ypixels uint16 }
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, uintptr(syscall.TIOCGWINSZ), uintptr(unsafe.Pointer(&size)))
-	return int(size.columns), errno == 0
-}
-
-// isatty ports os.isatty(file.fileno()) for a writer: false for a writer without a file descriptor.
-func isatty(w io.Writer) bool {
-	file, ok := w.(*os.File)
-	if !ok {
-		return false
-	}
-	_, isTerminal := winsizeColumns(file.Fd())
-	return isTerminal
+	return text
 }

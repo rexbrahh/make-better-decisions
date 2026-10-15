@@ -3,6 +3,7 @@ package evidence
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,6 +18,19 @@ import (
 	pystr "github.com/rexbrahh/make-better-decisions/internal/py/str"
 	"github.com/rexbrahh/make-better-decisions/internal/transcript"
 )
+
+func TestDeepScrubReturnsNoPartialValue(t *testing.T) {
+	var deep any = "secret-value-0123456789"
+	for range 1100 {
+		deep = []any{deep}
+	}
+	input := json.NewObject("first", "secret-value-0123456789", "deep", deep)
+	value, err := Scrub(input, []string{"secret-value-0123456789"}, 0)
+	var recursion *json.RecursionError
+	if value != nil || !errors.As(err, &recursion) {
+		t.Fatalf("deep scrub returned a partial value or no nesting error: value present %v, error %v", value != nil, err)
+	}
+}
 
 // hookFrame is the Python stack depth of build when hook.py's _context calls it.
 const hookFrame = 7

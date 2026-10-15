@@ -201,7 +201,7 @@ The wrapper loads the signed installation recipe from the ledger.
 
 On macOS, the wrapper uses `sandbox-exec`. The macOS deny profile was verified with escalation.
 
-On Linux, the wrapper uses bubblewrap when available. Linux bubblewrap behavior is not runtime verified here.
+On Linux, the wrapper uses bubblewrap when available. Linux amd64 runtime tests passed in a privileged Ubuntu 24.04 container on 2026-10-15. The tests pre-created protected host paths. A missing protected path still causes exit 78. See the [QA evidence and limits](validation/go-qa-2026-10-15.md).
 
 HTTP MCP servers are not wrapped. Trusted external host services can act outside this repository.
 
@@ -210,13 +210,14 @@ HTTP MCP servers are not wrapped. Trusted external host services can act outside
 Verified:
 
 - macOS deny profile behavior through escalation.
+- Linux amd64 bubblewrap behavior in a privileged Ubuntu 24.04 container with existing protected paths.
 - Current install CLI help for `agent-decisions-install` and `agent-decisions-isolate`.
 - Current Codex plugin and MCP help for native install commands.
 
 Not verified here:
 
 - Final live hook counts or global activation state.
-- Linux bubblewrap runtime behavior.
+- Linux host environments outside that container setup.
 - Codex GUI identity boundaries.
 - New live Codex worker inheritance. Captured native fixtures pass local checks.
 

@@ -177,8 +177,7 @@ func MainIsolate(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return uncaught(stderr, err)
 }
 
-// isolateParser builds the parser of main_isolate. The launcher runs python3 -I, which ignores
-// PYTHON_COLORS.
+// isolateParser builds the parser of main_isolate.
 //
 // py: agent_decisions/isolation.py main_isolate
 func isolateParser(stdout, stderr io.Writer) *argparse.Parser {
@@ -189,7 +188,7 @@ func isolateParser(stdout, stderr io.Writer) *argparse.Parser {
 		{Kind: argparse.Store, Options: []string{"--command"}, Dest: "command", Required: true},
 		{Kind: argparse.StoreTrue, Options: []string{"--read-only"}, Dest: "read_only"},
 	}}
-	return &argparse.Parser{Prog: "agent-decisions-isolate", Stdout: stdout, Stderr: stderr, IgnoreEnvironment: true,
+	return &argparse.Parser{Prog: "agent-decisions-isolate", Stdout: stdout, Stderr: stderr,
 		Actions: []*argparse.Action{
 			argparse.HelpAction(),
 			{Kind: argparse.Parsers, Dest: "mode", Choices: []string{"exec"}, Parser: run,

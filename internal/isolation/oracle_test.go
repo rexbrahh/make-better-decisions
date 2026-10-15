@@ -21,6 +21,7 @@ import (
 const oracleDriver = `
 import json, os, sys
 capture, platform, root, command, *args = sys.argv[1:]
+os.environ.pop("__CF_USER_TEXT_ENCODING", None)  # Python startup adds it outside the explicit fixture environment.
 sys.path.insert(0, root)
 from agent_decisions import isolation
 if platform != "-":
@@ -372,9 +373,6 @@ func buildCase(t *testing.T, dir string, c oracleCase) []string {
 
 	env := []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "HOME=" + dir + "/home",
 		"AGENT_DECISIONS_STATE=" + dir + "/state", "TMPDIR=" + dir + "/tmp", "INHERITED=yes"}
-	if encoding, ok := os.LookupEnv("__CF_USER_TEXT_ENCODING"); ok {
-		env = append(env, "__CF_USER_TEXT_ENCODING="+encoding) // CoreFoundation sets it in every Python process
-	}
 	replaced := map[string]bool{}
 	var extra []string
 	for _, raw := range c.env {
@@ -512,7 +510,8 @@ func lastLine(stderr string) string {
 
 // TestMainsMatchPython runs both commands through the Python module and through this package with the
 // same arguments, environment, signed ledger and files, and compares their output, exit status, the exec
-// they ask for (argv, environment and working directory) and the files they leave.
+// they ask for (argv, environment and working directory) and the files they leave. Only retired argparse
+// presentation is normalized.
 func TestMainsMatchPython(t *testing.T) {
 	python := os.Getenv("AGENT_DECISIONS_PYTHON")
 	if python == "" {
@@ -535,6 +534,10 @@ func TestMainsMatchPython(t *testing.T) {
 			root := roots[layout]
 			want := runOracleCase(t, c, []string{python, "-I", "-B", "-c", oracleDriver}, root)
 			got := runOracleCase(t, c, []string{self, mainCommand}, root+"/agent_decisions/isolation.py")
+			if !c.real && want.code == got.code && (want.code == 0 || want.code == 2) {
+				want.stdout, got.stdout = oracletest.CLIPresentation(want.stdout), oracletest.CLIPresentation(got.stdout)
+				want.stderr, got.stderr = oracletest.CLIPresentation(want.stderr), oracletest.CLIPresentation(got.stderr)
+			}
 			if want.code == 1 && strings.HasPrefix(want.stderr, "Traceback (most recent call last):\n") {
 				want.stderr = lastLine(want.stderr)
 			}

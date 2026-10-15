@@ -1275,7 +1275,6 @@ func note(text string) *json.Object {
 // py: agent_decisions/hook.py main
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	parser := &argparse.Parser{Prog: "agent-decisions hook", Stdout: stdout, Stderr: stderr,
-		IgnoreEnvironment: true, // hooks.json runs python3 -I
 		Actions: []*argparse.Action{argparse.HelpAction(),
 			{Kind: argparse.Store, Dest: "event",
 				Choices: []string{"pre_tool_use", "stop", "subagent_stop", "session_start", "user_prompt_submit"}},
