@@ -54,6 +54,30 @@ func TestLenAndSlice(t *testing.T) {
 	}
 }
 
+func TestSlicePreservesByteAndCodePointOffsets(t *testing.T) {
+	cases := []struct {
+		name, text  string
+		start, stop int
+		want        string
+	}{
+		{"ascii", "abcdef", 1, -1, "bcde"},
+		{"invalid_bytes", "a\x80\xffb", 1, -1, "\x80\xff"},
+		{"truncated_surrogate", "a\xed\xa0b", 1, -1, "\xed\xa0"},
+		{"surrogate", "a\xed\xa0\x80b", 1, -1, "\xed\xa0\x80"},
+		{"unicode", "aé😀b", 1, -1, "é😀"},
+		{"clamped", "abc", -99, 99, "abc"},
+		{"reversed", "abc", 2, 1, ""},
+		{"empty", "", 1, 2, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := Slice(c.text, c.start, c.stop); got != c.want {
+				t.Fatalf("Slice(%q, %d, %d) = %q; want %q", c.text, c.start, c.stop, got, c.want)
+			}
+		})
+	}
+}
+
 func TestWhitespace(t *testing.T) {
 	if got := Strip("\u3000\x1c a b\v\u0085"); got != "a b" {
 		t.Errorf("Strip = %q", got)

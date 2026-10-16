@@ -64,6 +64,9 @@ func Slice(s string, start, stop int) string {
 	if start >= stop {
 		return ""
 	}
+	if n == len(s) {
+		return s[start:stop]
+	}
 	begin := offset(s, start)
 	return s[begin : begin+offset(s[begin:], stop-start)]
 }

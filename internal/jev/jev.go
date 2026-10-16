@@ -88,13 +88,14 @@ type PostFunc func(body []byte, key string, timeout time.Duration) ([]byte, erro
 //
 // py: agent_decisions/jev.py post
 func Post(body []byte, key string, timeout time.Duration) ([]byte, error) {
+	endpoint, roundTripper := url, transport
 	type result struct {
 		raw []byte
 		err error
 	}
 	done := make(chan result, 1)
 	go func() {
-		raw, err := post(body, key, timeout)
+		raw, err := post(body, key, timeout, endpoint, roundTripper)
 		done <- result{raw, err}
 	}()
 	timer := time.NewTimer(timeout)
@@ -111,12 +112,12 @@ func Post(body []byte, key string, timeout time.Duration) ([]byte, error) {
 // JevError as Python does.
 //
 // py: agent_decisions/jev.py _post
-func post(body []byte, key string, timeout time.Duration) ([]byte, error) {
+func post(body []byte, key string, timeout time.Duration, endpoint string, roundTripper http.RoundTripper) ([]byte, error) {
 	authorization, err := latin1("Bearer " + key) // http.client encodes header values as latin-1
 	if err != nil {
 		return nil, err
 	}
-	request, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, &JevError{Reason: "unreachable"}
 	}
@@ -125,7 +126,7 @@ func post(body []byte, key string, timeout time.Duration) ([]byte, error) {
 	request.Header.Set("User-Agent", "Python-urllib/3.15")
 	request.Header.Set("Accept-Encoding", "identity") // urllib never asks for a compressed body
 	request.Close = true                              // urllib sends Connection: close
-	client := &http.Client{Transport: transport, Timeout: timeout, CheckRedirect: checkRedirect}
+	client := &http.Client{Transport: roundTripper, Timeout: timeout, CheckRedirect: checkRedirect}
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, transportError(err)

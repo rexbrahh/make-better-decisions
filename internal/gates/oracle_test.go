@@ -500,6 +500,8 @@ func stepOf(t *testing.T, ctx Context, n int, s gateStep) (Context, []any) {
 	for runtime.NumGoroutine() > running { // chunks that the gate stopped waiting for still ask, as in Python
 		time.Sleep(time.Millisecond)
 	}
+	mu.Lock()
+	defer mu.Unlock()
 	slices.Sort(bodies)
 	if err != nil {
 		return ctx, []any{result(nil, err), bodies, nil}
