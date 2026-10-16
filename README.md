@@ -238,6 +238,9 @@ Submit complete commands or code in one shell call. The deciding workflow does n
 
 Required review is the default for explicit consultations and declared sensitive tools. Review failures block those operations. Other tools and completion continue without Jev. File changes through other interfaces remain subject to host permissions and approvals.
 
+A request schema error produces no verdict or receipt. Independent, authorized factual reads and checks can continue through ordinary tools.
+Declared edit tools still require available review, including for routine corrections.
+
 For Jev, HTTP 400 with `max_tokens_exceeded` triggers one retry within the original three-second deadline. The retry shortens historical tool input, output, and source excerpts. Historical inputs retain omission markers and original lengths. It preserves human messages, rule files, contracts, current pending input, and completed decisions. The receipt records the exact redacted state sent to the reviewer. A failed retry still blocks execution. Other validation failures identify the question and failed check without displaying response contents.
 
 The retry limits optional observation text to one sixteenth of its previous length, with a 128-character minimum and a 1,000-character cap. A remaining size rejection reports aggregate context-section sizes and attempt count. It does not display their contents.
