@@ -267,6 +267,19 @@ Exceptions persist across plugin updates until explicit owner revocation. They b
 
 For recovery, restore the key, service connection, readable host transcript, or installed package named in the diagnostic. Retry the original operation. An unverified result grants no reusable approach receipt. If service recovery is unavailable, the owner can explicitly apply availability policy.
 
+### Inspecting Codex CLI consultation records
+
+Codex CLI `command_execution` events can show a command after a hook applies `updatedInput`.
+This plugin replaces an intercepted `ts-decide` command with `printf '%s\n' <verdict>` to return the verdict through the shell.
+A `printf` event alone does not establish a simulated or missing consultation.
+
+1. Inspect the original native `custom_tool_call.input`. Classic `function_call` records use `arguments`. Code-mode input can contain a nested `tools.exec_command` request.
+2. Correlate that request with execution events and returned output. Use available call IDs and timestamps.
+3. Read the verdict and retain its scope. A rewritten command alone proves neither a backend API request nor a reusable receipt.
+
+The [hook rewrite](internal/hook/hook.go), [transcript recognition](internal/transcript/transcript.go), and [probes A4–A6](docs/probes.md) describe this behavior.
+`PROCEED` permits the routine or exact instruction. It does not approve a material approach.
+
 ## State
 
 Ledger files are in:
