@@ -322,7 +322,9 @@ func TestDeadlineIncludesReadingTheResponseBody(t *testing.T) {
 	})
 	start := time.Now()
 	_, err := Post([]byte("{}"), "k", 50*time.Millisecond)
-	assertJevError(t, err, "timeout")
+	if got := assertJevError(t, err, "timeout"); got.Phase != "" {
+		t.Fatalf("outer deadline retained phase %q", got.Phase)
+	}
 	if elapsed := time.Since(start); elapsed >= 200*time.Millisecond {
 		t.Fatalf("took %v", elapsed)
 	}
@@ -345,6 +347,72 @@ func TestMapsTransportErrors(t *testing.T) {
 		if reason := postReason(t, c.transport); reason != c.reason {
 			t.Errorf("%s: got %q, want %q", c.name, reason, c.reason)
 		}
+	}
+}
+
+type failingResponseBody struct {
+	err    error
+	closed bool
+}
+
+func (body *failingResponseBody) Read([]byte) (int, error) { return 0, body.err }
+func (body *failingResponseBody) Close() error {
+	body.closed = true
+	return nil
+}
+
+func TestTransportFailurePhasePreservesPublicErrorAndBodyCleanup(t *testing.T) {
+	for _, c := range []struct {
+		name, phase, reason string
+		err                 error
+		response            bool
+	}{
+		{"request unreachable", "request", "unreachable", errors.New("private transport detail test-secret"), false},
+		{"body unreachable", "response_body", "unreachable", errors.New("private response detail test-secret"), true},
+		{"request timeout", "", "timeout", os.ErrDeadlineExceeded, false},
+		{"body timeout", "", "timeout", os.ErrDeadlineExceeded, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			body := &failingResponseBody{err: c.err}
+			roundTrip := failure(c.err)
+			if c.response {
+				roundTrip = func(request *http.Request) (*http.Response, error) {
+					response := respond(request, 200, body)
+					response.Body = body
+					return response, nil
+				}
+			}
+			_, err := post([]byte("{}"), "test-secret", time.Second, "https://jev.invalid/", roundTrip)
+			got := assertJevError(t, err, c.reason)
+			if got.Phase != c.phase {
+				t.Errorf("phase = %q, want %q", got.Phase, c.phase)
+			}
+			if got.Detail != "" || got.Error() != c.reason || got.PyType() != "JevError" || got.PyModule() != "agent_decisions.jev" {
+				t.Fatalf("public error changed: %#v", got)
+			}
+			if c.response && !body.closed {
+				t.Fatal("failed response body was not closed")
+			}
+		})
+	}
+}
+
+func TestNonTransportErrorsHaveNoFailurePhase(t *testing.T) {
+	for _, c := range []struct {
+		name, endpoint, reason, detail string
+		transport                      roundTripper
+	}{
+		{"invalid URL", "://invalid", "unreachable", "", failure(errors.New("unused"))},
+		{"HTTP", "https://jev.invalid/", "http_401", "", status(401, "private response detail")},
+		{"context limit", "https://jev.invalid/", "http_400", "max_tokens_exceeded", status(400, `{"detail":{"error_type":"max_tokens_exceeded"}}`)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := post([]byte("{}"), "test-secret", time.Second, c.endpoint, c.transport)
+			got := assertJevError(t, err, c.reason)
+			if got.Phase != "" || got.Detail != c.detail {
+				t.Fatalf("unexpected error metadata: %#v", got)
+			}
+		})
 	}
 }
 

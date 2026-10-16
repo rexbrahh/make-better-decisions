@@ -1276,6 +1276,10 @@ func askerWithKey(loadKey func() (string, error), remote func(*json.Object, *jso
 			if failure.Detail != "" {
 				callMetrics.Set("error_detail", failure.Detail)
 			}
+			switch failure.Phase {
+			case "request", "response_body":
+				callMetrics.Set("error_phase", failure.Phase)
+			}
 		}
 		return answers, err
 	}

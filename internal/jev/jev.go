@@ -41,6 +41,7 @@ var (
 type JevError struct {
 	Reason string
 	Detail string
+	Phase  string
 }
 
 func (e *JevError) Error() string {
@@ -129,7 +130,7 @@ func post(body []byte, key string, timeout time.Duration, endpoint string, round
 	client := &http.Client{Transport: roundTripper, Timeout: timeout, CheckRedirect: checkRedirect}
 	response, err := client.Do(request)
 	if err != nil {
-		return nil, transportError(err)
+		return nil, transportError(err, "request")
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 { // urllib raises HTTPError for these
@@ -145,7 +146,7 @@ func post(body []byte, key string, timeout time.Duration, endpoint string, round
 	}
 	raw, err := io.ReadAll(response.Body)
 	if err != nil {
-		return nil, transportError(err)
+		return nil, transportError(err, "response_body")
 	}
 	return raw, nil
 }
@@ -164,12 +165,12 @@ func checkRedirect(request *http.Request, via []*http.Request) error {
 }
 
 // transportError maps a failed exchange: a timeout is "timeout", any other failure "unreachable".
-func transportError(err error) error {
+func transportError(err error, phase string) error {
 	var netError net.Error
 	if errors.As(err, &netError) && netError.Timeout() {
 		return &JevError{Reason: "timeout"}
 	}
-	return &JevError{Reason: "unreachable"}
+	return &JevError{Reason: "unreachable", Phase: phase}
 }
 
 // validationDetail returns "max_tokens_exceeded" when a 400 body reports Jev's context limit, and "" for
