@@ -220,7 +220,7 @@ func TestHandleLargeTranscriptMatchesPython(t *testing.T) {
 	for i, name := range names {
 		t.Logf("%-20s python %8.1f ms   go %8.1f ms", name, ms(fromPython[i].elapsed), ms(fromGo[i].elapsed))
 	}
-	pn, gn := &normalizer{map[string]string{}}, &normalizer{map[string]string{}}
+	pn, gn := &normalizer{receipts: map[string]string{}}, &normalizer{receipts: map[string]string{}}
 	compareResults(t, steps, fromPython, fromGo, pn, gn)
 	compareStates(t, pythonFiles, goFiles, pn, gn)
 }

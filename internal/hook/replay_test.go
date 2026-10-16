@@ -574,7 +574,7 @@ func (r *replayReport) compare(t *testing.T, name, host string, steps []replaySt
 		r.mismatches[key] = append(r.mismatches[key], name)
 	}
 
-	pn, gn := &normalizer{map[string]string{}}, &normalizer{map[string]string{}}
+	pn, gn := &normalizer{receipts: map[string]string{}}, &normalizer{receipts: map[string]string{}}
 	for i := range steps {
 		p, g := python[i], golang[i]
 		switch {

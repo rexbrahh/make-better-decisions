@@ -115,6 +115,9 @@ func fixtureRepo(t *testing.T, files map[string]string) string {
 	t.Helper()
 	repo := t.TempDir()
 	for name, text := range files {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(repo, name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(filepath.Join(repo, name), []byte(text), 0o644); err != nil {
 			t.Fatal(err)
 		}

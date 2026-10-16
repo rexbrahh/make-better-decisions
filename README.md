@@ -304,7 +304,9 @@ The boundary helpers wrap third-party stdio MCP servers. Codex and Adrafinil ret
 
 These hooks are not a universal proof boundary. They do not protect against a same-UID privileged process, an operator, or a trusted external host service that acts outside the hook path.
 
-Captured native Codex ancestry and Claude dispatch fixtures pass parser and receipt tests. New live GUI activation and worker inheritance remain unverified.
+Captured native Codex ancestry and Claude dispatch fixtures pass parser and receipt tests.
+Native Codex workers with encrypted briefs use the reserved receipt task name in the [assignment instructions](skills/deciding/SKILL.md).
+The [native worker validation record](docs/validation/native-worker-inheritance-2026-10-16.md) records the live receipt and coverage checks.
 
 ## Tests
 

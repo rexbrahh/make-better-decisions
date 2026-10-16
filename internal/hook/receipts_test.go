@@ -4,11 +4,13 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/rexbrahh/make-better-decisions/internal/gates"
 	"github.com/rexbrahh/make-better-decisions/internal/jev/jevtest"
 	"github.com/rexbrahh/make-better-decisions/internal/ledger"
+	"github.com/rexbrahh/make-better-decisions/internal/policy"
 	"github.com/rexbrahh/make-better-decisions/internal/py/json"
 	"github.com/rexbrahh/make-better-decisions/internal/py/pyerr"
 	"github.com/rexbrahh/make-better-decisions/internal/py/shlex"
@@ -217,6 +219,7 @@ func TestReceiptIdentifierMustMatchTheSignedVerdict(t *testing.T) {
 // --- NativeInheritanceTest
 
 type rcPrepareOptions struct {
+	opaque        bool   // native encrypted dispatch without a readable child brief
 	unassigned    bool   // assigned=False
 	scope         string // default "parser.py"
 	parentRepo    string // default the test directory
@@ -238,6 +241,9 @@ func rcPrepare(t *testing.T, dir string, o rcPrepareOptions) rcInheritance {
 		scope = "parser.py"
 	}
 	parent := filepath.Join(dir, "parent.jsonl")
+	if o.opaque {
+		writeFile(t, filepath.Join(dir, "parser.py"), "def parse(stream): return stream.read()\n")
+	}
 	parentRecords := []*json.Object{rcNativeMetadata("root-session", "root-session", dir, "", ""),
 		codexUser("Refactor the parser and preserve its public output format."),
 		rcCodexCall("read-parser", "Bash", json.NewObject("cmd", "cat parser.py")),
@@ -289,17 +295,26 @@ func rcPrepare(t *testing.T, dir string, o rcPrepareOptions) rcInheritance {
 			message += "\nEvidence refs: read-parser"
 		}
 	}
+	taskName := "parser"
+	if o.opaque {
+		taskName = "ad_" + receiptID
+		message = "encrypted: synthetic native dispatch"
+	}
 	parentRecords = append(parentRecords,
 		rcCodexCall("parent-decision", "Bash", json.NewObject("cmd", command)),
 		codexOutput("parent-decision", verdict),
 		rcCodexCall("dispatch-parser", "spawn_agent", json.NewObject(
-			"task_name", "parser", "message", message, "fork_turns", "none",
+			"task_name", taskName, "message", message, "fork_turns", "none",
 			"model", "gpt-6-luna", "reasoning_effort", "max")),
-		codexOutput("dispatch-parser", dumps(t, json.NewObject("task_name", "/root/parser", "nickname", "Fixture"))))
+		codexOutput("dispatch-parser", dumps(t, json.NewObject("task_name", "/root/"+taskName, "nickname", "Fixture"))))
 	writeJSONL(t, dir, "parent.jsonl", parentRecords, "")
+	brief := codexUser("<codex_delegation>" + message + "</codex_delegation>")
+	if o.opaque {
+		brief = json.NewObject("type", "response_item", "payload", json.NewObject(
+			"type", "agent_message", "encrypted_content", "synthetic encrypted native brief"))
+	}
 	child := writeJSONL(t, dir, "child.jsonl", []*json.Object{
-		rcNativeMetadata("child-thread", "root-session", dir, "root-session", "/root/parser"),
-		codexUser("<codex_delegation>" + message + "</codex_delegation>")}, "")
+		rcNativeMetadata("child-thread", "root-session", dir, "root-session", "/root/"+taskName), brief}, "")
 	workerCwd := dir
 	if o.parentRepo != "" {
 		workerCwd = o.parentRepo
@@ -333,6 +348,190 @@ func TestParentScopedReceiptReachesAVerifiedWorker(t *testing.T) {
 	assertEqual(t, edits[0].Value("agent_id"), "/root/parser")
 	assertEqual(t, at(t, edits[0], "state", "decisions", 0, "receipt_id"), prepared.receiptID)
 	assertEqual(t, at(t, edits[0], "state", "decisions", 0, "origin"), "parent_dispatch")
+}
+
+func TestNativeReceiptTaskReachesAnOpaqueWorker(t *testing.T) {
+	dir := setUp(t)
+	prepared := rcPrepare(t, dir, rcPrepareOptions{opaque: true})
+	if rcLoad(t, prepared.child, "codex").Brief != nil {
+		t.Fatal("encrypted fixture unexpectedly supplies a readable brief")
+	}
+	if result := handle(t, "pre_tool_use", prepared.payload(), "codex", rcCovered(.95).Post); result != nil {
+		t.Fatalf("completed native receipt assignment must cover the worker: %s", dumps(t, result))
+	}
+	edits := gateRows(t, "root-session", "edit")
+	if len(edits) != 1 {
+		t.Fatalf("%d edit rows", len(edits))
+	}
+	assertEqual(t, edits[0].Value("agent_id"), "/root/ad_"+prepared.receiptID)
+	assertEqual(t, at(t, edits[0], "state", "decisions", 0, "receipt_id"), prepared.receiptID)
+	assertEqual(t, at(t, edits[0], "state", "decisions", 0, "origin"), "parent_dispatch")
+	assertEqual(t, at(t, edits[0], "state", "decisions", 0, "action"), "binding")
+	assertEqual(t, at(t, edits[0], "state", "decisions", 0, "pick"), "chunks")
+}
+
+func rcRewriteTranscript(t *testing.T, path string, change func(*json.Object)) {
+	t.Helper()
+	var records []*json.Object
+	for _, line := range strings.Split(strings.TrimSuffix(readFile(t, path), "\n"), "\n") {
+		row := obj(t, line)
+		change(row.Value("payload").(*json.Object))
+		records = append(records, row)
+	}
+	writeJSONL(t, filepath.Dir(path), filepath.Base(path), records, "")
+}
+
+func TestNativeReceiptTaskRejectsUnverifiedDispatch(t *testing.T) {
+	for _, tc := range []struct {
+		name, file string
+		change     func(*json.Object)
+	}{
+		{"unmarked child", "child.jsonl", func(p *json.Object) {
+			if p.Value("id") == "child-thread" {
+				at(t, p, "source", "subagent", "thread_spawn").(*json.Object).Set("agent_path", "/root/parser")
+			}
+		}},
+		{"malformed marker", "child.jsonl", func(p *json.Object) {
+			if p.Value("id") == "child-thread" {
+				at(t, p, "source", "subagent", "thread_spawn").(*json.Object).Set("agent_path", "/root/ad_review_bad")
+			}
+		}},
+		{"wrong parent", "child.jsonl", func(p *json.Object) {
+			if p.Value("id") == "child-thread" {
+				at(t, p, "source", "subagent", "thread_spawn").(*json.Object).Set("parent_thread_id", "another-parent")
+			}
+		}},
+		{"wrong shared session", "child.jsonl", func(p *json.Object) {
+			if p.Value("id") == "child-thread" {
+				p.Set("session_id", "another-session")
+			}
+		}},
+		{"wrong immediate parent", "parent.jsonl", func(p *json.Object) {
+			if p.Value("id") == "root-session" {
+				p.Set("source", json.NewObject("subagent", json.NewObject("thread_spawn", json.NewObject(
+					"parent_thread_id", "ancestor", "agent_path", "/root/another"))))
+			}
+		}},
+		{"unmarked input", "parent.jsonl", func(p *json.Object) {
+			if p.Value("call_id") == "dispatch-parser" && p.Value("type") == "function_call" {
+				p.Value("arguments").(*json.Object).Set("task_name", "parser")
+			}
+		}},
+		{"different tool", "parent.jsonl", func(p *json.Object) {
+			if p.Value("call_id") == "dispatch-parser" && p.Value("type") == "function_call" {
+				p.Set("name", "Agent")
+			}
+		}},
+		{"unfinished dispatch", "parent.jsonl", func(p *json.Object) {
+			if p.Value("call_id") == "dispatch-parser" && p.Value("type") == "function_call_output" {
+				p.Set("output", "")
+			}
+		}},
+		{"different output child", "parent.jsonl", func(p *json.Object) {
+			if p.Value("call_id") == "dispatch-parser" && p.Value("type") == "function_call_output" {
+				p.Set("output", `{"task_name":"/root/another"}`)
+			}
+		}},
+		{"partial verdict", "parent.jsonl", func(p *json.Object) {
+			if p.Value("call_id") == "parent-decision" && p.Value("type") == "function_call_output" {
+				p.Set("output", "ts-decide verdict: ADVISORY")
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := setUp(t)
+			prepared := rcPrepare(t, dir, rcPrepareOptions{opaque: true})
+			rcRewriteTranscript(t, filepath.Join(dir, tc.file), tc.change)
+			assertEqual(t, decision(t, handle(t, "pre_tool_use", prepared.payload(), "codex", rcCovered(.99).Post)), "deny")
+		})
+	}
+}
+
+func TestNativeReceiptTaskRequiresACompletedCurrentReceipt(t *testing.T) {
+	for _, change := range []string{"unknown receipt", "provider", "model", "context_profile", "review_contract"} {
+		t.Run(change, func(t *testing.T) {
+			dir := setUp(t)
+			prepared := rcPrepare(t, dir, rcPrepareOptions{opaque: true})
+			ctx := rcContext(t, prepared.payload(), "codex")
+			if len(ctx.InheritedEntries) != 1 {
+				t.Fatal("positive control has no inherited receipt")
+			}
+			for _, entry := range ctx.Entries {
+				if entry.Value("gate") != "decide" {
+					continue
+				}
+				if change == "unknown receipt" {
+					entry.Set("receipt_id", "review_00000000000000000000000000000000")
+				} else {
+					identity := json.NewObject("provider", ctx.Reviewer.Name, "model", ctx.Reviewer.Model,
+						"context_profile", ctx.Reviewer.ContextProfile, "review_contract", policy.ReviewContract)
+					identity.Set(change, "another-review-identity")
+					entry.Set("review_identity", identity)
+				}
+			}
+			inherited, err := inheritedDecisions(ctx.Transcript, ctx.Entries, "codex", ctx.SessionID,
+				ctx.RepoID, nil, prepared.payload(), ctx.Reviewer)
+			if err != nil || len(inherited) != 0 {
+				t.Fatalf("invalid receipt inherited: %s, %v", dumps(t, inherited), err)
+			}
+		})
+	}
+}
+
+func TestNativeReceiptTaskPreservesScopeFreshnessAndCoverage(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		options rcPrepareOptions
+		covered float64
+	}{
+		{"wrong scope", rcPrepareOptions{scope: "another.py"}, .99},
+		{"wrong repository", rcPrepareOptions{parentRepo: "/another/repository"}, .99},
+		{"stale source", rcPrepareOptions{}, .99},
+		{"insufficient coverage", rcPrepareOptions{}, .79},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := setUp(t)
+			tc.options.opaque = true
+			prepared := rcPrepare(t, dir, tc.options)
+			if tc.name == "stale source" {
+				writeFile(t, filepath.Join(dir, "parser.py"), "def parse(stream): return None\n")
+			}
+			assertEqual(t, decision(t, handle(t, "pre_tool_use", prepared.payload(), "codex", rcCovered(tc.covered).Post)), "deny")
+		})
+	}
+}
+
+func TestNativeReceiptTaskAssignsOnlyThePickedOption(t *testing.T) {
+	dir := setUp(t)
+	prepared := rcPrepare(t, dir, rcPrepareOptions{opaque: true})
+	rcRewriteTranscript(t, filepath.Join(dir, "parent.jsonl"), func(p *json.Object) {
+		if p.Value("call_id") == "dispatch-parser" && p.Value("type") == "function_call" {
+			p.Value("arguments").(*json.Object).Set("message", "Decision receipt: "+prepared.receiptID+
+				"\nAccepted option: whole\nEvidence refs: read-parser")
+		}
+	})
+	ctx := rcContext(t, prepared.payload(), "codex")
+	if len(ctx.InheritedEntries) != 1 {
+		t.Fatal("no inherited picked receipt")
+	}
+	assertEqual(t, ctx.InheritedEntries[0].Value("pick"), "chunks")
+	assertEqual(t, ctx.InheritedEntries[0].Value("accepted_evidence_refs"), []any{})
+}
+
+func TestReadableBriefDoesNotUseTheNativeReceiptMarker(t *testing.T) {
+	dir := setUp(t)
+	prepared := rcPrepare(t, dir, rcPrepareOptions{opaque: true})
+	rcRewriteTranscript(t, prepared.child, func(p *json.Object) {
+		if p.Value("type") == "agent_message" {
+			p.Set("type", "message")
+			p.Set("role", "user")
+			p.Set("content", []any{json.NewObject("type", "input_text", "text", "Implement parser reads.")})
+		}
+	})
+	if rcLoad(t, prepared.child, "codex").Brief == nil {
+		t.Fatal("readable-brief control has no brief")
+	}
+	assertEqual(t, decision(t, handle(t, "pre_tool_use", prepared.payload(), "codex", rcCovered(.99).Post)), "deny")
 }
 
 // py: tests/test_receipts.py::test_inherited_parent_selection_is_binding_for_the_worker

@@ -312,7 +312,8 @@ var receiptPatternText = regexp.MustCompile(`review_[0-9a-f]{32}`)
 // source, become ordinals in order of appearance; the *_ms timings of jev's own clock under "metrics" become
 // 0, and api_calls, which parallel chunks append in any order, are sorted.
 type normalizer struct {
-	receipts map[string]string
+	receipts  map[string]string
+	wallClock bool // only standalone CLI subprocesses use their real clocks
 }
 
 func (n *normalizer) text(s string) string {
@@ -330,6 +331,13 @@ func (n *normalizer) json(t *testing.T, s string) string {
 	value := loads(t, n.text(s))
 	if row, ok := value.(*json.Object); ok {
 		row.Delete("_ledger_seal")
+		if entry, ok := row.Value("entry").(*json.Object); ok && n.wallClock {
+			if stamp, ok := entry.Value("time").(string); ok {
+				if _, err := time.Parse("2006-01-02T15:04:05Z", stamp); err == nil {
+					entry.Set("time", "<wall-clock>")
+				}
+			}
+		}
 	}
 	text, err := json.Dumps(zeroTimings(value, false), json.Options{SortKeys: true})
 	if err != nil {
@@ -506,7 +514,7 @@ func replay(t *testing.T, python, work string, c replayCase) {
 	goFiles := snapshot(t, state)
 	checkSeals(t, "go", goFiles)
 
-	pn, gn := &normalizer{map[string]string{}}, &normalizer{map[string]string{}}
+	pn, gn := &normalizer{receipts: map[string]string{}}, &normalizer{receipts: map[string]string{}}
 	compareResults(t, steps, fromPython, fromGo, pn, gn)
 	compareStates(t, pythonFiles, goFiles, pn, gn)
 	responses, errors, requests, rows := 0, 0, 0, 0
@@ -850,7 +858,9 @@ func TestMainMatchesPython(t *testing.T) {
 					availability(t, "claude")
 				}
 				command := runProgram(t, []byte(c.stdin), env, name, args...)
-				return command, snapshot(t, state)
+				files := snapshot(t, state)
+				checkSeals(t, name, files)
+				return command, files
 			}
 			py, pyFiles := run(python, append([]string{"-I", "-B", filepath.Join(oracletest.Source(t), "hooks", "hook.py")}, c.args...)...)
 			golang, goFiles := run(binary, append([]string{"hook"}, c.args...)...)
@@ -865,9 +875,31 @@ func TestMainMatchesPython(t *testing.T) {
 			if py.stderr != golang.stderr {
 				t.Errorf("stderr\npython %q\ngo     %q", py.stderr, golang.stderr)
 			}
-			pn, gn := &normalizer{map[string]string{}}, &normalizer{map[string]string{}}
+			pn := &normalizer{receipts: map[string]string{}, wallClock: true}
+			gn := &normalizer{receipts: map[string]string{}, wallClock: true}
 			compareStates(t, pyFiles, goFiles, pn, gn)
 			_ = work
+		})
+	}
+}
+
+func TestCLIClockNormalizationPreservesOtherLedgerFields(t *testing.T) {
+	first := `{"entry":{"time":"2026-10-16T20:06:52Z","prompt":"Keep the cache."}}`
+	nextSecond := `{"entry":{"time":"2026-10-16T20:06:53Z","prompt":"Keep the cache."}}`
+	for _, tc := range []struct {
+		name, other      string
+		wallClock, equal bool
+	}{
+		{"independent clocks", nextSecond, true, true},
+		{"fixed replay clocks", nextSecond, false, false},
+		{"changed content", strings.Replace(nextSecond, "Keep", "Delete", 1), true, false},
+		{"malformed timestamp", strings.Replace(nextSecond, "2026-10-16T20:06:53Z", "invalid", 1), true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := &normalizer{receipts: map[string]string{}, wallClock: tc.wallClock}
+			if got := n.json(t, first) == n.json(t, tc.other); got != tc.equal {
+				t.Fatalf("ledger equality = %v, want %v", got, tc.equal)
+			}
 		})
 	}
 }

@@ -106,6 +106,12 @@ New reusable verdicts include a receipt id. Include `Decision receipt: review_<i
 Include `Accepted option: <id>` to select the reviewed option. A non-picked advisory option requires successful invariant checks and `Evidence refs: <call ids>`.
 The hook verifies native ancestry, completed dispatch, and repository identity. The accepted approach binds the worker. Nested Claude inheritance is unsupported.
 
+For native Codex dispatch, set `task_name` to `ad_` followed by the completed receipt ID.
+For example, a receipt named `review_<32 lowercase hex characters>` uses `ad_review_<32 lowercase hex characters>`.
+When Codex hides the child brief, this marker assigns only the receipt's picked option.
+The hook still requires the matching completed dispatch and current scoped receipt. The marker cannot assign an advisory override.
+Readable briefs use the verified message rules above.
+
 Unchanged scoped requests reuse their result. Rephrasing cannot reroll a pick or an evidence request.
 `PROCEED` reuse requires identical `decision` text. Changed text triggers a fresh classification.
 This exception does not reroll a material pick, evidence request, refusal or owner question.

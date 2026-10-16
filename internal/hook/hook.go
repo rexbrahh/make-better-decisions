@@ -756,6 +756,7 @@ var (
 	// py: agent_decisions/hook.py _inherited_decisions (?m)^Decision receipt:\s*([A-Za-z0-9_-]{1,128})\s*$
 	receiptPattern = regexp.MustCompile(`(?m)^Decision receipt:` + pyre.Space + `*([A-Za-z0-9_-]{1,128})` +
 		pyre.Space + `*$`)
+	receiptTaskPattern = regexp.MustCompile(`^ad_(review_[0-9a-f]{32})$`)
 )
 
 // assignment is a receipt that a parent dispatch assigned: the accepted option (nil for None) and the
@@ -769,7 +770,14 @@ type assignment struct {
 func inheritedDecisions(t transcript.Transcript, entries []*json.Object, host, session, repoID string,
 	keys []string, payload *json.Object, provider policy.ReviewProvider) ([]*json.Object, error) {
 	identity := t.Identity
-	if t.Brief == nil {
+	markerReceipt := ""
+	if host == "codex" && t.Brief == nil && identity != nil && identity.AgentID != nil {
+		name := (*identity.AgentID)[strings.LastIndexByte(*identity.AgentID, '/')+1:]
+		if match := receiptTaskPattern.FindStringSubmatch(name); match != nil {
+			markerReceipt = match[1]
+		}
+	}
+	if t.Brief == nil && markerReceipt == "" {
 		return nil, nil
 	}
 	var agentID, expectedParent any
@@ -866,6 +874,14 @@ func inheritedDecisions(t transcript.Transcript, entries []*json.Object, host, s
 			if err != nil {
 				if errors.As(err, new(*json.RecursionError)) {
 					return nil, err
+				}
+				continue
+			}
+			if markerReceipt != "" {
+				object, ok := result.(*json.Object)
+				if call.Name == "spawn_agent" && args.Value("task_name") == "ad_"+markerReceipt &&
+					ok && sameValue(object.Value("task_name"), agentID) {
+					assigned[markerReceipt] = assignment{}
 				}
 				continue
 			}

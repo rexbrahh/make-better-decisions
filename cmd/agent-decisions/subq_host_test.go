@@ -16,6 +16,7 @@ import (
 	"github.com/rexbrahh/make-better-decisions/internal/policy"
 	pyjson "github.com/rexbrahh/make-better-decisions/internal/py/json"
 	"github.com/rexbrahh/make-better-decisions/internal/subq"
+	"github.com/rexbrahh/make-better-decisions/internal/transcript"
 )
 
 // TestLiveSnapHosts uses the installed hooks with temporary signed policy on both native hosts.
@@ -44,11 +45,35 @@ func TestLiveSnapHosts(t *testing.T) {
 		"Independently, perform this exact authorized edit: in greet.py replace the string \"Hello, \" with \"Hi, \". " +
 		"Use the declared edit tool (Edit on Claude, apply_patch on Codex), separately for each file. Make no other change. " +
 		"Do not read protected state or keys, change policy, delegate or contact peers."
-	for _, host := range []string{"codex", "claude"} {
-		t.Run(host, func(t *testing.T) {
-			repo := fixtureRepo(t, map[string]string{"greet.py": greetSource, "codec.py": "ENCODING = None\n",
+	for _, mode := range []string{"codex", "claude", "codex-worker"} {
+		t.Run(mode, func(t *testing.T) {
+			host := strings.TrimSuffix(mode, "-worker")
+			worker := mode == "codex-worker"
+			files := map[string]string{"greet.py": greetSource, "codec.py": "ENCODING = None\n",
 				".gitignore": "__pycache__/\n",
-				"codec.txt":  "ASCII cannot encode 李. UTF-8 encodes both Zoë and 李.\n"})
+				"codec.txt":  "ASCII cannot encode 李. UTF-8 encodes both Zoë and 李.\n"}
+			runPrompt := prompt
+			if worker {
+				files[".codex/agents/snap-luna-probe.toml"] = `name = "snap_luna_probe"
+description = "Implement the selected encoding from one scoped parent receipt."
+model = "gpt-6-luna"
+model_reasoning_effort = "max"
+developer_instructions = "This task is self-contained. Read only codec.txt, codec.py and host-required skills. Use exactly one declared apply_patch call to set ENCODING to the parent's picked codec. Stop on denial. Do not read memory, unrelated files, protected state or keys. Do not consult again, use shell writes, delegate or change policy."
+`
+				runPrompt = "This native plugin qualification is self-contained and uses synthetic data. Read only codec.txt, codec.py, greet.py and host-required skills. Do not read memory or unrelated files. " +
+					"Preserve Zoë and 李 exactly. Read codec.txt. Run this exact consultation once as a separate complete shell call:\n" +
+					decide + " <<'EOF'\n" + request + "\nEOF\n" +
+					"Keep the actual verdict. Do not retry. If it is ADVISORY or BINDING with a receipt, spawn exactly one native child. " +
+					"Set task_name to ad_ followed by that exact receipt ID. Set agent_type to snap_luna_probe, model to gpt-6-luna, reasoning_effort to max and fork_turns to none. " +
+					"Include Decision receipt: <actual receipt> and Accepted option: <actual pick> as separate lines in its message. " +
+					"Tell it to read codec.txt and codec.py and set the one ENCODING assignment to the picked Python codec using exactly one declared apply_patch call. " +
+					"It must stop on denial without a retry. It must not consult again, read memory or unrelated files, use shell writes, delegate, inspect keys or protected state, or change policy. " +
+					"Wait for that same child to finish. The parent must change no file before the child completes. " +
+					"Do not edit codec.py yourself. For other verdicts, leave codec.py unchanged and do not spawn. " +
+					"After the child completes, make this exact authorized parent edit with apply_patch: replace the string \"Hello, \" with \"Hi, \" in greet.py. " +
+					"Make no other change. Do not inspect protected state or keys or change policy."
+			}
+			repo := fixtureRepo(t, files)
 			state := t.TempDir()
 			t.Setenv("AGENT_DECISIONS_STATE", state)
 			entry, err := install.InstallationEntry(host, state, pyjson.NewObject(), []any{}, nil, nil)
@@ -65,7 +90,7 @@ func TestLiveSnapHosts(t *testing.T) {
 			if host == "codex" {
 				cmd = exec.CommandContext(ctx, "codex", "-p", "cli", "exec", "--model", "gpt-6-luna",
 					"-c", `model_reasoning_effort="max"`, "-c", nativeCodexTrustOverride(t, repo),
-					"--sandbox", "workspace-write", "-C", repo, "--json", prompt)
+					"--sandbox", "workspace-write", "-C", repo, "--json", runPrompt)
 			} else {
 				cmd = exec.CommandContext(ctx, "claude", "-p", prompt, "--model", claudeModel,
 					"--max-budget-usd", claudeBudget, "--output-format", "json", "--permission-mode", "acceptEdits")
@@ -99,6 +124,8 @@ func TestLiveSnapHosts(t *testing.T) {
 			}
 			consulted, edited, coveredEdit, calls, consultations := false, false, false, 0, 0
 			receipts := map[string]bool{}
+			workerTranscripts := map[string]string{}
+			parentTranscripts := map[string]string{}
 			var editRows []*pyjson.Object
 			for _, path := range paths {
 				id := strings.TrimSuffix(filepath.Base(path), ".jsonl")
@@ -110,6 +137,16 @@ func TestLiveSnapHosts(t *testing.T) {
 					t.Fatal(err)
 				}
 				for _, row := range rows {
+					if worker && row.Value("gate") == "host_identity" {
+						agent, _ := row.Value("agent_id").(string)
+						path, _ := row.Value("transcript_path").(string)
+						if row.Value("agent_id") == nil {
+							thread, _ := row.Value("thread_id").(string)
+							parentTranscripts[thread] = path
+						} else {
+							workerTranscripts[agent] = path
+						}
+					}
 					if row.Value("gate") == "decide" {
 						consultations++
 					}
@@ -181,6 +218,13 @@ func TestLiveSnapHosts(t *testing.T) {
 					score = 1
 				}
 				decisions, _ := state.Value("decisions").([]any)
+				if worker {
+					encoded, err := pyjson.Dumps(decisions, pyjson.Options{})
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Logf("native worker encoding edit: agent=%v decisions=%s", row.Value("agent_id"), encoded)
+				}
 				coverageAt := policy.BindAt
 				if row.Value("agent_id") == nil {
 					coverageAt = policy.FollowAt
@@ -190,7 +234,13 @@ func TestLiveSnapHosts(t *testing.T) {
 					decision, _ := value.(*pyjson.Object)
 					if decision != nil {
 						receipt, _ := decision.Value("receipt_id").(string)
-						receiptMatched = receiptMatched || receipts[receipt]
+						matched := receipts[receipt]
+						if worker {
+							matched = matched && row.Value("agent_id") == "/root/ad_"+receipt &&
+								decision.Value("origin") == "parent_dispatch" && decision.Value("action") == "binding" &&
+								decision.Value("pick") == "utf8"
+						}
+						receiptMatched = receiptMatched || matched
 					}
 				}
 				t.Logf("%s encoding edit: receipt_matched=%v covered=%.3f threshold=%.2f", host, receiptMatched, score, coverageAt)
@@ -217,9 +267,79 @@ for name in ("Zoë", "李"):
 			if changed := git(t, repo, "status", "--porcelain"); changed != " M codec.py\n M greet.py\n" {
 				t.Fatalf("unexpected changed fixture files: %q", changed)
 			}
+			if worker {
+				if len(workerTranscripts) != 1 || len(parentTranscripts) != 1 {
+					t.Fatalf("got %d native workers and %d parents, want one each", len(workerTranscripts), len(parentTranscripts))
+				}
+				var parentPath string
+				for _, path := range parentTranscripts {
+					parentPath = path
+				}
+				for agent, path := range workerTranscripts {
+					verifySnapNativeWorker(t, path, agent, parentPath)
+				}
+			}
 			t.Logf("%s: Snap receipt, two consultation batches, covered encoding edit and exact edit verified; %d review calls, %.0fs", host, calls, time.Since(started).Seconds())
 		})
 	}
+}
+
+func verifySnapNativeWorker(t *testing.T, path, agent, parentPath string) {
+	t.Helper()
+	parent, err := transcript.Load(parentPath, "codex")
+	if err != nil || parent.Identity == nil || parent.Identity.AgentID != nil {
+		t.Fatalf("native parent identity failed: %v", err)
+	}
+	observed, err := transcript.Load(path, "codex")
+	if err != nil || observed.Identity == nil || observed.Identity.AgentID == nil ||
+		*observed.Identity.AgentID != agent || observed.Identity.ParentThreadID == nil ||
+		*observed.Identity.ParentThreadID != parent.Identity.ThreadID ||
+		observed.Identity.SessionID != parent.Identity.SessionID || observed.Brief != nil {
+		t.Fatalf("opaque native worker identity failed: %v", err)
+	}
+	dispatches := 0
+	for _, call := range parent.ToolCalls {
+		if call.Name != "spawn_agent" || call.Output == "" {
+			continue
+		}
+		var input, output struct {
+			TaskName string `json:"task_name"`
+		}
+		if json.Unmarshal([]byte(call.Input), &input) == nil && json.Unmarshal([]byte(call.Output), &output) == nil &&
+			input.TaskName == strings.TrimPrefix(agent, "/root/") && output.TaskName == agent {
+			dispatches++
+		}
+	}
+	if dispatches != 1 {
+		t.Fatalf("got %d matching completed parent dispatches, want one", dispatches)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turns, completed := 0, false
+	for _, line := range strings.Split(strings.TrimSpace(string(body)), "\n") {
+		var row struct {
+			Type    string `json:"type"`
+			Payload struct {
+				Type, Model, Effort string
+			} `json:"payload"`
+		}
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			t.Fatal(err)
+		}
+		if row.Type == "turn_context" {
+			turns++
+			if row.Payload.Model != "gpt-6-luna" || row.Payload.Effort != "max" {
+				t.Fatalf("native worker used %s/%s", row.Payload.Model, row.Payload.Effort)
+			}
+		}
+		completed = completed || row.Type == "event_msg" && row.Payload.Type == "task_complete"
+	}
+	if turns == 0 || !completed {
+		t.Fatal("native worker has no verified model context or terminal completion")
+	}
+	t.Logf("opaque native worker %s, thread %s, model gpt-6-luna/max, completed", agent, observed.Identity.ThreadID)
 }
 
 func snapEditTargets(tool string, input *pyjson.Object, repo, file string) bool {
