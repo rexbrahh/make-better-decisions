@@ -1,12 +1,12 @@
 # Native Snap receipt coverage
 
-Date: 2026-10-16. Source baseline: `97ddf96`. Installed runtime: v2.2.6.
+Date: 2026-10-16. Source baseline: `97ddf96`. Final test implementation: `f9a62cf`. Installed runtime: v2.2.6.
 
 The [native test](../../cmd/agent-decisions/subq_host_test.go) now checks a selected implementation edit against its completed Snap receipt.
 The previous test checked a receipt and an unrelated exact edit.
-Codex passes the stricter path and scope assertions. Claude's stricter run stops before model work with `authentication_failed`.
-An earlier draft passed both hosts, before independent review identified a weak target assertion.
-That earlier result does not qualify the final Claude assertion.
+Both native hosts pass the stricter path, scope and receipt assertions on the same final test source.
+The successful Claude run explicitly selects the installation's existing authenticated configuration root with `CLAUDE_CONFIG_DIR`.
+An earlier authentication failure remains recorded. Checking only the default root did not establish that the selected installation root needed login.
 
 ## Required observations
 
@@ -48,16 +48,24 @@ A temporary cleanup-writer prototype was removed and is not part of this change.
 | Final Linux amd64 command tests | 32 passed, including all 18 path controls. Three native suites and two existing Python-dependent tests skipped. |
 | Native Codex factual read with the inline override | PASS in 16.52 seconds. Both settings files remain unchanged. No consultation was requested. |
 | Final native Snap run on Codex | PASS in 46.22 seconds. Receipt matched, coverage 0.982, threshold 0.50. Both settings files remain unchanged. |
-| Stricter native Snap run on Claude | FAIL before fixture model work in 1.36 seconds. The original native record reports `authentication_failed`. |
+| Final native Snap run on Claude | PASS in 19.25 seconds. Receipt matched, coverage 0.976, threshold 0.50. Both settings files and the symlink remain unchanged. |
 
 `go vet ./cmd/agent-decisions` passes on the final source.
 Linux uses the existing local QA image, a read-only Go toolchain, read-only source, no network, two CPUs and 2 GB memory.
 It does not use an SDK builder or shared cache.
 
-The final Codex run uses the final test source, including the process-error diagnostic and separate-edit corrections.
-Its test SHA-256 is `3b8190f36f519deff1bff9d8156c0dfd133f9661dd4766f148a61115869dddd2`.
-Claude authentication recovery remains necessary for its final native check.
-The installed CLI confirms `claude auth login` as the recovery command. No login or credential change was attempted.
+Both final native runs use the same test source, including the process-error diagnostic and separate-edit corrections.
+The test SHA-256 is `3b8190f36f519deff1bff9d8156c0dfd133f9661dd4766f148a61115869dddd2`.
+
+The earlier strict Claude attempt failed before model work in 1.36 seconds with `authentication_failed`.
+A later supported CLI check distinguishes two existing configuration roots: `~/.claude` is logged out, while `~/.claude-primary` is authenticated.
+They are separate directories, although the primary root links its settings and project directory to the default root.
+The successful case sets `CLAUDE_CONFIG_DIR` to the selected primary root for the test process only.
+The test reuses the primary root's existing authentication. The environment selection applies only to the test process.
+
+Before a paid native check, set `CLAUDE_CONFIG_DIR` to the authenticated root used for installation.
+Check `claude auth status` in that same environment.
+An authentication failure applies to that root. Shared settings do not establish shared authentication.
 
 Before and after the completed native attempts, the runtime retains Darwin SHA-256:
 `637af1cd55219f63ee479e6b65adb2a8900b6367ad7e8b5294afecf68b694963`.
@@ -76,7 +84,9 @@ Neither failed launch counts as a completed review.
 A second independent GPT-6 Luna/max review confirmed the path, scope and diagnostic corrections.
 It identified the combined-patch assertion and the ignored-artifact limit.
 The parent corrected the patch matcher and repeated the checks on the final source.
-Both completed readers have verified native model and effort records. Neither reader reviewed the last patch-matcher correction.
+The two earlier readers have verified native model and effort records. Neither reviewed the last patch-matcher correction.
+A later independent GPT-6 Luna/max reader inspected that final matcher, all 18 controls and the selected-root Claude records.
+It reported no concrete finding within that scope. It inspected retained results rather than running tests.
 
 These checks establish a bounded native receipt-to-edit observation on the passing fixture.
 They do not establish model calibration, default-provider readiness, worker inheritance or behavior on arbitrary implementations.
@@ -87,4 +97,5 @@ The final native process-error diagnostic is source-reviewed but not exercised b
 Only tests and documentation change. No production code, binary release or installation changes in this round.
 Jev remains the normal default. Snap remains opt-in.
 Raw attempts, parser probes, restorations, reviews and source manifests are under ignored `probe/out/subq-followup/native-covered-edit/`.
-Final offline and Codex native evidence is in `final-v2/`. The Claude authentication failure is in `path-binding/`.
+Final offline and Codex native evidence is in `final-v2/`. Final Claude native evidence is in `primary-claude/`.
+The earlier Claude authentication failure remains in `path-binding/`.

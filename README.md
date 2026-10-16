@@ -312,6 +312,8 @@ Release verification uses the observed peer workflows. A successful consultation
 
 Provider qualification covers [copied approvals](docs/validation/copied-approval-qualification-2026-10-16.md) and [response-body cancellation](docs/validation/subq-body-cancellation-2026-10-16.md).
 The [native receipt coverage record](docs/validation/native-receipt-coverage-2026-10-16.md) separates completed checks from host authentication limits.
+Native checks inherit `CLAUDE_CONFIG_DIR`. Set it to the authenticated configuration root used for installation.
+Check `claude auth status` in that same environment. Linked settings do not prove shared authentication.
 
 | Check | Pass condition |
 |---|---|
