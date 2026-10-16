@@ -14,6 +14,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -122,6 +123,15 @@ func fixtureRepo(t *testing.T, files map[string]string) string {
 	git(t, repo, "add", ".")
 	git(t, repo, "commit", "-qm", "fixture")
 	return repo
+}
+
+func nativeCodexTrustOverride(t *testing.T, repo string) string {
+	t.Helper()
+	canonical, err := filepath.EvalSymlinks(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fmt.Sprintf("projects={%q={trust_level=\"trusted\"}}", canonical)
 }
 
 // runClaude runs one headless Claude Code session on a fixture repo and returns its result and ledger.

@@ -28,7 +28,8 @@ func TestLiveRoutineReadHosts(t *testing.T) {
 			var cmd *exec.Cmd
 			if host == "codex" {
 				cmd = exec.CommandContext(ctx, "codex", "-p", "cli", "exec", "--model", "gpt-6-luna",
-					"-c", `model_reasoning_effort="max"`, "--sandbox", "read-only", "-C", repo, "--json", prompt)
+					"-c", `model_reasoning_effort="max"`, "-c", nativeCodexTrustOverride(t, repo),
+					"--sandbox", "read-only", "-C", repo, "--json", prompt)
 			} else {
 				cmd = exec.CommandContext(ctx, "claude", "-p", prompt, "--model", claudeModel,
 					"--max-budget-usd", claudeBudget, "--output-format", "json", "--permission-mode", "acceptEdits")

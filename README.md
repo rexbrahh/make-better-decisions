@@ -311,6 +311,7 @@ Captured native Codex ancestry and Claude dispatch fixtures pass parser and rece
 Release verification uses the observed peer workflows. A successful consultation must give useful direction, and ordinary execution must continue.
 
 Provider qualification covers [copied approvals](docs/validation/copied-approval-qualification-2026-10-16.md) and [response-body cancellation](docs/validation/subq-body-cancellation-2026-10-16.md).
+The [native receipt coverage record](docs/validation/native-receipt-coverage-2026-10-16.md) separates completed checks from host authentication limits.
 
 | Check | Pass condition |
 |---|---|
