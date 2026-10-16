@@ -45,7 +45,7 @@
 **Interfaces:** `scripts/build-release`, existing signed release workflow and protected installer for both hosts.
 
 - [x] Update release metadata, build Darwin and Linux assets, and verify reproducibility and Linux behavior.
-- [ ] Create signed source commit and tag. Publish assets and independently verify downloaded hashes.
-- [ ] Update both plugin caches. Preview and apply both installations through the protected installer.
-- [ ] Verify registration, trust, active version and fresh native sessions in Codex and authenticated Claude Code.
-- [ ] Publish the exact checks, artifact identities and limitations in the validation document.
+- [x] Create signed source commit and tag. Publish assets and independently verify downloaded hashes.
+- [x] Update both plugin caches. Preview and apply both installations through the protected installer.
+- [x] Verify registration, trust, active version and fresh native sessions in Codex and authenticated Claude Code.
+- [x] Publish the exact checks, artifact identities and limitations in the validation document.
