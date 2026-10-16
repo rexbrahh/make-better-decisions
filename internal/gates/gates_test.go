@@ -974,6 +974,73 @@ func TestQuestionRephrasingCannotRerollAnUnchangedScopedReview(t *testing.T) {
 	assertContains(t, second.Message, first.Record.Value("receipt_id").(string))
 }
 
+func TestRoutineReuseRequiresTheSameDecisionText(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unchanged", true: "material_clarification"}[changed], func(t *testing.T) {
+			setUp(t)
+			api := fake(map[string]any{"pick": "lfu", "sufficient": .95, "routine_operation": .95,
+				"invariant_0_lru": .95, "invariant_0_lfu": .95})
+			first := decide(t, progressRequest, makeCtx(t, ctxOptions{}), asker(api))
+			assertAction(t, first, "routine")
+			assertContains(t, first.Message, "classification: exact_operation=")
+			assertContains(t, first.Message, "routine_operation=0.95")
+			assertContains(t, first.Message, "PROCEED does not select a material approach")
+			entry := entryOf(first.Record, "host", "claude", "agent_id", nil, "action", first.Action, "verdict", first.Message)
+			request := obj(t, progressRequest)
+			if changed {
+				request.Set("decision", "Select an unimplemented cache policy. No policy has been selected; this is a material choice, not routine implementation.")
+			}
+			calls := 0
+			ask := func(state, questions *json.Object) (*json.Object, error) {
+				calls++
+				return progressAnswers(t, false, .95)(state, questions)
+			}
+			second := decide(t, request, makeCtx(t, ctxOptions{entries: []*json.Object{entry}}), ask)
+			if changed {
+				if calls != 1 {
+					t.Fatalf("changed decision reused PROCEED without a classification check")
+				}
+				assertAction(t, second, "advisory")
+				if _, ok := second.Record.Get("receipt_id"); !ok {
+					t.Fatal("the completed material review has no receipt")
+				}
+			} else {
+				if calls != 0 {
+					t.Fatal("an unchanged routine request was reviewed again")
+				}
+				assertAction(t, second, "routine")
+			}
+		})
+	}
+}
+
+func TestQuestionRephrasingCannotRerollAnUnchangedScopedDenial(t *testing.T) {
+	for _, tc := range []struct {
+		action string
+		field  string
+		value  any
+	}{
+		{"gather_evidence", "unsupported", .95},
+		{"refused", "missing_option", .95},
+		{"ask_user", "owner", "user"},
+	} {
+		t.Run(tc.action, func(t *testing.T) {
+			setUp(t)
+			api := fake(map[string]any{"pick": "lfu", "sufficient": .95, "invariant_0_lru": .95,
+				"invariant_0_lfu": .95, tc.field: tc.value})
+			first := decide(t, progressRequest, makeCtx(t, ctxOptions{}), asker(api))
+			assertAction(t, first, tc.action)
+			entry := entryOf(first.Record, "host", "claude", "agent_id", nil, "action", first.Action, "verdict", first.Message)
+			repaired := withField(obj(t, progressRequest), "decision", "How should parser cache entries be evicted?")
+			second := decide(t, repaired, makeCtx(t, ctxOptions{entries: []*json.Object{entry}}), asker(api))
+			assertAction(t, second, tc.action)
+			if len(api.Requests()) != 1 {
+				t.Fatalf("%d requests", len(api.Requests()))
+			}
+		})
+	}
+}
+
 // py: tests/test_review_progress.py::test_new_observed_source_requires_a_fresh_review
 func TestNewObservedSourceRequiresAFreshReview(t *testing.T) {
 	setUp(t)

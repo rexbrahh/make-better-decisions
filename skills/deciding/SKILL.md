@@ -90,6 +90,9 @@ Include `Accepted option: <id>` to select the reviewed option. A non-picked advi
 The hook verifies native ancestry, completed dispatch, and repository identity. The accepted approach binds the worker. Nested Claude inheritance is unsupported.
 
 Unchanged scoped requests reuse their result. Rephrasing cannot reroll a pick or an evidence request.
+`PROCEED` reuse requires identical `decision` text. Changed text triggers a fresh classification.
+This exception does not reroll a material pick, evidence request, refusal or owner question.
+New `PROCEED` responses show the scores for routine work and exact instructions.
 Repair a refused wording field without changing requirements. The repaired request retains its decision identity.
 Contract history is background evidence. It grants no new permission. Changed or unchecked contract hashes require fresh review.
 Retained scoped source hashes must also stay current. Refresh the review before using changed source to support a later material choice.

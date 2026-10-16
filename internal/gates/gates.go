@@ -697,6 +697,11 @@ func verdict(action, decision string, answers *json.Object, unverified, reasons 
 	if e.lt(confidence, bindAt) {
 		lines = append(lines, "preference: uncertain (confidence "+e.fixed2(confidence)+"; binding requires 0.80)")
 	}
+	if action == "routine" {
+		lines = append(lines, "classification: exact_operation="+e.fixed2(e.get(e.get(answers, "exact_operation", &json.Object{}), "noul", 0.0))+
+			"; routine_operation="+e.fixed2(e.get(e.get(answers, "routine_operation", &json.Object{}), "noul", 0.0))+
+			". PROCEED does not select a material approach.")
+	}
 	next := nextStep(action, display(pick), strings.Join(reasons, ", "), refusals+1)
 	missingChoice := func() any {
 		return e.get(e.get(answers, "missing_fact", &json.Object{}), "choice", nil)
@@ -1007,6 +1012,9 @@ func reuseReview(ctx Context, record *json.Object, decision, key string, options
 	}
 	if e.err != nil || prior == nil {
 		return Outcome{}, false, e.err
+	}
+	if is(prior.Value("action"), "routine") && !is(prior.Value("decision"), decision) {
+		return Outcome{}, false, nil
 	}
 	answers := e.get(prior, "answers", &json.Object{})
 	repairsQuestion := is(prior.Value("action"), "refused") && !is(prior.Value("decision"), decision) &&
