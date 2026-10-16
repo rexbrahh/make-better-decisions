@@ -58,7 +58,7 @@ func TestCompletedAndInheritedReceiptsStayWithTheirReviewIdentity(t *testing.T) 
 		reviewContract = originalContract
 		switch change {
 		case "provider":
-			ctx.Reviewer, _ = policy.Provider("jev")
+			ctx.Reviewer.Name = "jev" // Keep model and profile fixed to isolate this field.
 		case "model":
 			ctx.Reviewer.Model = "subq-next"
 		case "profile":
