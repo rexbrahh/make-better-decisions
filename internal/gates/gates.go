@@ -856,8 +856,14 @@ func Decide(raw string, ctx Context, ask Ask) (Outcome, error) {
 			}
 		}
 		if len(missing) > 0 {
-			return Outcome{Action: "gather_evidence", Message: "ts-decide verdict: GATHER EVIDENCE\ncheck: Read the contract files " +
-				"and include their paths in the next request: " + strings.Join(missing, ", "), Record: record}, nil
+			message := "ts-decide verdict: GATHER EVIDENCE\ncheck: Read the contract files " +
+				"and include their paths in the next request: " + strings.Join(missing, ", ")
+			if metadata, ok := ctx.Evidence.Value("metadata").(*json.Object); ok {
+				if root, ok := metadata.Value("source_root").(string); ok {
+					message += "\nsource root: " + quote(root)
+				}
+			}
+			return Outcome{Action: "gather_evidence", Message: message, Record: record}, nil
 		}
 		observedContracts := &json.Object{}
 		for _, path := range contracts {

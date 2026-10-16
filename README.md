@@ -4,7 +4,7 @@
 
 The goal is useful, enforceable review. Jev evaluates a material choice against observed evidence. Code checks receipt identity, scope, constraints, and failure policy. Exact instructions and routine operations need no invented choice.
 
-Version 2.1.2 rechecks a changed decision question after a prior `PROCEED` and reports its classification scores. See the [release notes](docs/releases/v2.1.2.md) and [QA record](docs/validation/v2.1.2-qa-2026-10-15.md). Earlier releases correct [installer credential diagnostics](docs/releases/v2.1.1.md) and [installation and compatibility defects](docs/validation/v2.1.0-campaign-2026-10-15.md).
+Version 2.1.3 reports the source root used for unavailable contract files. See the [release notes](docs/releases/v2.1.3.md) and [QA record](docs/validation/v2.1.3-qa-2026-10-15.md). Earlier releases correct [PROCEED reuse](docs/releases/v2.1.2.md), [installer credential diagnostics](docs/releases/v2.1.1.md) and [installation and compatibility defects](docs/validation/v2.1.0-campaign-2026-10-15.md).
 
 Version 2.0.0 replaces the Python engine with one Go binary, `agent-decisions`. The hook output, ledger rows and seals stay byte-identical to version 1.2.8. On 6,206 hook calls replayed from real transcripts, the Go engine took 1 min 40 s and the Python engine took 2 min 5 s. Ordinary tools remain independent of Jev. Required review remains the default on the declared sensitive surface. See the [release notes](docs/releases/v2.0.0.md).
 

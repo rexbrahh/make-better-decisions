@@ -42,6 +42,10 @@ Use the absolute `ts-decide` path from SessionStart. If it is missing, locate `b
 - `scope`: optional repository-relative `paths` and required `invariants`. Use `/` at the end of a directory prefix.
 - `contracts`: optional repository-relative contract files. The hook captures their current hashes.
 
+A missing-contract result shows `source root` when the hook captured that metadata.
+Resolve contract paths relative to that root. A nested shell's working directory does not change it.
+A prior tool read does not replace the required current contract hash.
+
 Scope permits 32 paths, 32 invariants, and 256 option/invariant checks. Contracts permit eight files. Split larger reviews.
 
 Each fact must match captured user text after normalization. It must be at least 12 normalized characters. A fact proves only that the user said those words. It does not prove the quoted claim is true at runtime.

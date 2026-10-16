@@ -244,6 +244,7 @@ func TestMissingContractCannotCreateAReceipt(t *testing.T) {
 	}
 	assertEqual(t, result.Action, "gather_evidence")
 	assertContains(t, result.Message, "missing.md")
+	assertContains(t, result.Message, "source root: "+dumps(t, c.dir))
 	if _, ok := result.Record.Get("receipt_id"); ok {
 		t.Fatalf("record has a receipt: %s", dumps(t, result.Record))
 	}
