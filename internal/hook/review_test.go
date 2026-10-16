@@ -70,13 +70,28 @@ func TestSnapAskerSelectsItsClientAndRedactsBothProviderKeys(t *testing.T) {
 }
 
 func TestSessionStartNamesTheSignedReviewProvider(t *testing.T) {
-	setUp(t)
-	if err := ledger.Append(json.NewObject("session_id", "installation", "gate", "installation", "action", "configured",
-		"spec", json.NewObject("host", "codex", "review_provider", "subq"))); err != nil {
-		t.Fatal(err)
+	for _, host := range []string{"codex", "claude"} {
+		for _, provider := range []string{"jev", "subq"} {
+			t.Run(host+"/"+provider, func(t *testing.T) {
+				setUp(t)
+				if err := ledger.Append(json.NewObject("session_id", "installation", "gate", "installation", "action", "configured",
+					"spec", json.NewObject("host", host, "review_provider", provider))); err != nil {
+					t.Fatal(err)
+				}
+				api := fake(nil)
+				out := handle(t, "session_start", json.NewObject("session_id", "s"), host, api.Post)
+				label := "Jev"
+				if provider == "subq" {
+					label = "SubQ Snap"
+				}
+				text := str(t, out, "hookSpecificOutput", "additionalContext")
+				assertContains(t, text, label+" reviews declared edit tools")
+				assertContains(t, text, "Routine checks, exact user instructions and independently authorized factual reads need no approach consultation.")
+				assertContains(t, text, "For a material choice, run ")
+				assertEqual(t, len(api.Requests()), 0)
+			})
+		}
 	}
-	out := handle(t, "session_start", json.NewObject("session_id", "s"), "codex", fake(nil).Post)
-	assertContains(t, dumps(t, out), "SubQ Snap reviews declared edit tools")
 }
 
 func TestToolInputCannotSelectTheReviewProvider(t *testing.T) {

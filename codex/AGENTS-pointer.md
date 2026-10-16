@@ -1,3 +1,4 @@
 Legacy manual installation only. Native Codex plugin installation provides the skill and SessionStart instructions.
-Before discretionary edits, approach choices, or questions for the user, run `ts-decide` as a separate shell call.
-Use the deciding skill bundled in this plugin. Read the verdict before the next call.
+Use the deciding skill before choosing a material approach or asking the user to decide.
+Routine checks, exact user instructions and independently authorized factual reads need no approach consultation.
+For a material choice, run `ts-decide` as a separate shell call. Read the verdict before a dependent call.

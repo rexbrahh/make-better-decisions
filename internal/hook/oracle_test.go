@@ -383,11 +383,25 @@ func compareResults(t *testing.T, steps []replayStep, python, golang []*stepResu
 		} else if p.errText != g.errText {
 			t.Logf("%s: %s text differs: python %q, go %q", label, p.errClass, p.errText, g.errText)
 		}
+		goOutput := g.out
+		if step.event == "session_start" && p.out != nil && g.out != nil {
+			// Only the two deliberate startup-guidance edits differ from the frozen oracle.
+			response := obj(t, *g.out)
+			context := str(t, response, "hookSpecificOutput", "additionalContext")
+			const exemption = "Routine checks, exact user instructions and independently authorized factual reads need no approach consultation. "
+			assertContains(t, context, exemption)
+			assertContains(t, context, "For a material choice, run ")
+			context = strings.Replace(context, exemption, "", 1)
+			context = strings.Replace(context, "For a material choice, run ", "Run ", 1)
+			at(t, response, "hookSpecificOutput").(*json.Object).Set("additionalContext", context)
+			normalized := dumps(t, response)
+			goOutput = &normalized
+		}
 		switch {
-		case (p.out == nil) != (g.out == nil):
-			t.Errorf("%s: response python %v, go %v", label, deref(p.out), deref(g.out))
-		case p.out != nil && *p.out != *g.out && pn.text(*p.out) != gn.text(*g.out):
-			t.Errorf("%s: response\npython %s\ngo     %s", label, *p.out, *g.out)
+		case (p.out == nil) != (goOutput == nil):
+			t.Errorf("%s: response python %v, go %v", label, deref(p.out), deref(goOutput))
+		case p.out != nil && *p.out != *goOutput && pn.text(*p.out) != gn.text(*goOutput):
+			t.Errorf("%s: response\npython %s\ngo     %s", label, *p.out, *goOutput)
 		}
 		pr, gr := sortedRequests(t, pn, p.requests), sortedRequests(t, gn, g.requests)
 		if !slices.Equal(pr, gr) {

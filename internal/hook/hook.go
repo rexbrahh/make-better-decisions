@@ -111,8 +111,9 @@ func Handle(event string, payload any, host string, post jev.PostFunc) (*json.Ob
 		}
 		return json.NewObject("hookSpecificOutput", json.NewObject("hookEventName", "SessionStart",
 			"additionalContext", "Use the deciding skill before choosing an approach or asking the user to decide. "+
+				"Routine checks, exact user instructions and independently authorized factual reads need no approach consultation. "+
 				reviewLabel(provider)+" reviews declared edit tools and plan acceptance. Ordinary tools use normal host controls. "+
-				"Run "+shlex.Quote(pathlib.Join(root, "bin/ts-decide"))+" as a separate shell call. "+
+				"For a material choice, run "+shlex.Quote(pathlib.Join(root, "bin/ts-decide"))+" as a separate shell call. "+
 				"Read "+pathlib.Join(root, "skills/deciding/SKILL.md")+" for the request format. "+
 				"Read the verdict before executing a dependent call.")), nil
 	case "user_prompt_submit":
