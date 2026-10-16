@@ -4,7 +4,7 @@
 
 The goal is useful, enforceable review. Jev evaluates a material choice against observed evidence. Code checks receipt identity, scope, constraints, and failure policy. Exact instructions and routine operations need no invented choice.
 
-Version 2.1.0 uses `CLAUDE_CONFIG_DIR` for default settings and plugin discovery. It accepts scoped plugin registries and bare MCP server maps. Ten maintenance rounds also correct installation, RPC deadlines, publication cleanup and secret redaction. See the [release notes](docs/releases/v2.1.0.md) and [campaign evidence](docs/validation/v2.1.0-campaign-2026-10-15.md).
+Version 2.1.1 redacts supported credentials in installer timeout diagnostics before clipping the text. See the [release notes](docs/releases/v2.1.1.md) and [QA record](docs/validation/v2.1.1-qa-2026-10-15.md). The [ten-round campaign](docs/validation/v2.1.0-campaign-2026-10-15.md) records the preceding installation and compatibility repairs.
 
 Version 2.0.0 replaces the Python engine with one Go binary, `agent-decisions`. The hook output, ledger rows and seals stay byte-identical to version 1.2.8. On 6,206 hook calls replayed from real transcripts, the Go engine took 1 min 40 s and the Python engine took 2 min 5 s. Ordinary tools remain independent of Jev. Required review remains the default on the declared sensitive surface. See the [release notes](docs/releases/v2.0.0.md).
 

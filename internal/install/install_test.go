@@ -25,6 +25,7 @@ import (
 // binary is the fake Codex: it answers two JSON-RPC requests on stdin with {"method": <method>}.
 const fakeCodexArgs = "INSTALL_TEST_FAKE_CODEX_ARGS"
 const fakeCodexBehavior = "INSTALL_TEST_FAKE_CODEX_BEHAVIOR"
+const fakeCodexStderr = "INSTALL_TEST_FAKE_CODEX_STDERR"
 
 func TestCodexBinaryDefaultsAndOverride(t *testing.T) {
 	t.Run("parser", func(t *testing.T) {
@@ -84,6 +85,9 @@ func fakeCodex(argsPath string) {
 	args, _ := json.Dumps(toAnyList(os.Args[1:]), json.Options{})
 	os.WriteFile(argsPath, []byte(args), 0o600)
 	behavior := os.Getenv(fakeCodexBehavior)
+	if diagnostic := os.Getenv(fakeCodexStderr); diagnostic != "" {
+		os.Stderr.WriteString(diagnostic + "\n")
+	}
 	proxy := len(os.Args) > 2 && os.Args[2] == "proxy"
 	if behavior != "" {
 		file, err := os.OpenFile(argsPath+".launches", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
@@ -1054,6 +1058,49 @@ func TestCodexWriterDeadlineIncludesRequestWrite(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 1500*time.Millisecond {
 		t.Fatalf("blocked request write exceeded its deadline: %s", elapsed)
+	}
+}
+
+func TestDrainFirstRedactsDiagnosticsBeforeClipping(t *testing.T) {
+	for _, tc := range []struct {
+		name, input, want string
+	}{
+		{"plain", "  connection refused\n", "connection refused"},
+		{"unicode_limit", strings.Repeat("é", 510), strings.Repeat("é", 500)},
+		{"flag", "authentication failed: --token=fake-private-value\n", "authentication failed: --token=<redacted>"},
+		{"url", "connecting to https://alice:fake-password@example.test/mcp\n", "connecting to https://<redacted>@example.test/mcp"},
+		{"clip_after_redaction", strings.Repeat("x", 475) + " --token=" + strings.Repeat("s", 80), strings.Repeat("x", 475) + " --token=<redacted>"},
+		{"invalid_url", "connecting to https://[invalid --token=fake-private-value", "<redacted>"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			queue := newLineQueue()
+			queue.put(&tc.input)
+			if got := drainFirst(queue); got != tc.want {
+				t.Errorf("diagnostic = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCodexWriterRedactsTimeoutDiagnostics(t *testing.T) {
+	for _, behavior := range []string{"stall_operation", "stall_input"} {
+		t.Run(behavior, func(t *testing.T) {
+			dir := setUp(t)
+			t.Setenv(fakeCodexBehavior, behavior)
+			t.Setenv(fakeCodexStderr, "authentication failed: --token=fake-private-value https://alice:fake-password@example.test/mcp")
+			socket := filepath.Join(dir, "fixture.sock")
+			writer, _ := fakeCodexWriter(t, dir, &socket)
+			writer.TimeoutS = 0.25
+			_, err := writer.Call("config/batchWrite", json.NewObject("payload", strings.Repeat("x", 1<<20)))
+			if pyerr.Class(err) != "InstallError" || !strings.Contains(err.Error(), "timed out for config/batchWrite: authentication failed:") {
+				t.Fatalf("error = %v, want contextual timeout", err)
+			}
+			for _, secret := range []string{"fake-private-value", "alice", "fake-password"} {
+				if strings.Contains(err.Error(), secret) {
+					t.Errorf("timeout diagnostic contains fake secret %q", secret)
+				}
+			}
+		})
 	}
 }
 

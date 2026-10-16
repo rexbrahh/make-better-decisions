@@ -1599,7 +1599,7 @@ func terminateProcess(p *process, command []string) error {
 	return err
 }
 
-// drainFirst returns the first non-empty queued stderr line, stripped and cut to 500 code points.
+// drainFirst returns the first non-empty queued stderr line, sanitized and cut to 500 code points.
 //
 // py: agent_decisions/install.py _drain_first
 func drainFirst(items *lineQueue) string {
@@ -1609,7 +1609,11 @@ func drainFirst(items *lineQueue) string {
 			return ""
 		}
 		if item != nil && *item != "" {
-			return str.SliceTo(str.Strip(*item), 500)
+			text, err := sanitizeString(str.Strip(*item))
+			if err != nil {
+				return redacted
+			}
+			return str.SliceTo(text, 500)
 		}
 	}
 }
