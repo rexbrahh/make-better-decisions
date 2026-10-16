@@ -1634,8 +1634,12 @@ func drainFirst(items *lineQueue) string {
 		if !ok {
 			return ""
 		}
-		if item != nil && *item != "" {
-			text, err := sanitizeString(str.Strip(*item))
+		if item != nil {
+			text := str.Strip(*item)
+			if text == "" {
+				continue
+			}
+			text, err := sanitizeString(text)
 			if err != nil {
 				return redacted
 			}

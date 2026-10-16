@@ -1158,12 +1158,23 @@ func TestDrainFirstRedactsDiagnosticsBeforeClipping(t *testing.T) {
 	}
 }
 
+func TestDrainFirstSkipsBlankDiagnostics(t *testing.T) {
+	queue := newLineQueue()
+	for _, line := range []string{"\n", " \t\r\n", "\u00a0\n", "  connection refused\n"} {
+		queue.put(&line)
+	}
+	queue.put(nil)
+	if got := drainFirst(queue); got != "connection refused" {
+		t.Errorf("diagnostic = %q, want connection refused", got)
+	}
+}
+
 func TestCodexWriterRedactsTimeoutDiagnostics(t *testing.T) {
 	for _, behavior := range []string{"stall_operation", "stall_input"} {
 		t.Run(behavior, func(t *testing.T) {
 			dir := setUp(t)
 			t.Setenv(fakeCodexBehavior, behavior)
-			t.Setenv(fakeCodexStderr, "authentication failed: --token=fake-private-value https://alice:fake-password@example.test/mcp")
+			t.Setenv(fakeCodexStderr, "\n \t\n authentication failed: --token=fake-private-value https://alice:fake-password@example.test/mcp")
 			socket := filepath.Join(dir, "fixture.sock")
 			writer, _ := fakeCodexWriter(t, dir, &socket)
 			writer.TimeoutS = 0.25
