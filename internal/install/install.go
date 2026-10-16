@@ -1158,6 +1158,32 @@ func BuildClaudePlan(settings *json.Object, stateRoot, installRoot, home string,
 	if err != nil {
 		return nil, err
 	}
+	// Plugin-scoped server names can collide in the merged short-name recipe map.
+	ownerServers, err := ClaudeServersFromSources(settings, claudeConfigs, nil)
+	if err != nil {
+		return nil, err
+	}
+	inventories := []*json.Object{ownerServers}
+	for _, manifest := range pluginManifests {
+		inventory, err := ClaudeServersFromSources(json.NewObject(), nil, []Sourced{manifest})
+		if err != nil {
+			return nil, err
+		}
+		inventories = append(inventories, inventory)
+	}
+	for _, inventory := range inventories {
+		additions, err := ClaudeMatchersFromServers(inventory, owners)
+		if err != nil {
+			return nil, err
+		}
+		for _, candidate := range additions {
+			if !slices.ContainsFunc(matchers, func(existing any) bool {
+				return slices.Equal(existing.([]any), candidate.([]any))
+			}) {
+				matchers = append(matchers, candidate)
+			}
+		}
+	}
 	entry, err := InstallationEntry("claude", state, servers, matchers, previous, protected)
 	if err != nil {
 		return nil, err

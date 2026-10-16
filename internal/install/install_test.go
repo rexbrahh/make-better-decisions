@@ -606,6 +606,82 @@ func TestClaudeInventoryReadsUserJsonAndPluginManifestsWithoutDisablingServers(t
 	wantEqual(t, dig(servers, "claude-mem", "source"), "/plugin/claude-mem/.mcp.json")
 }
 
+func TestClaudePluginNameCollisionsRetainAllMatchers(t *testing.T) {
+	dir := setUp(t)
+	manifests := sourced(load(t, `[
+		["/plugin/first/.mcp.json", {"mcpServers": {"shared": {"command": "/plugin/first/server"}}}],
+		["/plugin/second/.mcp.json", {"mcpServers": {"shared": {"command": "/plugin/second/server"}}}]
+	]`))
+	plan, err := BuildClaudePlan(json.NewObject(), dir+"/state", dir+"/package", dir, nil, manifests, nil)
+	check(t, err)
+	for _, matchers := range []any{dig(plan, "claude_matchers"), dig(plan, "installation_entry", "spec", "claude_matchers")} {
+		got := slices.Clone(matchers.([]any))
+		slices.SortFunc(got, func(a, b any) int {
+			return strings.Compare(a.([]any)[0].(string), b.([]any)[0].(string))
+		})
+		wantEqual(t, got, load(t, `[["/plugin/first/server"], ["/plugin/second/server"]]`))
+	}
+}
+
+func TestClaudeMatcherSourceNativeExemptions(t *testing.T) {
+	setUp(t)
+	owners := []string{ClaudeSettingsSource, "/home/.claude.json"}
+	for _, tc := range []struct {
+		name, source, config, want string
+	}{
+		{"owner_native", ClaudeSettingsSource, `{"mcpServers":{"messages":{"command":"/native/messages"}}}`, `[]`},
+		{"config_native", "/home/.claude.json", `{"mcpServers":{"messages":{"command":"/native/messages"}}}`, `[]`},
+		{"plugin_native_name", "/plugin/first/.mcp.json", `{"mcpServers":{"messages":{"command":"/plugin/first/server"}}}`, `[["/plugin/first/server"]]`},
+		{"bare_plugin_native_name", "/plugin/second/.mcp.json", `{"messages":{"command":"/plugin/second/server"}}`, `[["/plugin/second/server"]]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inventory, err := ClaudeServersFromSources(json.NewObject(), nil, []Sourced{{tc.source, loadObject(t, tc.config)}})
+			check(t, err)
+			matchers, err := ClaudeMatchersFromServers(inventory, owners)
+			check(t, err)
+			wantEqual(t, matchers, load(t, tc.want))
+		})
+	}
+}
+
+func TestClaudeMatcherUnionPreservesInventoryCompatibility(t *testing.T) {
+	for _, tc := range []struct {
+		name, settings, configs, manifests, want string
+	}{
+		{"owner_and_plugin", `{"mcpServers":{"shared":{"command":"/owner/server"}}}`, `[]`,
+			`[["/plugin/first/.mcp.json",{"shared":{"command":"/plugin/first/server"}}]]`,
+			`[["/plugin/first/server"],["/owner/server"]]`},
+		{"plugin_native_collision", `{"mcpServers":{"messages":{"command":"/native/messages"}}}`, `[]`,
+			`[["/plugin/first/.mcp.json",{"mcpServers":{"messages":{"command":"/plugin/first/server"}}}],
+			  ["/plugin/second/.mcp.json",{"mcpServers":{"messages":{"command":"/plugin/second/server"}}}]]`,
+			`[["/plugin/second/server"],["/plugin/first/server"]]`},
+		{"duplicate_argv", `{}`, `[]`,
+			`[["/plugin/first/.mcp.json",{"shared":{"command":"/bin/echo","args":["same"]}}],
+			  ["/plugin/second/.mcp.json",{"shared":{"command":"/bin/echo","args":["same"]}}]]`,
+			`[["/bin/echo","same"]]`},
+		{"distinct_args", `{}`, `[]`,
+			`[["/plugin/first/.mcp.json",{"shared":{"command":"/bin/echo","args":["first"]}}],
+			  ["/plugin/second/.mcp.json",{"shared":{"command":"/bin/echo","args":["second"]}}]]`,
+			`[["/bin/echo","second"],["/bin/echo","first"]]`},
+		{"manifest_shapes", `{}`, `[]`,
+			`[["/plugin/first/.mcp.json",{"servers":{"shared":{"command":"/plugin/first/server"}}}],
+			  ["/plugin/second/.mcp.json",{"shared":{"command":"/plugin/second/server"}}]]`,
+			`[["/plugin/second/server"],["/plugin/first/server"]]`},
+		{"owner_config_precedence", `{"mcpServers":{"shared":{"command":"/owner/settings"}}}`,
+			`[["/home/.claude.json",{"mcpServers":{"shared":{"command":"/owner/config"}}}]]`, `[]`,
+			`[["/owner/config"]]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := setUp(t)
+			plan, err := BuildClaudePlan(loadObject(t, tc.settings), dir+"/state", dir+"/package", dir,
+				sourced(load(t, tc.configs)), sourced(load(t, tc.manifests)), nil)
+			check(t, err)
+			wantEqual(t, dig(plan, "claude_matchers"), load(t, tc.want))
+			wantEqual(t, dig(plan, "installation_entry", "spec", "claude_matchers"), load(t, tc.want))
+		})
+	}
+}
+
 // py: tests/test_install.py::test_claude_config_dirs_cover_every_claude_json_and_the_selected_dir
 func TestClaudeConfigDirsCoverEveryClaudeJsonAndTheSelectedDir(t *testing.T) {
 	dir := setUp(t)
