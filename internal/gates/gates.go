@@ -90,6 +90,7 @@ type Context struct {
 	RepoID           string
 	InheritedEntries []*json.Object // verified by the host-context loader
 	Metrics          *json.Object   // instrumentation never enters model state
+	Reviewer         policy.ReviewProvider
 }
 
 // Outcome is a gate's result.
@@ -168,6 +169,9 @@ func Consulted(ctx Context) ([]*json.Object, error) {
 	var backed []*json.Object
 	var e expr
 	for _, entry := range ctx.Entries {
+		if !matchesReviewIdentity(entry, ctx) {
+			continue
+		}
 		action := entry.Value("action")
 		skip := !is(entry.Value("host"), ctx.Host) || !e.equal(entry.Value("agent_id"), ctx.AgentID) ||
 			!is(entry.Value("gate"), "decide") || !e.in(action, consultedActions)
@@ -217,7 +221,12 @@ func Consulted(ctx Context) ([]*json.Object, error) {
 			}
 		}
 	}
-	return append(backed, ctx.InheritedEntries...), nil
+	for _, entry := range ctx.InheritedEntries {
+		if matchesReviewIdentity(entry, ctx) {
+			backed = append(backed, entry)
+		}
+	}
+	return backed, nil
 }
 
 func contains(items []string, item string) bool {
@@ -626,7 +635,7 @@ func (e *expr) lookup(m map[string]string, key any) string {
 
 // py: agent_decisions/gates.py _verdict
 func verdict(action, decision string, answers *json.Object, unverified, reasons []string, refusals int,
-	overCap bool, receiptID *string, observed, missingFacts *json.Object) (string, error) {
+	overCap bool, receiptID *string, observed, missingFacts *json.Object, providerLabel string) (string, error) {
 	var e expr
 	pick := e.item(e.item(answers, "pick"), "choice")
 	probabilities := e.items(e.item(e.item(answers, "pick"), "probabilities"))
@@ -727,7 +736,7 @@ func verdict(action, decision string, answers *json.Object, unverified, reasons 
 				"check: Corroborate the named statement with a source read or the relevant tool call. "+
 					"Include its path and the observed result in the next request.")
 		} else {
-			lines = append(lines, "missing evidence: no specific missing fact was identified by Jev.")
+			lines = append(lines, "missing evidence: no specific missing fact was identified by "+providerLabel+".")
 			if is(target, "comparison") {
 				lines = append(lines, "check: Review remains unresolved. Inspect the displayed blockers and invariant text. "+
 					"Do not repeat a completed comparison. This result grants no work permission.")
@@ -819,13 +828,14 @@ func Decide(raw string, ctx Context, ask Ask) (Outcome, error) {
 	if err != nil {
 		return Outcome{}, err
 	}
-	state := json.NewObject("policy", policy.Policy, "decision", decision, "options", options,
+	state := json.NewObject("policy", reviewPolicy(ctx), "decision", decision, "options", options,
 		"facts", strings2any(verified), "unverified_claims", strings2any(unverified), "evidence", ctx.Evidence)
 	missingFacts := missingFactCandidates(decision, options, scope)
 	if scope.Len() > 0 {
 		state.Set("scope", scope)
 	}
 	record := json.NewObject("gate", "decide", "decision", decision, "decision_key", key, "state", state)
+	markReviewIdentity(record, ctx)
 	if len(unverified) > 0 {
 		lines := []string{"ts-decide: facts must quote captured user messages. Remove the unverified " +
 			"facts below. The hook supplies tool observations and source files automatically."}
@@ -892,7 +902,7 @@ func Decide(raw string, ctx Context, ask Ask) (Outcome, error) {
 		if open {
 			next = "Decide yourself and state the evidence for your choice."
 		}
-		return Outcome{Action: "unverified", Message: "ts-decide: decision unverified (jev " + failure.Error() + "). " + next,
+		return Outcome{Action: "unverified", Message: "ts-decide: decision unverified (" + reviewer(ctx).Name + " " + failure.Error() + "). " + next,
 			Record: record}, nil
 	}
 	return judge(ctx, answers, record, decision, options, scope, refusals, missingFacts)
@@ -994,12 +1004,13 @@ func reuseReview(ctx Context, record *json.Object, decision, key string, options
 	if !ok {
 		users = []any{}
 	}
-	comparison := json.NewObject("policy", policy.Policy, "gate_contract", reviewContract,
+	comparison := json.NewObject("policy", reviewPolicy(ctx), "gate_contract", reviewContract,
 		"diagnostic_contract", "missing-fact-1", "repo_id", ctx.RepoID, "thresholds", thresholds(),
 		"options", options, "scope", scope, "facts", strings2any(verified),
-		"model", model, "contracts", contracts, "review_mode", mode,
+		"model", reviewer(ctx).Model, "contracts", contracts, "review_mode", mode,
 		"users", users, "brief", ctx.Evidence.Value("brief"),
 		"observations", strings2any(observations), "sources", strings2any(sources))
+	markReviewIdentity(comparison, ctx)
 	text, err := json.Dumps(comparison, json.Options{SortKeys: true})
 	if err != nil {
 		return Outcome{}, false, err
@@ -1149,7 +1160,7 @@ func judge(ctx Context, answers, record *json.Object, decision string, options, 
 		id = "review_" + id
 		receiptID = &id
 	}
-	message, err := verdict(action, decision, answers, nil, reasons, refusals, overCap, receiptID, ctx.Evidence, missingFacts)
+	message, err := verdict(action, decision, answers, nil, reasons, refusals, overCap, receiptID, ctx.Evidence, missingFacts, reviewerName(ctx))
 	if err != nil {
 		return Outcome{}, err
 	}
@@ -1853,8 +1864,10 @@ func cacheContract(ctx Context) (*json.Object, error) {
 	if err != nil {
 		return nil, err
 	}
-	return json.NewObject("version", reviewContract, "model", model, "repo_id", ctx.RepoID,
-		"review_mode", mode, "policy", policy.Policy, "thresholds", thresholds()), nil
+	contract := json.NewObject("version", reviewContract, "model", reviewer(ctx).Model, "repo_id", ctx.RepoID,
+		"review_mode", mode, "policy", reviewPolicy(ctx), "thresholds", thresholds())
+	markReviewIdentity(contract, ctx)
+	return contract, nil
 }
 
 // dumpsLen returns len(json.dumps(v)); the output is ASCII.
@@ -2074,7 +2087,7 @@ func askParts(ctx Context, states []*json.Object, questions *json.Object, ask As
 		}
 		return []any{answers}, nil
 	}
-	deadline := now().Add(time.Duration(policy.TimeoutS * float64(time.Second)))
+	deadline := now().Add(reviewer(ctx).Timeout)
 	futures := make([]*future, len(states))
 	for i, state := range states {
 		f := &future{done: make(chan struct{})}
@@ -2430,7 +2443,7 @@ func EditGate(name string, toolInput *json.Object, ctx Context, ask Ask, frame i
 		}
 		return Outcome{}, err
 	}
-	state := json.NewObject("policy", policy.Policy, "pending_tool", name, "pending_input", parts[0],
+	state := json.NewObject("policy", reviewPolicy(ctx), "pending_tool", name, "pending_input", parts[0],
 		"decisions", decisions, "evidence", ctx.Evidence)
 	questions := json.NewObject(
 		"needs_decision", noul(
@@ -2448,7 +2461,7 @@ func EditGate(name string, toolInput *json.Object, ctx Context, ask Ask, frame i
 				"the selected approach or interfaces."),
 		"covered", noul(
 			"Does the implementation choice in `pending_input` match `selected_approach` in `decisions`? "+
-				"The hook has verified that these are completed Jev verdicts. Match the approach by meaning, "+
+				"The hook has verified that these are completed "+reviewerName(ctx)+" verdicts. Match the approach by meaning, "+
 				"not exact source syntax. Respect explicit `scope.paths` and `scope.invariants`. "+
 				"Computed shell targets outside the scope are not covered. One decision can cover several edits implementing its "+
 				"approach. Do not judge whether the code is correct or fully tested. A documented evidence-based "+
@@ -2495,11 +2508,11 @@ func EditGate(name string, toolInput *json.Object, ctx Context, ask Ask, frame i
 		failed := record.Copy()
 		failed.Set("error", failure.Reason)
 		if !open {
-			return Outcome{Action: "deny", Message: "Required review unavailable (jev " + failure.Error() + "); action not run. " +
+			return Outcome{Action: "deny", Message: "Required review unavailable (" + reviewer(ctx).Name + " " + failure.Error() + "); action not run. " +
 				"Restore the review service and retry.", Record: failed}, nil
 		}
 		return Outcome{Action: "allow", Record: failed,
-			Note: "agent-decisions: edit check skipped (jev " + failure.Error() + "); action allowed"}, nil
+			Note: "agent-decisions: edit check skipped (" + reviewer(ctx).Name + " " + failure.Error() + "); action allowed"}, nil
 	}
 	var e expr
 	noulOf := func(answer any, name string) any { return e.item(e.item(answer, name), "noul") }
@@ -2549,7 +2562,7 @@ func EditGate(name string, toolInput *json.Object, ctx Context, ask Ask, frame i
 	}
 	message := ""
 	if deny {
-		message = "Edit not run: this change requires a Jev decision. " +
+		message = "Edit not run: this change requires a " + reviewerName(ctx) + " decision. " +
 			"Eligible receipts: " + strconv.Itoa(len(decisions)) + ". " + strings.Join(failed, "; ") + ". " +
 			"Run ts-decide on the choice with neutral options and captured user excerpts. " +
 			"Read the verdict before retrying this edit."
@@ -2633,7 +2646,7 @@ func QuestionGate(toolInput *json.Object, ctx Context, ask Ask) (Outcome, error)
 		return Outcome{}, err
 	}
 	key := sha256Hex(encoded)[:16]
-	state := json.NewObject("policy", policy.Policy, "questions", asked, "evidence", ctx.Evidence)
+	state := json.NewObject("policy", reviewPolicy(ctx), "questions", asked, "evidence", ctx.Evidence)
 	questions := &json.Object{}
 	for i := range asked {
 		questions.Set(fmt.Sprintf("stated_%d", i), noul(
@@ -2651,9 +2664,9 @@ func QuestionGate(toolInput *json.Object, ctx Context, ask Ask) (Outcome, error)
 			return Outcome{}, err
 		}
 		if !open {
-			return Outcome{Action: "deny", Message: "Required question review unavailable (jev " + failure.Error() + "); question not sent."}, nil
+			return Outcome{Action: "deny", Message: "Required question review unavailable (" + reviewer(ctx).Name + " " + failure.Error() + "); question not sent."}, nil
 		}
-		return Outcome{Action: "allow", Note: "agent-decisions: question gate skipped (jev " + failure.Error() + ")"}, nil
+		return Outcome{Action: "allow", Note: "agent-decisions: question gate skipped (" + reviewer(ctx).Name + " " + failure.Error() + ")"}, nil
 	}
 	var problems []string
 	for i, text := range texts {
@@ -2747,7 +2760,7 @@ func PlanGate(ctx Context, ask Ask, plan *string, frame int) (Outcome, error) {
 	if err != nil {
 		return Outcome{}, err
 	}
-	state := json.NewObject("policy", policy.Policy, "plan", subject, "evidence", ctx.Evidence, "decisions", decisions)
+	state := json.NewObject("policy", reviewPolicy(ctx), "plan", subject, "evidence", ctx.Evidence, "decisions", decisions)
 	questions := json.NewObject(
 		"needs_decision", noul("Does the plan in `plan` and the recent tool observations select a material "+
 			"approach that the user has not already specified?",
@@ -2768,9 +2781,9 @@ func PlanGate(ctx Context, ask Ask, plan *string, frame int) (Outcome, error) {
 			return Outcome{}, err
 		}
 		if !open {
-			return Outcome{Action: "deny", Message: "Required plan review unavailable (jev " + failure.Error() + "); plan not submitted."}, nil
+			return Outcome{Action: "deny", Message: "Required plan review unavailable (" + reviewer(ctx).Name + " " + failure.Error() + "); plan not submitted."}, nil
 		}
-		return Outcome{Action: "allow", Note: "agent-decisions: plan check skipped (jev " + failure.Error() + ")"}, nil
+		return Outcome{Action: "allow", Note: "agent-decisions: plan check skipped (" + reviewer(ctx).Name + " " + failure.Error() + ")"}, nil
 	}
 	var e expr
 	deny := e.ge(e.item(e.item(answers, "needs_decision"), "noul"), stopAt) &&
@@ -2890,7 +2903,7 @@ func StopGate(final string, stopHookActive bool, ctx Context, ask Ask, frame int
 	if messages := ctx.Transcript.UserMessages; len(messages) > 0 {
 		instruction = evidence.Clip(messages[len(messages)-1], policy.ClipChars)
 	}
-	state := json.NewObject("policy", policy.Policy, "final_message", final,
+	state := json.NewObject("policy", reviewPolicy(ctx), "final_message", final,
 		"question_message", pystr.Strip(removeFences(final)), "evidence", ctx.Evidence, "gate_contract", "stop-4",
 		"current_user_instruction", instruction)
 	decisions, err := decisionSummaries(ctx, final, frame+1)
@@ -2967,10 +2980,10 @@ func StopGate(final string, stopHookActive bool, ctx Context, ask Ask, frame int
 			return Outcome{}, err
 		}
 		if !open {
-			return Outcome{Action: "block", Message: "Required final review unavailable (jev " + failure.Error() + "). " +
+			return Outcome{Action: "block", Message: "Required final review unavailable (" + reviewer(ctx).Name + " " + failure.Error() + "). " +
 				"Restore the review service and retry."}, nil
 		}
-		return Outcome{Action: "allow", Note: "agent-decisions: stop check skipped (jev " + failure.Error() + ")"}, nil
+		return Outcome{Action: "allow", Note: "agent-decisions: stop check skipped (" + reviewer(ctx).Name + " " + failure.Error() + ")"}, nil
 	}
 	var e expr
 	noulOf := func(name string) any { return e.item(e.item(answers, name), "noul") }

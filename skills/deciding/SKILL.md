@@ -11,11 +11,13 @@ Do not use it for an exact user instruction or routine operation. Examples are t
 
 Routine corrections include test setup/reset helpers and regression coverage for selected behavior. Reuse the existing helpers and conventions. Consult again when the fix selects a new material approach or changes product behavior or interfaces.
 
-Use Jev to evaluate a concrete choice against current evidence. Code owns the workflow. For an evidence request, check the statement named by `missing evidence` and include the helper path and observed result in the next decision question. If Jev identifies no specific missing fact, use the displayed blocker and observed sources to diagnose the incomplete review.
+Use the selected reviewer to evaluate a concrete choice against current evidence. Code owns the workflow. For an evidence request, check the statement named by `missing evidence` and include the helper path and observed result in the next decision question. If the reviewer identifies no specific missing fact, use the displayed blocker and observed sources to diagnose the incomplete review.
 
 Approach selection checks the plan against observed constraints. New implementation and execution checks can remain future work. Do not report proposed checks as completed proof. Necessary current prerequisites still need observations. If GATHER identifies no missing fact, inspect the displayed blockers and invariant text. Do not repeat a completed comparison.
 
-The hook reviews declared edit and patch tools, filesystem write/edit tools, and Claude plan acceptance. It denies uncovered material choices on those surfaces. Ordinary shell commands, peer communication, worker dispatch, questions, and new tools use normal host controls without Jev. The local private-state guard still applies.
+The hook reviews declared edit and patch tools, filesystem write/edit tools, and Claude plan acceptance. It denies uncovered material choices on those surfaces. Ordinary shell commands, peer communication, worker dispatch, questions, and new tools use normal host controls without remote review. The local private-state guard still applies.
+
+Jev is the default reviewer. The owner can select optional SubQ Snap through signed installation policy. Agents cannot select a provider through requests or environment variables. A provider change requires fresh material review.
 
 ## Call format
 
@@ -109,7 +111,7 @@ The edit gate can reuse relevant advisory and binding decisions across later tur
 
 One consultation covers the selected approach and its routine implementation and test corrections. Several viable engineering options can meet the same requirement. The user need not provide a preference between them.
 
-There is no automatic Stop or SubagentStop review. Final messages and worker completion do not depend on Jev. Consult before making a new material choice, including choices expressed in a final answer. The plugin enforces the declared tool surfaces and supplements the host's controls.
+There is no automatic Stop or SubagentStop review. Final messages and worker completion do not depend on the remote reviewer. Consult before making a new material choice, including choices expressed in a final answer. The plugin enforces the declared tool surfaces and supplements the host's controls.
 
 An owner can grant a canonical-session review exception through the protected installer. The signed exception takes precedence over sensitive execution checks and includes native workers in that session. Explicit `ts-decide` remains reviewed. Private-state protection and native identity validation still apply. Reinstallation preserves the exception until the owner explicitly revokes it.
 

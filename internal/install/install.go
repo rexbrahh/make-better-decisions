@@ -739,6 +739,9 @@ func BuildCodexPlan(servers []*json.Object, stateRoot, installRoot string, curre
 	if err := ConfigureSessionExceptions(entry, previousSpec, nil, nil); err != nil {
 		return nil, err
 	}
+	if err := ConfigureReviewProvider(entry, previousSpec, nil); err != nil {
+		return nil, err
+	}
 	plan, err := hostPlan("codex", state, root, home, protected, recipes)
 	if err != nil {
 		return nil, err
@@ -1189,6 +1192,9 @@ func BuildClaudePlan(settings *json.Object, stateRoot, installRoot, home string,
 		return nil, err
 	}
 	if err := ConfigureSessionExceptions(entry, previousSpec, nil, nil); err != nil {
+		return nil, err
+	}
+	if err := ConfigureReviewProvider(entry, previousSpec, nil); err != nil {
 		return nil, err
 	}
 	plan, err := hostPlan("claude", state, root, home, protected, servers)
@@ -2019,6 +2025,7 @@ type cliArgs struct {
 	apply                                                                                 bool
 	sessionReviewException, clearSessionReviewException, claudeJSON, claudePluginManifest []string
 	codexSock, codexMCPJSON                                                               *string
+	reviewProvider                                                                        *string
 }
 
 // newParser builds the parser of cli. Python evaluates the defaults as it adds the arguments, so their
@@ -2057,6 +2064,9 @@ func newParser(stdout, stderr io.Writer) (*argparse.Parser, error) {
 		{Kind: argparse.Store, Options: []string{"--review-mode"}, Dest: "review_mode",
 			Choices: []string{"required", "availability"}, Default: "required",
 			Help: "Required blocks unchecked actions; availability permits them with a warning."},
+		{Kind: argparse.Store, Options: []string{"--review-provider"}, Dest: "review_provider",
+			Choices: []string{"jev", "subq"}, ExactOnly: true,
+			Help: "Select the review provider; omission preserves the current signed selection."},
 		appendTo("--session-review-exception", "SESSION_ID",
 			"Owner-authorized review exception for one canonical session and its native workers."),
 		appendTo("--clear-session-review-exception", "SESSION_ID", "Revoke an owner-authorized session review exception."),
@@ -2099,6 +2109,7 @@ func parseArgs(parser *argparse.Parser, argv []string) (*cliArgs, int, bool) {
 		claudeJSON:                  ns["claude_json"].([]string),
 		claudePluginManifest:        ns["claude_plugin_manifest"].([]string),
 		codexSock:                   optional("codex_sock"), codexMCPJSON: optional("codex_mcp_json"),
+		reviewProvider: optional("review_provider"),
 	}, 0, false
 }
 
@@ -2162,7 +2173,7 @@ func cli(argv []string, stdout, stderr io.Writer) (int, error) {
 			return 0, err
 		}
 		plan, err := BuildCodexPlan(servers, args.stateRoot, args.installRoot, summary, &args.codexConfig, "",
-			PreviousInstallationSpec("codex"))
+			previousProviderSpec("codex", args.reviewProvider))
 		if err != nil {
 			return 0, err
 		}
@@ -2211,7 +2222,7 @@ func cli(argv []string, stdout, stderr io.Writer) (int, error) {
 			return 0, err
 		}
 		plan, err := BuildClaudePlan(settings, args.stateRoot, args.installRoot, "", configs, manifests,
-			PreviousInstallationSpec("claude"))
+			previousProviderSpec("claude", args.reviewProvider))
 		if err != nil {
 			return 0, err
 		}
@@ -2222,6 +2233,13 @@ func cli(argv []string, stdout, stderr io.Writer) (int, error) {
 		entry := plan.(*json.Object).Value("installation_entry").(*json.Object)
 		spec := entry.Value("spec").(*json.Object)
 		spec.Set("review_mode", args.reviewMode)
+		previous, err := ledger.InstallationPolicy(plan.(*json.Object).Value("host").(string))
+		if err != nil {
+			return 0, err
+		}
+		if err := ConfigureReviewProvider(entry, previous, args.reviewProvider); err != nil {
+			return 0, err
+		}
 		if err := ConfigureSessionExceptions(entry, spec, args.sessionReviewException, args.clearSessionReviewException); err != nil {
 			return 0, err
 		}

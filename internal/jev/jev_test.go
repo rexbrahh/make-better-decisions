@@ -173,6 +173,27 @@ func TestSendsModelStateQuestionsAndReturnsAnswers(t *testing.T) {
 	assertEqual(t, answers.Value("pick").(*json.Object).Value("choice"), "b")
 }
 
+func TestValidateResponsePreservesJevValidationAndMetrics(t *testing.T) {
+	setUp(t)
+	requested := questions()
+	wantAnswers := goodAnswers(t)
+	wantUsage := json.NewObject("input_tokens", json.Int("120"), "output_tokens", json.Int("4"))
+	raw := []byte(dumps(t, json.NewObject("model", policy.Model, "answers", wantAnswers, "usage", wantUsage)))
+	metrics := &json.Object{}
+	answers, err := ValidateResponse(raw, requested, metrics)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertEqual(t, answers, wantAnswers)
+	assertEqual(t, metrics.Value("model"), policy.Model)
+	assertEqual(t, metrics.Value("usage"), wantUsage)
+
+	missing := dumps(t, json.NewObject("model", policy.Model,
+		"answers", json.NewObject("ok", wantAnswers.Value("ok"))))
+	_, err = ValidateResponse([]byte(missing), requested, nil)
+	assertJevError(t, err, "malformed")
+}
+
 // py: tests/test_jev.py::test_malformed_answers_raise
 func TestMalformedAnswersRaise(t *testing.T) {
 	setUp(t)

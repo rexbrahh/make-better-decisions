@@ -35,6 +35,7 @@ import (
 	pyre "github.com/rexbrahh/make-better-decisions/internal/py/re"
 	"github.com/rexbrahh/make-better-decisions/internal/py/shlex"
 	pystr "github.com/rexbrahh/make-better-decisions/internal/py/str"
+	"github.com/rexbrahh/make-better-decisions/internal/subq"
 	"github.com/rexbrahh/make-better-decisions/internal/transcript"
 )
 
@@ -104,9 +105,13 @@ func Handle(event string, payload any, host string, post jev.PostFunc) (*json.Ob
 		if err != nil {
 			return nil, err
 		}
+		provider, err := ledger.ReviewProvider(host)
+		if err != nil {
+			return nil, err
+		}
 		return json.NewObject("hookSpecificOutput", json.NewObject("hookEventName", "SessionStart",
 			"additionalContext", "Use the deciding skill before choosing an approach or asking the user to decide. "+
-				"Jev reviews declared edit tools and plan acceptance. Ordinary tools use normal host controls. "+
+				reviewLabel(provider)+" reviews declared edit tools and plan acceptance. Ordinary tools use normal host controls. "+
 				"Run "+shlex.Quote(pathlib.Join(root, "bin/ts-decide"))+" as a separate shell call. "+
 				"Read "+pathlib.Join(root, "skills/deciding/SKILL.md")+" for the request format. "+
 				"Read the verdict before executing a dependent call.")), nil
@@ -192,12 +197,16 @@ func preToolUse(payload *json.Object, host string, post jev.PostFunc) (*json.Obj
 			plan = &text
 		}
 		return gate(payload, host, func(ctx gates.Context) (gates.Outcome, error) {
-			return gates.PlanGate(ctx, asker(post, ctx.Metrics, planAsk), plan, gateFrame)
+			ask, cancel := reviewAsker(ctx, post, planAsk)
+			defer cancel()
+			return gates.PlanGate(ctx, ask, plan, gateFrame)
 		})
 	}
 	if policy.EditTools[name] {
 		return gate(payload, host, func(ctx gates.Context) (gates.Outcome, error) {
-			return gates.EditGate(name, toolInput, ctx, asker(post, ctx.Metrics, editAsk), gateFrame)
+			ask, cancel := reviewAsker(ctx, post, editAsk)
+			defer cancel()
+			return gates.EditGate(name, toolInput, ctx, ask, gateFrame)
 		})
 	}
 	return nil, nil
@@ -241,11 +250,13 @@ func decide(payload *json.Object, host string, toolInput *json.Object, request s
 		if completed {
 			return deny("ts-decide: this tool call has already completed. Run a new, separate ts-decide call."), nil
 		}
-		if outcome, err = gates.Decide(request, *ctx, asker(post, ctx.Metrics, decideAsk)); err != nil {
+		ask, cancel := reviewAsker(*ctx, post, decideAsk)
+		defer cancel()
+		if outcome, err = gates.Decide(request, *ctx, ask); err != nil {
 			return nil, err
 		}
 	}
-	keys, err := secrets()
+	keys, err := secrets(host)
 	if err != nil {
 		return nil, err
 	}
@@ -431,6 +442,10 @@ func exists(path string) bool {
 // py: agent_decisions/hook.py _context
 func context(payload *json.Object, host string, contracts []string) (*gates.Context, error) {
 	start := perfCounter()
+	provider, err := ledger.ReviewProvider(host)
+	if err != nil {
+		return nil, err
+	}
 	t, err := loadTranscript(payload, host)
 	if err != nil {
 		return nil, err
@@ -445,7 +460,7 @@ func context(payload *json.Object, host string, contracts []string) (*gates.Cont
 		canonical.Set("session_id", t.Identity.SessionID)
 		canonical.Set("agent_id", agentID)
 	}
-	keys, err := secrets()
+	keys, err := providerSecrets(provider.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -487,7 +502,7 @@ func context(payload *json.Object, host string, contracts []string) (*gates.Cont
 		return nil, err
 	}
 	bundle, err := evidence.Build(t, keys, evidence.Options{Query: query, Cwd: &cwd, Contracts: contracts,
-		Frame: contextFrame + 1})
+		Frame: contextFrame + 1, Profile: provider.Evidence})
 	if err != nil {
 		return nil, err
 	}
@@ -501,16 +516,16 @@ func context(payload *json.Object, host string, contracts []string) (*gates.Cont
 		return nil, err
 	}
 	metadata.Set("source_root", sourceRoot)
-	if err := evidence.TrimToBudget(bundle, contracts, query, 0); err != nil {
+	if err := evidence.TrimToBudgetWithProfile(bundle, contracts, query, 0, provider.Evidence); err != nil {
 		return nil, err
 	}
-	inherited, err := inheritedDecisions(t, entries, host, sessionID, repoID, keys, canonical)
+	inherited, err := inheritedDecisions(t, entries, host, sessionID, repoID, keys, canonical, provider)
 	if err != nil {
 		return nil, err
 	}
 	ctx := &gates.Context{Host: host, SessionID: sessionID, AgentID: canonical.Value("agent_id"),
 		ToolUseID: payload.Value("tool_use_id"), Transcript: t, Evidence: bundle, Entries: entries,
-		RepoID: repoID, InheritedEntries: inherited, Metrics: metrics}
+		RepoID: repoID, InheritedEntries: inherited, Metrics: metrics, Reviewer: provider}
 	completed, err := gates.Consulted(*ctx)
 	if err != nil {
 		return nil, err
@@ -600,7 +615,7 @@ func context(payload *json.Object, host string, contracts []string) (*gates.Cont
 		if cwd, err = payloadCwd(payload); err != nil {
 			return nil, err
 		}
-		observed, err := evidence.ContractObservations(missing, cwd, keys)
+		observed, err := evidence.ContractObservationsWithProfile(missing, cwd, keys, provider.Evidence)
 		if err != nil {
 			return nil, err
 		}
@@ -629,7 +644,7 @@ func context(payload *json.Object, host string, contracts []string) (*gates.Cont
 		}
 		bundle.Set("architecture_history", architecture)
 	}
-	if err := evidence.TrimToBudget(bundle, contracts, query, 0); err != nil {
+	if err := evidence.TrimToBudgetWithProfile(bundle, contracts, query, 0, provider.Evidence); err != nil {
 		return nil, err
 	}
 	metrics.Set("evidence_ms", (perfCounter()-evidenceStarted)*1_000)
@@ -751,7 +766,7 @@ type assignment struct {
 
 // py: agent_decisions/hook.py _inherited_decisions
 func inheritedDecisions(t transcript.Transcript, entries []*json.Object, host, session, repoID string,
-	keys []string, payload *json.Object) ([]*json.Object, error) {
+	keys []string, payload *json.Object, provider policy.ReviewProvider) ([]*json.Object, error) {
 	identity := t.Identity
 	if t.Brief == nil {
 		return nil, nil
@@ -880,13 +895,13 @@ func inheritedDecisions(t transcript.Transcript, entries []*json.Object, host, s
 	if len(assigned) == 0 {
 		return nil, nil
 	}
-	bundle, err := evidence.Build(parent, keys, evidence.Options{Frame: contextFrame + 2})
+	bundle, err := evidence.Build(parent, keys, evidence.Options{Frame: contextFrame + 2, Profile: provider.Evidence})
 	if err != nil {
 		return nil, err
 	}
 	parentContext := gates.Context{Host: host, SessionID: session, AgentID: expectedParent,
 		ToolUseID: "parent-observation", Transcript: parent, Evidence: bundle, Entries: entries, RepoID: repoID,
-		Metrics: &json.Object{}}
+		Metrics: &json.Object{}, Reviewer: provider}
 	observedRefs := map[string]bool{}
 	for _, call := range parent.ToolCalls {
 		if call.Output == "" {
@@ -1022,7 +1037,7 @@ func savedUsers(payload *json.Object, host string, t transcript.Transcript, entr
 	frame int) ([]string, error) {
 	rawUsers := make([]any, len(t.UserMessages))
 	for i, message := range t.UserMessages {
-		keys, err := secrets()
+		keys, err := secrets(host)
 		if err != nil {
 			return nil, err
 		}
@@ -1137,15 +1152,32 @@ func savedUsers(payload *json.Object, host string, t transcript.Transcript, entr
 }
 
 // py: agent_decisions/hook.py _secrets
-func secrets() ([]string, error) {
-	key, err := jev.LoadKey()
+func secrets(host string) ([]string, error) {
+	provider, err := ledger.ReviewProvider(host)
 	if err != nil {
-		if errors.As(err, new(*jev.JevError)) {
-			return nil, nil
-		}
 		return nil, err
 	}
-	return []string{key}, nil
+	return providerSecrets(provider.Name)
+}
+
+func providerSecrets(name string) ([]string, error) {
+	loadKey, otherKey := jev.LoadKey, subq.LoadKey
+	if name == "subq" {
+		loadKey, otherKey = otherKey, loadKey
+	}
+	var keys []string
+	key, err := loadKey()
+	if err != nil {
+		if !errors.As(err, new(*jev.JevError)) {
+			return nil, err
+		}
+	} else {
+		keys = append(keys, key)
+	}
+	if key, err := otherKey(); err == nil {
+		keys = append(keys, key)
+	}
+	return keys, nil
 }
 
 // asker returns the review call of the gates: it reviews a scrubbed copy of state, then makes state that
@@ -1154,16 +1186,29 @@ func secrets() ([]string, error) {
 //
 // py: agent_decisions/hook.py _asker
 func asker(post jev.PostFunc, metrics *json.Object, frame int) gates.Ask {
+	return askerWithKey(jev.LoadKey, func(state, questions *json.Object, key string, metrics *json.Object) (*json.Object, error) {
+		return jev.Ask(state, questions, key, post, metrics)
+	}, metrics, frame)
+}
+
+func askerWithKey(loadKey func() (string, error), remote func(*json.Object, *json.Object, string, *json.Object) (*json.Object, error),
+	metrics *json.Object, frame int) gates.Ask {
 	return func(state, questions *json.Object) (answers *json.Object, err error) {
-		key, err := jev.LoadKey()
+		key, err := loadKey()
 		if err != nil {
 			return nil, err
+		}
+		keys := []string{key}
+		for _, load := range []func() (string, error){jev.LoadKey, subq.LoadKey} {
+			if other, err := load(); err == nil {
+				keys = append(keys, other)
+			}
 		}
 		var callMetrics *json.Object
 		if metrics != nil {
 			callMetrics = &json.Object{}
 		}
-		scrubbed, err := evidence.Scrub(state, []string{key}, frame+1)
+		scrubbed, err := evidence.Scrub(state, keys, frame+1)
 		if err != nil {
 			return nil, err
 		}
@@ -1178,6 +1223,14 @@ func asker(post jev.PostFunc, metrics *json.Object, frame int) gates.Ask {
 				state.Set(name, requestState.Value(name))
 			}
 			if metrics != nil {
+				if clean, _, cleanErr := redactKnownIdentifiers(callMetrics, keys); cleanErr == nil {
+					callMetrics = clean
+				} else {
+					callMetrics = json.NewObject("redaction_blocked", true)
+					if err == nil {
+						answers, err = nil, &jev.JevError{Reason: "redaction"}
+					}
+				}
 				var calls []any
 				if value, ok := metrics.Get("api_calls"); ok {
 					calls = value.([]any) // only this function writes api_calls
@@ -1185,11 +1238,21 @@ func asker(post jev.PostFunc, metrics *json.Object, frame int) gates.Ask {
 				metrics.Set("api_calls", append(calls, callMetrics))
 			}
 		}()
-		scrubbedQuestions, err := evidence.Scrub(questions, []string{key}, frame+1)
+		scrubbedQuestions, err := evidence.Scrub(questions, keys, frame+1)
 		if err != nil {
 			return nil, err
 		}
-		answers, err = jev.Ask(requestState, scrubbedQuestions.(*json.Object), key, post, callMetrics)
+		cleanState, stateIdentifiers, err := redactKnownIdentifiers(requestState, keys)
+		if err != nil {
+			requestState = json.NewObject("redaction_blocked", true)
+			return nil, &jev.JevError{Reason: "redaction"}
+		}
+		requestState = cleanState
+		_, questionIdentifiers, err := redactKnownIdentifiers(scrubbedQuestions.(*json.Object), keys)
+		if err != nil || stateIdentifiers || questionIdentifiers {
+			return nil, &jev.JevError{Reason: "redaction", Detail: "credential in review identifier"}
+		}
+		answers, err = remote(requestState, scrubbedQuestions.(*json.Object), key, callMetrics)
 		var failure *jev.JevError
 		if errors.As(err, &failure) && callMetrics != nil {
 			callMetrics.Set("error", failure.Reason)
@@ -1226,7 +1289,7 @@ func appendRecord(payload *json.Object, host string, turn any, outcome gates.Out
 	err = func() error {
 		defer askMu.Unlock()
 		if ctx != nil {
-			keys, err := secrets()
+			keys, err := providerSecrets(ctx.Reviewer.Name)
 			if err != nil {
 				return err
 			}
@@ -1236,7 +1299,7 @@ func appendRecord(payload *json.Object, host string, turn any, outcome gates.Out
 			}
 			entry.Set("metrics", metrics)
 		}
-		keys, err := secrets()
+		keys, err := secrets(host)
 		if err != nil {
 			return err
 		}
@@ -1249,6 +1312,10 @@ func appendRecord(payload *json.Object, host string, turn any, outcome gates.Out
 		}
 		for _, key := range record.(*json.Object).Keys() {
 			entry.Set(key, record.(*json.Object).Value(key))
+		}
+		entry, _, err = redactKnownIdentifiers(entry, keys)
+		if err != nil {
+			return err
 		}
 		return nil
 	}()
@@ -1293,8 +1360,13 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	out, err := safeHandle(event, host, stdin, stderr)
 	if err != nil {
 		availability, policyErr := ledger.FailOpen(host)
-		availability = availability && policyErr == nil
+		var providerErr *policy.ReviewProviderError
+		invalidProvider := errors.As(err, &providerErr)
+		availability = availability && policyErr == nil && !invalidProvider
 		message := "agent-decisions: hook error (" + pyClass(err) + ")"
+		if invalidProvider {
+			message = "agent-decisions: invalid review provider in signed installation policy"
+		}
 		switch {
 		case availability:
 			out = note(message + "; action allowed under availability policy")

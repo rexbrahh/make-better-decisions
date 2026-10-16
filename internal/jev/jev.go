@@ -312,6 +312,11 @@ func Ask(state, questions *json.Object, key string, post PostFunc, metrics *json
 	if err != nil {
 		return nil, err
 	}
+	return ValidateResponse(raw, questions, metrics)
+}
+
+// ValidateResponse decodes a Jev-compatible response and validates each requested answer.
+func ValidateResponse(raw []byte, questions, metrics *json.Object) (*json.Object, error) {
 	value, err := loadsBytes(raw)
 	if err != nil {
 		if errors.As(err, new(*json.RecursionError)) {

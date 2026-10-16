@@ -36,8 +36,10 @@ type Action struct {
 	Dest     string   // "" is SUPPRESS
 	Choices  []string // nil is None
 	Required bool
-	Metavar  string // "" is None
-	Help     string // "" is None
+	// ExactOnly keeps a new long option out of existing prefix matches.
+	ExactOnly bool
+	Metavar   string // "" is None
+	Help      string // "" is None
 	// Default is the namespace value before parsing: nil (None), a string or a []string. A StoreTrue
 	// action with a nil Default defaults to false, as store_true does.
 	Default any
@@ -459,7 +461,7 @@ func (p *Parser) optionTuples(arg string) []optionTuple {
 			switch {
 			case arg[1] != '-' && option == short:
 				result = append(result, optionTuple{a, option, "", &shortExplicit})
-			case strings.HasPrefix(option, prefix):
+			case !a.ExactOnly && strings.HasPrefix(option, prefix):
 				result = append(result, optionTuple{a, option, sep, explicit})
 			}
 		}

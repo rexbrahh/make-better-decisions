@@ -132,7 +132,6 @@ var (
 )
 
 const (
-	sourceChars              = policy.ClipChars
 	maxSourceBytes           = 1_000_000
 	maxSourceFiles           = 8
 	maxSourceCandidateProbes = 16
@@ -141,6 +140,27 @@ const (
 	gitTimeout               = time.Second
 	maxPathCandidateChars    = 1_024
 )
+
+// normalizeEvidenceProfile accepts only the fixed policy profiles. A zero profile preserves the Jev
+// defaults for callers that predate provider-specific evidence sizing.
+func normalizeEvidenceProfile(profile policy.EvidenceProfile) (policy.EvidenceProfile, error) {
+	jev, err := policy.Provider("")
+	if err != nil {
+		return policy.EvidenceProfile{}, err
+	}
+	subq, err := policy.Provider("subq")
+	if err != nil {
+		return policy.EvidenceProfile{}, err
+	}
+	if profile == (policy.EvidenceProfile{}) {
+		return jev.Evidence, nil
+	}
+	if profile == jev.Evidence || profile == subq.Evidence {
+		return profile, nil
+	}
+	return policy.EvidenceProfile{}, fmt.Errorf("unsupported evidence profile budget %d text %d",
+		profile.BudgetChars, profile.TextChars)
+}
 
 // wordBounded returns the finder of the Python pattern \b(pattern), or \b(pattern)\b when after is set,
 // where every match of pattern starts and ends with a word character. RE2's \b is ASCII-only, so this
@@ -472,6 +492,7 @@ type Options struct {
 	Query     string
 	Cwd       *string // nil is None: no source files
 	Contracts []string
+	Profile   policy.EvidenceProfile // zero preserves the legacy Jev limits
 	// Frame is the depth of the Python stack at the build call, counting build: 7 when hook.py's _context
 	// calls it (<module>, main, handle, _pre_tool_use, _gate or _decide, _context, build).
 	Frame int
@@ -487,13 +508,17 @@ type indexedCall struct {
 	call transcript.ToolCall
 }
 
-// Build returns the evidence bundle for t: user messages, tool observations and source files that fit
-// policy.EvidenceChars, with metadata on what was left out.
+// Build returns the evidence bundle for t: user messages, tool observations and source files that fit the
+// fixed evidence profile, with metadata on what was left out.
 //
 // py: agent_decisions/evidence.py build
 func Build(t transcript.Transcript, secrets []string, o Options) (*json.Object, error) {
+	profile, err := normalizeEvidenceProfile(o.Profile)
+	if err != nil {
+		return nil, err
+	}
 	clean := func(text string) string {
-		return Clip(Redact(text, secrets), policy.ClipChars)
+		return Clip(Redact(text, secrets), profile.TextChars)
 	}
 
 	usableCalls, err := usable(t.ToolCalls)
@@ -501,8 +526,8 @@ func Build(t transcript.Transcript, secrets []string, o Options) (*json.Object, 
 		return nil, err
 	}
 	metadata := json.NewObject(
-		"evidence_budget_chars", json.IntOf(policy.EvidenceChars),
-		"text_clip_chars", json.IntOf(policy.ClipChars),
+		"evidence_budget_chars", json.IntOf(int64(profile.BudgetChars)),
+		"text_clip_chars", json.IntOf(int64(profile.TextChars)),
 		"user_messages_total", json.IntOf(int64(len(t.UserMessages))),
 		"user_messages_included", json.IntOf(0),
 		"user_messages_omitted", json.IntOf(0),
@@ -535,7 +560,7 @@ func Build(t transcript.Transcript, secrets []string, o Options) (*json.Object, 
 		for _, i := range slices.Sorted(maps.Keys(trial)) {
 			trialMessages = append(trialMessages, trial[i])
 		}
-		ok, err := fitsWith(bundle, "user_messages", trialMessages, contextMetadataChars)
+		ok, err := fitsWith(bundle, "user_messages", trialMessages, contextMetadataChars, profile.BudgetChars)
 		if err != nil || !ok {
 			return err
 		}
@@ -561,7 +586,7 @@ func Build(t transcript.Transcript, secrets []string, o Options) (*json.Object, 
 		trial := bundle.Copy()
 		trial.Set("brief", brief)
 		trial.Set("brief_trust", "unverified_parent_agent_brief")
-		ok, err := fits(trial, contextMetadataChars)
+		ok, err := fits(trial, contextMetadataChars, profile.BudgetChars)
 		if err != nil {
 			return nil, err
 		}
@@ -580,8 +605,8 @@ func Build(t transcript.Transcript, secrets []string, o Options) (*json.Object, 
 	chosenCalls := map[int]*json.Object{}
 
 	includeCall := func(idx int, call transcript.ToolCall) error {
-		projected := json.NewObject("id", call.ID, "tool", call.Name, "input", Clip(call.Input, policy.ClipChars),
-			"output", Clip(call.Output, policy.ClipChars), "trust", "unverified_tool_observation")
+		projected := json.NewObject("id", call.ID, "tool", call.Name, "input", Clip(call.Input, profile.TextChars),
+			"output", Clip(call.Output, profile.TextChars), "trust", "unverified_tool_observation")
 		if call.Execution != nil {
 			execution, err := Scrub(call.Execution, secrets, o.Frame+2) // build, then include_call
 			if err != nil {
@@ -589,7 +614,7 @@ func Build(t transcript.Transcript, secrets []string, o Options) (*json.Object, 
 			}
 			projected.Set("execution", execution)
 		}
-		remaining := policy.EvidenceChars - contextMetadataChars - usedChars
+		remaining := profile.BudgetChars - contextMetadataChars - usedChars
 		if pystr.Len(projected.Value("input").(string))+pystr.Len(projected.Value("output").(string)) > remaining {
 			return nil // even unescaped text cannot fit, so do not encode the full candidate
 		}
@@ -627,8 +652,8 @@ func Build(t transcript.Transcript, secrets []string, o Options) (*json.Object, 
 		return nil
 	}
 
-	sourceItems, sourceOmitted, sourceTooLarge, scanLimited, err := sourceFiles(t, o.Query, o.Cwd, secrets,
-		o.Contracts, o.Frame+1)
+	sourceItems, sourceOmitted, sourceTooLarge, scanLimited, err := sourceFilesWithProfile(t, o.Query, o.Cwd,
+		secrets, o.Contracts, o.Frame+1, profile)
 	if err != nil {
 		return nil, err
 	}
@@ -640,7 +665,7 @@ func Build(t transcript.Transcript, secrets []string, o Options) (*json.Object, 
 	includeSource := func(item *json.Object) error {
 		current, _ := bundle.Value("source_files").([]any)
 		trialItems := append(slices.Clone(current), item)
-		ok, err := fitsWith(bundle, "source_files", trialItems, contextMetadataChars)
+		ok, err := fitsWith(bundle, "source_files", trialItems, contextMetadataChars, profile.BudgetChars)
 		if err != nil {
 			return err
 		}
@@ -668,7 +693,7 @@ func Build(t transcript.Transcript, secrets []string, o Options) (*json.Object, 
 		}
 		bundle.Set("source_files", required)
 	}
-	if err := TrimToBudget(bundle, o.Contracts, o.Query, contextMetadataChars); err != nil {
+	if err := TrimToBudgetWithProfile(bundle, o.Contracts, o.Query, contextMetadataChars, profile); err != nil {
 		return nil, err
 	}
 	if usedChars, err = dumpedLen(bundle); err != nil {
@@ -763,7 +788,7 @@ func Build(t transcript.Transcript, secrets []string, o Options) (*json.Object, 
 	toolCalls := len(bundle.Value("tool_calls_newest_first").([]any))
 	metadata.Set("tool_calls_included", json.IntOf(int64(toolCalls)))
 	metadata.Set("tool_calls_omitted", json.IntOf(int64(max(0, len(usableCalls)-toolCalls))))
-	if err := TrimToBudget(bundle, o.Contracts, o.Query, 0); err != nil {
+	if err := TrimToBudgetWithProfile(bundle, o.Contracts, o.Query, 0, profile); err != nil {
 		return nil, err
 	}
 	return bundle, nil
@@ -802,28 +827,41 @@ func dumpedLen(v any) (int, error) {
 	return pystr.Len(text), err
 }
 
-// fits reports whether bundle encodes within policy.EvidenceChars after reservedChars.
+// fits reports whether bundle encodes within budgetChars after reservedChars.
 //
 // py: agent_decisions/evidence.py _fits
-func fits(bundle *json.Object, reservedChars int) (bool, error) {
+func fits(bundle *json.Object, reservedChars, budgetChars int) (bool, error) {
 	length, err := dumpedLen(bundle)
-	return length+reservedChars <= policy.EvidenceChars, err
+	return length+reservedChars <= budgetChars, err
 }
 
 // fitsWith returns _fits({**bundle, key: value}, reserved_chars=reservedChars).
-func fitsWith(bundle *json.Object, key string, value any, reservedChars int) (bool, error) {
+func fitsWith(bundle *json.Object, key string, value any, reservedChars, budgetChars int) (bool, error) {
 	trial := bundle.Copy()
 	trial.Set(key, value)
-	return fits(trial, reservedChars)
+	return fits(trial, reservedChars, budgetChars)
 }
 
-// TrimToBudget drops and shortens bundle's optional parts, in place, until it fits policy.EvidenceChars
-// after reservedChars: architecture history first, then the oldest tool calls, optional and then required
-// source files, and user messages after the first; the first user message is halved last. hook.py calls
-// this Python-private function after it adds its own keys.
+// TrimToBudget applies the legacy Jev evidence limits to bundle's optional parts, in place.
 //
 // py: agent_decisions/evidence.py _trim_to_budget
 func TrimToBudget(bundle *json.Object, contracts []string, query string, reservedChars int) error {
+	return TrimToBudgetWithProfile(bundle, contracts, query, reservedChars, policy.EvidenceProfile{})
+}
+
+// TrimToBudgetWithProfile drops and shortens bundle's optional parts, in place, until its serialized
+// character count fits the fixed profile after reservedChars.
+func TrimToBudgetWithProfile(bundle *json.Object, contracts []string, query string, reservedChars int,
+	requested policy.EvidenceProfile) error {
+	profile, err := normalizeEvidenceProfile(requested)
+	if err != nil {
+		return err
+	}
+	return trimToBudget(bundle, contracts, query, reservedChars, profile)
+}
+
+func trimToBudget(bundle *json.Object, contracts []string, query string, reservedChars int,
+	profile policy.EvidenceProfile) error {
 	metadata, err := objectValue(bundle, "metadata", "get") // without one, Python updates a dict that it drops
 	if err != nil {
 		return err
@@ -834,7 +872,7 @@ func TrimToBudget(bundle *json.Object, contracts []string, query string, reserve
 	}
 	// over reports whether the bundle does not fit and bundle[key] is truthy.
 	over := func(key string) (bool, error) {
-		ok, err := fits(bundle, reservedChars)
+		ok, err := fits(bundle, reservedChars, profile.BudgetChars)
 		return !ok && json.Truthy(bundle.Value(key)), err
 	}
 	pop := func(key string) ([]any, error) {
@@ -933,7 +971,7 @@ func TrimToBudget(bundle *json.Object, contracts []string, query string, reserve
 		metadata.Set("source_files_truncated", json.IntOf(int64(countTruncated(sources))))
 	}
 	for {
-		ok, err := fits(bundle, reservedChars)
+		ok, err := fits(bundle, reservedChars, profile.BudgetChars)
 		if err != nil {
 			return err
 		}
@@ -1173,6 +1211,15 @@ func selectToolCalls(calls []transcript.ToolCall, query string) []indexedCall {
 // py: agent_decisions/evidence.py _source_files
 func sourceFiles(t transcript.Transcript, query string, cwd *string, secrets, contracts []string,
 	frame int) (items []*json.Object, omitted, tooLarge int, scanLimited bool, err error) {
+	profile, err := normalizeEvidenceProfile(policy.EvidenceProfile{})
+	if err != nil {
+		return nil, 0, 0, false, err
+	}
+	return sourceFilesWithProfile(t, query, cwd, secrets, contracts, frame, profile)
+}
+
+func sourceFilesWithProfile(t transcript.Transcript, query string, cwd *string, secrets, contracts []string,
+	frame int, profile policy.EvidenceProfile) (items []*json.Object, omitted, tooLarge int, scanLimited bool, err error) {
 	if cwd == nil {
 		return nil, 0, 0, false, nil
 	}
@@ -1250,7 +1297,8 @@ func sourceFiles(t transcript.Transcript, query string, cwd *string, secrets, co
 			omitted++
 			continue
 		}
-		item, reason, err := readSource(root, rel, prioritized.Value(rel).(string), secrets, query)
+		item, reason, err := readSource(root, rel, prioritized.Value(rel).(string), secrets, query,
+			profile.TextChars)
 		if err != nil {
 			return nil, 0, 0, false, err
 		}
@@ -1395,6 +1443,17 @@ func sha256Hex(data []byte) string {
 //
 // py: agent_decisions/evidence.py contract_observations
 func ContractObservations(paths []string, cwd string, secrets []string) (*json.Object, error) {
+	return ContractObservationsWithProfile(paths, cwd, secrets, policy.EvidenceProfile{})
+}
+
+// ContractObservationsWithProfile returns current hashes using the fixed evidence profile's source
+// excerpt limit, without promoting contract text to user authority.
+func ContractObservationsWithProfile(paths []string, cwd string, secrets []string,
+	requested policy.EvidenceProfile) (*json.Object, error) {
+	profile, err := normalizeEvidenceProfile(requested)
+	if err != nil {
+		return nil, err
+	}
 	root, err := resolve(cwd, false)
 	if err != nil {
 		return nil, err
@@ -1413,7 +1472,7 @@ func ContractObservations(paths []string, cwd string, secrets []string) (*json.O
 			return nil, err
 		}
 		if ok {
-			if item, _, err = readSource(root, rel, path, secrets, ""); err != nil {
+			if item, _, err = readSource(root, rel, path, secrets, "", profile.TextChars); err != nil {
 				return nil, err
 			}
 		}
@@ -1883,7 +1942,7 @@ func sameSourceObservation(first, second fs.FileInfo) bool {
 // err is a Python exception other than OSError.
 //
 // py: agent_decisions/evidence.py _read_source
-func readSource(root, rel, path string, secrets []string, query string) (*json.Object, string, error) {
+func readSource(root, rel, path string, secrets []string, query string, textChars int) (*json.Object, string, error) {
 	initial, err := os.Stat(path)
 	if err != nil {
 		return nil, "unreadable", nil
@@ -1908,8 +1967,8 @@ func readSource(root, rel, path string, secrets []string, query string) (*json.O
 		return nil, "binary", nil
 	}
 	text := json.DecodeUTF8(data)
-	truncated := pystr.Len(text) > sourceChars
-	text = clipSource(Redact(text, secrets), query, sourceChars)
+	truncated := pystr.Len(text) > textChars
+	text = clipSource(Redact(text, secrets), query, textChars)
 	return json.NewObject(
 		"path", rel,
 		"sha256", sha256Hex(data),

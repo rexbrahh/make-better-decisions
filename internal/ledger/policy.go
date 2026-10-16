@@ -1,6 +1,26 @@
 package ledger
 
-import "github.com/rexbrahh/make-better-decisions/internal/py/json"
+import (
+	"github.com/rexbrahh/make-better-decisions/internal/policy"
+	"github.com/rexbrahh/make-better-decisions/internal/py/json"
+)
+
+// ReviewProvider reads only verified owner policy; legacy installations use Jev.
+func ReviewProvider(host string) (policy.ReviewProvider, error) {
+	spec, err := InstallationPolicy(host)
+	if err != nil {
+		return policy.ReviewProvider{}, err
+	}
+	value, exists := spec.Get("review_provider")
+	if !exists {
+		return policy.Provider("")
+	}
+	name, ok := value.(string)
+	if !ok || name == "" {
+		return policy.ReviewProvider{}, &policy.ReviewProviderError{Message: "invalid review provider in signed installation policy"}
+	}
+	return policy.Provider(name)
+}
 
 // The owner policy functions of policy.py. They read the ledger, so they live here to avoid an import
 // cycle between packages policy and ledger.

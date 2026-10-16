@@ -94,7 +94,7 @@ type oracleOp struct {
 	op  []any
 }
 
-// compareWithPython compares Python and Go outcomes, normalizing only retired argparse presentation for CLI operations.
+// compareWithPython compares Python and Go outcomes, normalizing retired presentation and the additive provider help.
 func compareWithPython(t *testing.T, ops []oracleOp) {
 	t.Helper()
 	python := os.Getenv("AGENT_DECISIONS_PYTHON")
@@ -162,13 +162,35 @@ func normalizeCLIResult(t *testing.T, outcome []any) []any {
 		return outcome
 	}
 	result := loads(t, outcome[1].(string)).([]any)
-	result[1] = oracletest.CLIPresentation(result[1].(string))
-	result[2] = oracletest.CLIPresentation(result[2].(string))
+	result[1] = legacyInstallerPresentation(result[1].(string))
+	result[2] = legacyInstallerPresentation(result[2].(string))
 	text, err := json.Dumps(result, json.Options{SortKeys: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return []any{"ok", text}
+}
+
+// The frozen baseline predates this one option; keep every existing option and error check.
+func legacyInstallerPresentation(text string) string {
+	text = oracletest.CLIPresentation(text)
+	text = strings.ReplaceAll(text, "[--review-provider{jev,subq}]", "")
+	return strings.ReplaceAll(text,
+		"--review-provider{jev,subq}Selectthereviewprovider;omissionpreservesthecurrentsignedselection.", "")
+}
+
+func TestLegacyInstallerComparisonRetainsChangedProviderHelp(t *testing.T) {
+	const added = "usage: tool [--review-provider {jev,subq}]\noptions:\n--review-provider {jev,subq} Select the review provider; omission preserves the current signed selection."
+	want := legacyInstallerPresentation("usage: tool\noptions:\n")
+	if got := legacyInstallerPresentation(added); got != want {
+		t.Fatalf("additive help did not normalize: %q", got)
+	}
+	for _, changed := range []string{strings.ReplaceAll(added, "jev,subq", "jev,unknown"),
+		strings.ReplaceAll(added, "signed selection", "unverified selection")} {
+		if legacyInstallerPresentation(changed) == want {
+			t.Fatal("comparison hid a changed provider contract")
+		}
+	}
 }
 
 // render returns an outcome as text: the error, or the JSON result with a cli result's streams expanded.
@@ -522,6 +544,9 @@ func TestOracleCLI(t *testing.T) {
 	var ops []oracleOp
 	for _, argv := range cases {
 		ops = append(ops, oracleOp{env, []any{"cli", toAnyList(argv)}})
+	}
+	for _, prefix := range []string{"--r", "--re", "--review", "--review-", "--review-m"} {
+		ops = append(ops, oracleOp{env, []any{"cli", toAnyList(plus(codex, prefix, "availability"))}})
 	}
 	for _, columns := range []string{"200", "60", "40", "30", "10", "1", "0", "x", " 50 ", "1_00"} {
 		ops = append(ops, oracleOp{with(env, "COLUMNS", columns), []any{"cli", toAnyList([]string{"-h"})}})

@@ -1,8 +1,10 @@
-# make-better-decisions v2.1
+# make-better-decisions v2.2
 
-`agent-decisions` supplements Claude Code and Codex with selective decision review. Agents consult TypeSafe Jev before a new material choice. Hooks enforce review on declared edit and patch tools, filesystem write/edit tools, and plan acceptance.
+`agent-decisions` supplements Claude Code and Codex with selective decision review. Agents consult the selected reviewer before a new material choice. Hooks enforce review on declared edit and patch tools, filesystem write/edit tools, and plan acceptance.
 
-The goal is useful, enforceable review. Jev evaluates a material choice against observed evidence. Code checks receipt identity, scope, constraints, and failure policy. Exact instructions and routine operations need no invented choice.
+The goal is useful, enforceable review. The reviewer evaluates a material choice against observed evidence. Code checks receipt identity, scope, constraints, and failure policy. Exact instructions and routine operations need no invented choice.
+
+Version 2.2.0 adds optional SubQ Snap review with larger evidence and bounded question batches. TypeSafe Jev remains the default. Snap is a preview provider and needs further stability qualification before default promotion. See the [release notes](docs/releases/v2.2.0.md).
 
 Version 2.1.3 reports the source root used for unavailable contract files. See the [release notes](docs/releases/v2.1.3.md) and [QA record](docs/validation/v2.1.3-qa-2026-10-15.md). Earlier releases correct [PROCEED reuse](docs/releases/v2.1.2.md), [installer credential diagnostics](docs/releases/v2.1.1.md) and [installation and compatibility defects](docs/validation/v2.1.0-campaign-2026-10-15.md).
 
@@ -16,7 +18,7 @@ The hook builds the evidence. The agent cannot choose the source set by itself.
 
 - macOS on Apple silicon (darwin-arm64) or Linux on x86-64 (linux-amd64).
 - `curl`, and `sha256sum` or `shasum`, for the installer. Python is not necessary.
-- A TypeSafe key in `TYPESAFE_API_KEY`, or in `~/.config/sops-nix/secrets/typesafe_api_key`.
+- A key for the selected provider. Jev uses `TYPESAFE_API_KEY` or `~/.config/sops-nix/secrets/typesafe_api_key`.
 - Local Claude Code or local Codex on macOS or Linux.
 
 Windows is not supported. The ledger uses POSIX file locks.
@@ -98,6 +100,37 @@ codex mcp list --help
 
 `agent-decisions-shell-prefix` is an execution wrapper. It is not a help-style CLI.
 
+### Optional SubQ Snap provider
+
+Snap uses `SUBQ_API_KEY` or `~/.config/sops-nix/secrets/subq_api_key`. Make the key available to the host process before starting it.
+The installer stores only the provider name in signed host policy. It does not store the API key.
+
+Preview the selection, then apply it for each intended host:
+
+```sh
+bin/agent-decisions-install --host codex --review-provider subq --install-root /path/to/installed/agent-decisions
+bin/agent-decisions-install --host codex --review-provider subq --install-root /path/to/installed/agent-decisions --apply
+bin/agent-decisions-install --host claude --review-provider subq --install-root /path/to/installed/agent-decisions --apply
+```
+
+Use `--review-provider jev` to restore Jev. An omitted flag preserves the existing selection.
+An unknown signed selection blocks reviewed operations. An explicit valid installer selection repairs it.
+Tool input and environment variables cannot select the provider. Provider changes require fresh material review.
+
+| Limit | Jev | SubQ Snap |
+| --- | --- | --- |
+| Model | `jev-1.13.0` | `subq-snap-preview` |
+| Evidence budget | 80,000 serialized characters | 800,000 serialized characters |
+| Text excerpt | 16,000 characters | 160,000 characters |
+| Review deadline | 3 seconds | 10 seconds across all fragments and batches |
+| Questions per API request | Existing Jev request | At most 16, with at most four requests running |
+
+Snap sends each batch the same scrubbed state. Every batch must pass validation before any answer reaches a gate.
+Snap requests stop at 2 MiB and successful responses stop at 1 MiB. Redirects and provider fallback are rejected.
+Snap does not retry with shorter context. A character budget does not guarantee that input fits the model token limit.
+Existing source-file counts, source-file sizes, tool-input limits, redaction, authority checks and failure modes remain active.
+The [provider design](docs/superpowers/specs/2026-10-15-subq-provider-design.md) and [QA record](docs/validation/v2.2.0-qa-2026-10-16.md) state qualification limits.
+
 ## Operation
 
 Hook context reads transcript and signed ledger records incrementally. It retains at most 16 optional edit, question, plan, or Stop cache payloads. An older cache miss requires fresh review. Complete decision entries, user history, transcript identity checks, and verdict receipts remain intact. Memory use still depends on retained authority, tool text, and the largest individual record.
@@ -131,7 +164,7 @@ The bundle keeps the initial and latest user instructions, the requested helper,
 
 Source discovery prioritizes requested paths, then project rule files, then other observed paths. It stops at 16 candidate probes and bounds each scanned text. Large sources retain the head, tail, and a window around the most specific matching query term. If discovery stops early, `source_files_omitted_is_lower_bound` marks the omission count as a lower bound.
 
-Jev questions check one condition at a time. Code combines the answers. A decision needs an observed selection basis and no missing required fact or constraint. This follows [TypeSafe's atomic-question guidance](https://docs.typesafe.ai/introduction#atomic-questions-composed-in-code).
+Reviewer questions check one condition at a time. Code combines the answers. A decision needs an observed selection basis and no missing required fact or constraint. This follows [TypeSafe's atomic-question guidance](https://docs.typesafe.ai/introduction#atomic-questions-composed-in-code).
 
 An observed interface or data-flow pattern can provide a selection basis when the chosen option follows it. Main-agent advice uses a 0.5 basis threshold when agent ownership is at least 0.7. Worker bindings retain 0.8. Missing facts, constraints, options, and user ownership still gate the result.
 
@@ -162,7 +195,7 @@ Add optional `scope` and `contracts` fields to a decision request:
 
 Paths are repository-relative files or directory prefixes ending in `/`. Globs, absolute paths, and parent traversal are rejected. Scope permits at most 32 paths and 32 invariants. A request permits at most 256 option/invariant checks and eight contract files.
 
-Jev checks each option against each invariant. A clear violation refuses the pick. Uncertain support requests evidence. Worker binding also requires preference confidence of at least 0.8. A weaker worker preference produces `PARENT REVIEW`, without a receipt. Main-agent preferences remain advisory. [TypeSafe confidence measures the distribution](https://docs.typesafe.ai/confidence), so it does not certify correctness.
+The reviewer checks each option against each invariant. A clear violation refuses the pick. Uncertain support requests evidence. Worker binding also requires preference confidence of at least 0.8. A weaker worker preference produces `PARENT REVIEW`, without a receipt. Main-agent preferences remain advisory. [TypeSafe confidence measures the distribution](https://docs.typesafe.ai/confidence), so it does not certify correctness.
 
 For approach selection, the questions assess compatibility with observed constraints. New implementation and execution checks can remain future work. A proposed check is not completed proof. Necessary current prerequisites still require observations. If GATHER identifies no missing fact, inspect its displayed blockers and invariant text. Do not repeat a completed comparison.
 
@@ -188,7 +221,7 @@ A later user instruction overrides an earlier binding decision.
 
 `REFUSED` and `GATHER EVIDENCE` do not authorize work. There is no retry-cap exemption.
 
-A `PROCEED` verdict means Jev judged the operation routine or exactly specified. It does not create a reusable approach decision.
+A `PROCEED` verdict means the reviewer judged the operation routine or exactly specified. It does not create a reusable approach decision.
 
 ## Gates
 
@@ -197,7 +230,7 @@ A `PROCEED` verdict means Jev judged the operation routine or exactly specified.
 - Automatic Stop and SubagentStop review is removed. Previously loaded completion callbacks return without blocking.
 - `SessionStart` and `UserPromptSubmit` support pruning, path context, and signed user history.
 
-For tool inputs up to 16,000 characters, the edit gate sends one API request. Larger complete fields are split into field-path chunks. The chunks keep original fields and proposed fields distinct. They share one three-second deadline. Inputs above 256,000 JSON characters are denied.
+For tool inputs up to 16,000 characters, the edit gate makes one review call. Larger complete fields are split into field-path chunks. The chunks keep original fields and proposed fields distinct. They share the selected provider's deadline. Snap can split each call into question batches. Inputs above 256,000 JSON characters are denied.
 
 Submit complete commands or code in one shell call. The deciding workflow does not permit future executable stdin.
 
@@ -205,7 +238,7 @@ Submit complete commands or code in one shell call. The deciding workflow does n
 
 Required review is the default for explicit consultations and declared sensitive tools. Review failures block those operations. Other tools and completion continue without Jev. File changes through other interfaces remain subject to host permissions and approvals.
 
-An HTTP 400 with `max_tokens_exceeded` triggers one retry within the original three-second deadline. The retry shortens historical tool input, output, and source excerpts. Historical inputs retain omission markers and original lengths. It preserves human messages, rule files, contracts, current pending input, and completed decisions. The receipt records the exact redacted state sent to Jev. A failed retry still blocks execution. Other validation failures identify the question and failed check without displaying response contents.
+For Jev, HTTP 400 with `max_tokens_exceeded` triggers one retry within the original three-second deadline. The retry shortens historical tool input, output, and source excerpts. Historical inputs retain omission markers and original lengths. It preserves human messages, rule files, contracts, current pending input, and completed decisions. The receipt records the exact redacted state sent to the reviewer. A failed retry still blocks execution. Other validation failures identify the question and failed check without displaying response contents.
 
 The retry limits optional observation text to one sixteenth of its previous length, with a 128-character minimum and a 1,000-character cap. A remaining size rejection reports aggregate context-section sizes and attempt count. It does not display their contents.
 
@@ -241,7 +274,7 @@ Ledger files are in:
 
 Set `AGENT_DECISIONS_STATE` to override the state root during operator setup. The guard denies tool calls that name the state directory, including glob, `~`, `$HOME`, and `{a,b}` spellings in shell commands. Session records expire after 14 days. Signed installation policy and architecture history remain available.
 
-Signed gate records retain context timings, initial and final request sizes, attempt count, API elapsed time, model, and numeric usage when returned. Metrics stay outside model state and cache fingerprints. Gate reuse requires identical evidence, decisions, actor, repository, model, thresholds, review contract, and operator policy. It does not infer permission for a new write.
+Signed gate records retain context timings, initial and final request sizes, attempt count, API elapsed time, model, and numeric usage when returned. Snap also records provider, batch count, request sizes and summed usage. Metrics stay outside model state and cache fingerprints. Gate reuse requires identical evidence, decisions, actor, repository, provider, model, context profile, thresholds, review contract, and operator policy. Legacy receipts qualify only for the original Jev identity. It does not infer permission for a new write.
 
 ## Security boundaries
 
