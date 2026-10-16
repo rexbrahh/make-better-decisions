@@ -845,6 +845,47 @@ func TestPeerUnidentifiedGatherNamesInvariantsWithoutRepeatingComparison(t *test
 	assertNotContains(t, outcome.Message, "Run a check comparing these options")
 }
 
+func TestInvariantOnlyGatherExplainsItsBlockingCheck(t *testing.T) {
+	for _, providerName := range []string{"jev", "subq"} {
+		for _, item := range []struct {
+			name, missingFact         string
+			sufficient, unsupported   float64
+			invariantOnly, suggestion bool
+		}{
+			{"named suggestion", "claim_0", .95, .10, true, true},
+			{"unidentified suggestion", "not_identified", .95, .10, true, false},
+			{"missing comparison basis", "claim_0", .20, .10, false, false},
+			{"unsupported prerequisite", "claim_0", .95, .90, false, false},
+		} {
+			t.Run(providerName+"/"+item.name, func(t *testing.T) {
+				setUp(t)
+				request := withField(obj(t, progressRequest), "decision",
+					"Which cache policy should the parser use? Observed: parser.py retains its input lease until parsing ends.")
+				ctx := makeCtx(t, ctxOptions{})
+				ctx.Reviewer, _ = policy.Provider(providerName)
+				api := fake(map[string]any{"pick": "lfu", "owner": "agent", "sufficient": item.sufficient,
+					"unsupported": item.unsupported, "pattern_present": .10,
+					"missing_fact": item.missingFact, "evidence_needed": "comparison",
+					"invariant_0_lru": .95, "invariant_0_lfu": .60})
+				outcome := decide(t, request, ctx, asker(api))
+				assertAction(t, outcome, "gather_evidence")
+				if _, ok := outcome.Record.Get("receipt_id"); ok {
+					t.Fatal("an unresolved invariant produced a receipt")
+				}
+				assertEqual(t, len(api.Requests()), 1)
+				assertContains(t, outcome.Message, "invariant_0_lfu=0.60 (requires 0.80)")
+				assertEqual(t, strings.Contains(outcome.Message, "next: The selected option's required invariants remain unverified."), item.invariantOnly)
+				assertEqual(t, strings.Contains(outcome.Message, "reviewer evidence suggestion:"), item.suggestion)
+				if item.invariantOnly {
+					assertNotContains(t, outcome.Message, "The evidence is not enough to choose.")
+					assertContains(t, outcome.Message, "This result grants no work permission.")
+					assertNotContains(t, outcome.Message, "check: Corroborate the named statement")
+				}
+			})
+		}
+	}
+}
+
 // py: tests/test_review_progress.py::test_recorded_stage_comparison_preserves_negative_cases
 func TestRecordedStageComparisonPreservesNegativeCases(t *testing.T) {
 	setUp(t)

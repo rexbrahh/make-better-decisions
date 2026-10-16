@@ -635,7 +635,7 @@ func (e *expr) lookup(m map[string]string, key any) string {
 
 // py: agent_decisions/gates.py _verdict
 func verdict(action, decision string, answers *json.Object, unverified, reasons []string, refusals int,
-	overCap bool, receiptID *string, observed, missingFacts *json.Object, providerLabel string) (string, error) {
+	overCap bool, receiptID *string, observed, missingFacts *json.Object, providerLabel string, invariantOnly bool) (string, error) {
 	var e expr
 	pick := e.item(e.item(answers, "pick"), "choice")
 	probabilities := e.items(e.item(e.item(answers, "pick"), "probabilities"))
@@ -715,7 +715,10 @@ func verdict(action, decision string, answers *json.Object, unverified, reasons 
 	missingChoice := func() any {
 		return e.get(e.get(answers, "missing_fact", &json.Object{}), "choice", nil)
 	}
-	if action == "gather_evidence" &&
+	if invariantOnly {
+		next = "The selected option's required invariants remain unverified. Inspect the displayed invariant checks and current observations. " +
+			"This result grants no work permission."
+	} else if action == "gather_evidence" &&
 		is(e.get(e.get(answers, "evidence_needed", &json.Object{}), "choice", nil), "comparison") &&
 		!json.Truthy(e.get(missingFacts, missingChoice(), nil)) {
 		next = "Diagnose the displayed blockers. Do not repeat a completed comparison or choose from this result."
@@ -732,12 +735,18 @@ func verdict(action, decision string, answers *json.Object, unverified, reasons 
 			if err != nil && e.err == nil {
 				e.err = err
 			}
-			lines = append(lines, "missing evidence: "+quoted,
-				"check: Corroborate the named statement with a source read or the relevant tool call. "+
-					"Include its path and the observed result in the next request.")
+			if invariantOnly {
+				lines = append(lines, "reviewer evidence suggestion: "+quoted,
+					"check: Check whether the named statement is necessary for the blocking invariant. "+
+						"Retain observed facts and required constraints. Do not retry an unchanged request.")
+			} else {
+				lines = append(lines, "missing evidence: "+quoted,
+					"check: Corroborate the named statement with a source read or the relevant tool call. "+
+						"Include its path and the observed result in the next request.")
+			}
 		} else {
 			lines = append(lines, "missing evidence: no specific missing fact was identified by "+providerLabel+".")
-			if is(target, "comparison") {
+			if invariantOnly || is(target, "comparison") {
 				lines = append(lines, "check: Review remains unresolved. Inspect the displayed blockers and invariant text. "+
 					"Do not repeat a completed comparison. This result grants no work permission.")
 			} else {
@@ -1160,7 +1169,9 @@ func judge(ctx Context, answers, record *json.Object, decision string, options, 
 		id = "review_" + id
 		receiptID = &id
 	}
-	message, err := verdict(action, decision, answers, nil, reasons, refusals, overCap, receiptID, ctx.Evidence, missingFacts, reviewerName(ctx))
+	invariantOnly := action == "gather_evidence" && hasBasis && !blocked() &&
+		found && !is(pick, NoneFit) && !contains(eligible, pickID)
+	message, err := verdict(action, decision, answers, nil, reasons, refusals, overCap, receiptID, ctx.Evidence, missingFacts, reviewerName(ctx), invariantOnly)
 	if err != nil {
 		return Outcome{}, err
 	}
