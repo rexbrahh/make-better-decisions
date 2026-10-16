@@ -37,7 +37,7 @@ func Provider(name string) (ReviewProvider, error) {
 		return ReviewProvider{"jev", Model, "jev-1", time.Duration(TimeoutS * float64(time.Second)),
 			EvidenceProfile{EvidenceChars, ClipChars}}, nil
 	case "subq":
-		return ReviewProvider{"subq", SubQModel, "snap-1", 10 * time.Second,
+		return ReviewProvider{"subq", SubQModel, "snap-2", 10 * time.Second,
 			EvidenceProfile{800_000, 160_000}}, nil
 	default:
 		return ReviewProvider{}, &ReviewProviderError{Message: fmt.Sprintf("unknown review provider %q", name)}

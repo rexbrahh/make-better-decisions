@@ -257,6 +257,7 @@ func TestAskSharesFourRequestLimitAcrossConcurrentCalls(t *testing.T) {
 func TestAskCancellationReturnsNoPartialAnswers(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	firstAnswered := make(chan struct{})
 	secondStarted := make(chan struct{}, 1)
 	var requests atomic.Int32
 	client := testClient(ctx, roundTripper(func(request *http.Request) (*http.Response, error) {
@@ -267,7 +268,9 @@ func TestAskCancellationReturnsNoPartialAnswers(t *testing.T) {
 		}
 		batch := body.Value("questions").(*json.Object)
 		if batch.Keys()[0] == "q00" {
-			return responseFor(request, policy.SubQModel, nil, nil)
+			response, err := responseFor(request, policy.SubQModel, nil, nil)
+			close(firstAnswered)
+			return response, err
 		}
 		secondStarted <- struct{}{}
 		<-request.Context().Done()
@@ -289,6 +292,11 @@ func TestAskCancellationReturnsNoPartialAnswers(t *testing.T) {
 	case <-secondStarted:
 	case <-time.After(time.Second):
 		t.Fatal("second batch did not start")
+	}
+	select {
+	case <-firstAnswered:
+	case <-time.After(time.Second):
+		t.Fatal("first batch did not answer")
 	}
 	cancel()
 	select {

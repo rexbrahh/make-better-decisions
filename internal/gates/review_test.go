@@ -51,8 +51,11 @@ func TestCompletedAndInheritedReceiptsStayWithTheirReviewIdentity(t *testing.T) 
 	for _, row := range snap.Entries {
 		row.Set("review_identity", reviewIdentity(snap))
 	}
-	for _, change := range []string{"none", "provider", "model", "profile"} {
+	originalContract := reviewContract
+	t.Cleanup(func() { reviewContract = originalContract })
+	for _, change := range []string{"none", "provider", "model", "profile", "contract"} {
 		ctx := snap
+		reviewContract = originalContract
 		switch change {
 		case "provider":
 			ctx.Reviewer, _ = policy.Provider("jev")
@@ -60,6 +63,8 @@ func TestCompletedAndInheritedReceiptsStayWithTheirReviewIdentity(t *testing.T) 
 			ctx.Reviewer.Model = "subq-next"
 		case "profile":
 			ctx.Reviewer.ContextProfile = "snap-next"
+		case "contract":
+			reviewContract = "scoped-review-next"
 		}
 		ctx.InheritedEntries = []*json.Object{entry}
 		rows, err := Consulted(ctx)
@@ -87,4 +92,52 @@ func TestSnapFailuresNameTheSelectedProvider(t *testing.T) {
 	out = editGate(t, "Edit", json.NewObject("file_path", "parser.py", "new_string", "read_chunks()"), ctx, asker(api))
 	assertAction(t, out, "deny")
 	assertContains(t, out.Message, "subq unreachable")
+}
+
+func TestSnapAuthorityRevisionRejectsPreviousApprovals(t *testing.T) {
+	setUp(t)
+	previous := makeCtx(t, ctxOptions{})
+	previous.Reviewer, _ = policy.Provider("subq")
+	previous.Reviewer.ContextProfile = "snap-1"
+	first := questionGate(t, obj(t, colour), previous, asker(fake(map[string]any{"owner_0": "user"})))
+	entry := entryOf(first.Record, "host", previous.Host, "agent_id", previous.AgentID, "action", first.Action)
+	current := makeCtx(t, ctxOptions{entries: []*json.Object{entry}})
+	current.Reviewer, _ = policy.Provider("subq")
+	api := fake(map[string]any{"owner_0": "user"})
+	questionGate(t, obj(t, colour), current, asker(api))
+	if len(api.Requests()) != 1 {
+		t.Fatal("current Snap reused a snap-1 gate answer")
+	}
+	oldReceipt := json.NewObject("review_identity", reviewIdentity(previous))
+	previous.InheritedEntries = []*json.Object{oldReceipt}
+	rows, err := Consulted(previous)
+	if err != nil || len(rows) != 1 {
+		t.Fatal("old-identity positive control did not retain its receipt")
+	}
+	current.InheritedEntries = []*json.Object{oldReceipt}
+	rows, err = Consulted(current)
+	if err != nil || len(rows) != 0 {
+		t.Fatal("current Snap retained a snap-1 receipt")
+	}
+}
+
+func TestSnapAuthorityRevisionInvalidatesCachedEditApproval(t *testing.T) {
+	setUp(t)
+	previous := makeCtx(t, ctxOptions{})
+	previous.Reviewer, _ = policy.Provider("subq")
+	previous.Reviewer.ContextProfile = "snap-1"
+	input := json.NewObject("file_path", "store.py", "content", "import sqlite3\ndb = sqlite3.connect('store.db')\n")
+	first := editGate(t, "Write", input, previous, asker(fake(map[string]any{"needs_decision": 0.0})))
+	previous.Entries = []*json.Object{entryOf(first.Record, "host", previous.Host, "agent_id", previous.AgentID, "action", first.Action)}
+	api := fake(map[string]any{"needs_decision": .99})
+	assertAction(t, editGate(t, "Write", input, previous, asker(api)), "allow")
+	if len(api.Requests()) != 0 {
+		t.Fatal("old-profile positive control did not reuse its cached approval")
+	}
+	current := previous
+	current.Reviewer, _ = policy.Provider("subq")
+	assertAction(t, editGate(t, "Write", input, current, asker(api)), "deny")
+	if len(api.Requests()) != 1 {
+		t.Fatal("current Snap did not review the old-profile cached edit again")
+	}
 }

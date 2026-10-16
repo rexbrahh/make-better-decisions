@@ -25,6 +25,7 @@ func TestLiveSnapHosts(t *testing.T) {
 	if _, err := subq.LoadKey(); err != nil {
 		t.Fatal(err)
 	}
+	provider, _ := policy.Provider("subq")
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatal(err)
@@ -115,6 +116,8 @@ func TestLiveSnapHosts(t *testing.T) {
 							identity, _ := row.Value("review_identity").(*pyjson.Object)
 							consulted = row.Value("action") == "advisory" && row.Value("pick") == "utf8" &&
 								row.Value("receipt_id") != nil && identity != nil && identity.Value("provider") == "subq" &&
+								identity.Value("model") == provider.Model && identity.Value("context_profile") == provider.ContextProfile &&
+								identity.Value("review_contract") == policy.ReviewContract &&
 								call.Value("batch_count") == pyjson.Int("2")
 						}
 					}
