@@ -1,6 +1,6 @@
 # Native Codex receipt assignment
 
-Date: 2026-10-16. Release candidate: v2.2.7. Base: `e511920`.
+Date: 2026-10-16. Release: v2.2.7. Base: `e511920`.
 
 ## Confirmed failure and repair
 
@@ -79,6 +79,10 @@ An offline check of the same retained real threads passes. A wrong-parent contro
 These checks make no provider calls. The root verifies the second reader's actual model and effort.
 Focused race checks, vet and whitespace checks pass after the final test corrections.
 
+One documentation edit reports `jev unreachable` and does not execute.
+The existing live encoding control then returns ADVISORY in 0.17 seconds, and the exact edit succeeds on retry.
+This verifies recovery for that operation. It does not establish the backend cause.
+
 Private diagnostic records remain under `probe/out/subq-followup/native-inheritance/`.
 No modified historical workflow packet is replayed. No SDK source, builder or shared cache is used.
 
@@ -91,6 +95,23 @@ Both candidate release binaries build and match their pins.
 | Darwin arm64 | `1b593fb721649801f29b47c3b01f4bbd841112cbc5a1aa1b2aeab46056b44932` |
 | Linux amd64 | `612be1874a0306a3f50e396eebbbbb91ba7892aa298cc20b1f9099bcf603d831` |
 
-The protected candidate installers succeed for both Mac hosts.
-Their previews retain Jev with required review.
-Signed publication, release-cache registration and final activation checks remain in progress.
+Signed source commit: `d5de3035cdc37b56f31b6472eabf942d93eca3e5`.
+The signed `v2.2.7` tag verifies. Both downloaded release assets match the listed pins.
+Release: https://github.com/rexbrahh/make-better-decisions/releases/tag/v2.2.7
+
+Codex and Claude plugin caches report v2.2.7 and match all seven checked public registration and runtime-source files.
+Claude user and project registrations identify the signed release commit.
+The authenticated primary configuration shares those plugin registrations through its existing plugins-directory symlink.
+The protected final installers succeed for both hosts using the downloaded Darwin binary.
+Their plans retain Jev with required review.
+
+The active runtime is `~/.local/share/agent-decisions/runtimes/83524658238943e68495d0973b4b2d55`.
+It reports 2.2.7 and matches the Darwin pin.
+All ten runtime files match the candidate used for the real Snap worker and parent-host checks.
+All three owned Codex hooks are enabled and trusted in repository and home scopes.
+Fresh Codex and authenticated Claude sessions capture exact factual reads with active hooks and no unsolicited consultation.
+Those sessions report no invalid-hook JSON or shared-server profile warning.
+
+Codex default policies, both hosts' MCP registrations and the primary Claude settings symlink remain unchanged.
+Existing SDK sessions are not restarted or individually requalified.
+Peer-owned `evals/`, `docs/evaluation/` and `docs/handoff.md` remain outside the release commits.
