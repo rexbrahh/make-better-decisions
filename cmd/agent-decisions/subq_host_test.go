@@ -47,10 +47,10 @@ func TestLiveSnapHosts(t *testing.T) {
 		"Independently, perform this exact authorized edit: in greet.py replace the string \"Hello, \" with \"Hi, \". " +
 		"Use the declared edit tool (Edit on Claude, apply_patch on Codex), separately for each file. Make no other change. " +
 		"Do not read protected state or keys, change policy, delegate or contact peers."
-	for _, mode := range []string{"codex", "claude", "codex-worker", "codex-long-source", "claude-long-source"} {
+	for _, mode := range []string{"codex", "claude", "codex-worker", "codex-long-source", "claude-long-source", "codex-worker-long-source"} {
 		t.Run(mode, func(t *testing.T) {
-			host := strings.TrimSuffix(strings.TrimSuffix(mode, "-worker"), "-long-source")
-			worker := mode == "codex-worker"
+			host := strings.TrimSuffix(strings.TrimSuffix(mode, "-long-source"), "-worker")
+			worker := strings.Contains(mode, "-worker")
 			longSource := strings.HasSuffix(mode, "-long-source")
 			files := map[string]string{"greet.py": greetSource, "codec.py": "ENCODING = None\n",
 				".gitignore": "__pycache__/\n",
@@ -83,6 +83,12 @@ developer_instructions = "This task is self-contained. Read only codec.txt, code
 					"Do not edit codec.py yourself. For other verdicts, leave codec.py unchanged and do not spawn. " +
 					"After the child completes, make this exact authorized parent edit with apply_patch: replace the string \"Hello, \" with \"Hi, \" in greet.py. " +
 					"Make no other change. Do not inspect protected state or keys or change policy."
+				if longSource {
+					runPrompt = strings.Replace(runPrompt, "Read codec.txt.", "Read only the first line of codec.txt.", 1)
+					runPrompt = strings.Replace(runPrompt, "Tell it to read codec.txt and codec.py", "Tell it to read only the first line of codec.txt and read codec.py", 1)
+					files[".codex/agents/snap-luna-probe.toml"] = strings.Replace(files[".codex/agents/snap-luna-probe.toml"],
+						"Read only codec.txt, codec.py and host-required skills.", "Read only the first line of codec.txt. Read codec.py and host-required skills.", 1)
+				}
 			}
 			repo := fixtureRepo(t, files)
 			if longSource {
@@ -179,6 +185,17 @@ developer_instructions = "This task is self-contained. Read only codec.txt, code
 							t.Fatal("native review used a different provider or unverified model")
 						}
 						if longSource {
+							if row.Value("gate") == "edit" {
+								contract, _ := row.Value("cache_contract").(*pyjson.Object)
+								var identity *pyjson.Object
+								if contract != nil {
+									identity, _ = contract.Value("review_identity").(*pyjson.Object)
+								}
+								if identity == nil || identity.Value("provider") != provider.Name || identity.Value("model") != provider.Model ||
+									identity.Value("context_profile") != provider.ContextProfile || identity.Value("review_contract") != policy.ReviewContract {
+									t.Fatal("native edit review has the wrong provider, model, profile or contract")
+								}
+							}
 							state, _ := row.Value("state").(*pyjson.Object)
 							if state == nil {
 								t.Fatal("native review has no recorded state")
@@ -346,8 +363,15 @@ func verifySnapNativeWorker(t *testing.T, path, agent, parentPath string) {
 		observed.Identity.SessionID != parent.Identity.SessionID || observed.Brief != nil {
 		t.Fatalf("opaque native worker identity failed: %v", err)
 	}
-	dispatches := 0
+	dispatches, consultations := 0, 0
 	for _, call := range parent.ToolCalls {
+		decide, err := transcript.IsDecide(call)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decide {
+			consultations++
+		}
 		if call.Name != "spawn_agent" || call.Output == "" {
 			continue
 		}
@@ -361,6 +385,9 @@ func verifySnapNativeWorker(t *testing.T, path, agent, parentPath string) {
 	}
 	if dispatches != 1 {
 		t.Fatalf("got %d matching completed parent dispatches, want one", dispatches)
+	}
+	if consultations != 1 {
+		t.Fatalf("got %d native parent consultations, want one", consultations)
 	}
 	body, err := os.ReadFile(path)
 	if err != nil {
