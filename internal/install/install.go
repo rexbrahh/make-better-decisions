@@ -855,6 +855,13 @@ func ClaudeServersFromSources(settings *json.Object, claudeConfigs, pluginManife
 				return nil, err
 			}
 		}
+		_, hasMCP := manifest.Value.Get("mcpServers")
+		_, hasServers := manifest.Value.Get("servers")
+		if !hasMCP && !hasServers {
+			if err := update(json.NewObject("mcpServers", manifest.Value), manifest.Source); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return servers, nil
 }
@@ -916,11 +923,22 @@ func ReadClaudePluginManifests(paths []string) ([]Sourced, error) {
 	return manifests, nil
 }
 
+func selectedClaudeConfigRoot(home string) (string, error) {
+	if selected := os.Getenv("CLAUDE_CONFIG_DIR"); selected != "" {
+		return pathlib.ExpandUser(selected)
+	}
+	return pathlib.Join(home, ".claude"), nil
+}
+
 // readClaudePluginRegistry reads installed_plugins.json; a missing or unparsable registry is empty.
 //
 // py: agent_decisions/install.py _read_claude_plugin_registry
 func readClaudePluginRegistry(home string) (*json.Object, error) {
-	registry := pathlib.Join(home, ".claude/plugins/installed_plugins.json")
+	root, err := selectedClaudeConfigRoot(home)
+	if err != nil {
+		return nil, err
+	}
+	registry := pathlib.Join(root, "plugins/installed_plugins.json")
 	text, err := pathlib.ReadText(registry)
 	var data any
 	if err == nil {
@@ -1986,6 +2004,10 @@ func newParser(stdout, stderr io.Writer) (*argparse.Parser, error) {
 	if err != nil {
 		return nil, err
 	}
+	claudeRoot, err := selectedClaudeConfigRoot(home)
+	if err != nil {
+		return nil, err
+	}
 	store := func(option string, fallback any) *argparse.Action {
 		return &argparse.Action{Kind: argparse.Store, Options: []string{option}, Dest: dest(option), Default: fallback}
 	}
@@ -2010,7 +2032,7 @@ func newParser(stdout, stderr io.Writer) (*argparse.Parser, error) {
 		store("--codex-sock", nil),
 		store("--codex-config", pathlib.Join(home, ".codex/config.toml")),
 		store("--codex-mcp-json", nil),
-		store("--claude-settings", pathlib.Join(home, ".claude/settings.json")),
+		store("--claude-settings", pathlib.Join(claudeRoot, "settings.json")),
 		appendTo("--claude-json", "", ""),
 		appendTo("--claude-plugin-manifest", "", ""),
 	}}, nil

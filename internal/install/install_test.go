@@ -1247,3 +1247,82 @@ func TestClaudeManifestDiscoverySupportsScopedRegistryArrays(t *testing.T) {
 	check(t, err)
 	wantEqual(t, toAnyList(got), []any{filepath.Join(legacy, ".mcp.json"), filepath.Join(scoped, ".mcp.json")})
 }
+
+func TestClaudeSelectedConfigDirectory(t *testing.T) {
+	for _, selection := range []string{"unset", "empty", "absolute", "tilde"} {
+		t.Run(selection, func(t *testing.T) {
+			dir := setUp(t)
+			home := os.Getenv("HOME")
+			selected := filepath.Join(dir, "external-config")
+			config := filepath.Join(home, ".claude")
+			switch selection {
+			case "empty":
+				t.Setenv("CLAUDE_CONFIG_DIR", "")
+			case "absolute":
+				t.Setenv("CLAUDE_CONFIG_DIR", selected)
+				config = selected
+			case "tilde":
+				selected = filepath.Join(home, "selected-config")
+				t.Setenv("CLAUDE_CONFIG_DIR", "~/selected-config")
+				config = selected
+			}
+			parser, err := newParser(&bytes.Buffer{}, &bytes.Buffer{})
+			check(t, err)
+			args, _, exited := parseArgs(parser, nil)
+			if exited {
+				t.Fatal("default parsing exited")
+			}
+			if want := filepath.Join(config, "settings.json"); args.claudeSettings != want {
+				t.Errorf("settings = %q, want %q", args.claudeSettings, want)
+			}
+			args, _, exited = parseArgs(parser, []string{"--claude-settings", "/explicit/settings.json"})
+			if exited || args.claudeSettings != "/explicit/settings.json" {
+				t.Fatalf("explicit settings override changed: %+v", args)
+			}
+			for _, root := range []string{filepath.Join(home, ".claude"), selected} {
+				writeFile(t, filepath.Join(root, "plugin/.mcp.json"), "{}")
+				registry := json.NewObject("plugins", json.NewObject("fixture@local", json.NewObject("installPath", filepath.Join(root, "plugin"))))
+				text, err := json.Dumps(registry, json.Options{})
+				check(t, err)
+				writeFile(t, filepath.Join(root, "plugins/installed_plugins.json"), text)
+			}
+			got, err := DiscoverClaudePluginManifests(home)
+			check(t, err)
+			wantEqual(t, toAnyList(got), []any{filepath.Join(config, "plugin/.mcp.json")})
+		})
+	}
+}
+
+func TestClaudeManifestInventoryAcceptsBareServerMaps(t *testing.T) {
+	for _, form := range []string{"mcpServers", "servers", "bare", "invalid_bare"} {
+		t.Run(form, func(t *testing.T) {
+			dir := setUp(t)
+			local := json.NewObject("command", "/bin/echo", "args", []any{"${CLAUDE_PLUGIN_ROOT}/data"})
+			mapping := json.NewObject("local", local, "remote", json.NewObject("url", "https://example.invalid"))
+			value := mapping
+			if form == "invalid_bare" {
+				local.Set("args", "invalid")
+			}
+			if form == "mcpServers" || form == "servers" {
+				value = json.NewObject(form, mapping)
+			}
+			text, err := json.Dumps(value, json.Options{})
+			check(t, err)
+			manifest := filepath.Join(dir, ".mcp.json")
+			writeFile(t, manifest, text)
+			manifests, err := ReadClaudePluginManifests([]string{manifest})
+			check(t, err)
+			servers, err := ClaudeServersFromSources(json.NewObject(), nil, manifests)
+			if form == "invalid_bare" {
+				if pyerr.Class(err) != "InstallError" || !strings.Contains(err.Error(), "args must be a list of strings") {
+					t.Fatalf("invalid bare args: %v", err)
+				}
+				return
+			}
+			check(t, err)
+			wantEqual(t, toAnyList(servers.Keys()), []any{"local"})
+			wantEqual(t, dig(servers, "local", "args"), []any{filepath.Join(dir, "data")})
+			wantEqual(t, dig(servers, "local", "source"), manifest)
+		})
+	}
+}

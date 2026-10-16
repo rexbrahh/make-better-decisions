@@ -1,8 +1,10 @@
-# make-better-decisions v2.0
+# make-better-decisions v2.1
 
 `agent-decisions` supplements Claude Code and Codex with selective decision review. Agents consult TypeSafe Jev before a new material choice. Hooks enforce review on declared edit and patch tools, filesystem write/edit tools, and plan acceptance.
 
 The goal is useful, enforceable review. Jev evaluates a material choice against observed evidence. Code checks receipt identity, scope, constraints, and failure policy. Exact instructions and routine operations need no invented choice.
+
+Version 2.1.0 uses `CLAUDE_CONFIG_DIR` for default settings and plugin discovery. It accepts scoped plugin registries and standard bare MCP server maps. Ten maintenance rounds also correct installation, RPC deadlines, publication cleanup and secret redaction. See the [release notes](docs/releases/v2.1.0.md) and [campaign evidence](docs/validation/v2.1.0-campaign-2026-10-15.md).
 
 Version 2.0.0 replaces the Python engine with one Go binary, `agent-decisions`. The hook output, ledger rows and seals stay byte-identical to version 1.2.8. On 6,206 hook calls replayed from real transcripts, the Go engine took 1 min 40 s and the Python engine took 2 min 5 s. Ordinary tools remain independent of Jev. Required review remains the default on the declared sensitive surface. See the [release notes](docs/releases/v2.0.0.md).
 
@@ -21,7 +23,7 @@ Windows is not supported. The ledger uses POSIX file locks.
 
 ## Install
 
-The commands below match the current `--help` output checked on 2026-10-11.
+The commands below match the installed CLI help checked on 2026-10-15.
 
 ### Claude Code
 
@@ -67,6 +69,8 @@ bin/agent-decisions-install --host claude --install-root /path/to/installed/agen
 ```
 
 The helper downloads the release binary for this platform and the version in `.claude-plugin/plugin.json`. It compares the SHA-256 of the binary with the pin in `bin/agent-decisions.sha256`. If the hashes are different, the helper stops and installs nothing. To use a local binary, set `AGENT_DECISIONS_BINARY` to its path. The helper checks a local binary against the same pin.
+
+For Claude, `CLAUDE_CONFIG_DIR` selects the settings and plugin registry directory. The default is `~/.claude`. An explicit `--claude-settings` overrides the settings path. Protection still covers all existing Claude configuration roots.
 
 Use per-host commands when you need separate evidence or rollback. The protected authority cache is sealed while the development checkout stays editable.
 

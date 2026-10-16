@@ -532,7 +532,10 @@ func TestOracleCLI(t *testing.T) {
 			ops = append(ops, oracleOp{with(env, colors...), []any{"cli", toAnyList(argv)}})
 		}
 	}
-	ops = append(ops, oracleOp{with(env, "CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude-primary")), []any{"cli", toAnyList(claude)}})
+	// The Python baseline predates selected defaults; compare explicit paths here and test the new defaults directly.
+	selected := plus(claude, "--claude-settings", filepath.Join(home, ".claude/settings.json"),
+		"--claude-plugin-manifest", filepath.Join(home, ".claude/plugins/cache/market/tool/1.0.0/.mcp.json"))
+	ops = append(ops, oracleOp{with(env, "CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude-primary")), []any{"cli", toAnyList(selected)}})
 	ops = append(ops, oracleOp{with(env, "AGENT_DECISIONS_STATE", "~/elsewhere"), []any{"cli", toAnyList([]string{"--host", "codex", "--codex-mcp-json", mcp})}})
 	compareWithPython(t, ops)
 }
