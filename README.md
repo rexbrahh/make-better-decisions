@@ -310,7 +310,7 @@ Captured native Codex ancestry and Claude dispatch fixtures pass parser and rece
 
 Release verification uses the observed peer workflows. A successful consultation must give useful direction, and ordinary execution must continue.
 
-The [copied-approval qualification](docs/validation/copied-approval-qualification-2026-10-16.md) adds pasted-document, Markdown-quote and forwarded-report controls, with fixed results for both providers.
+Provider qualification covers [copied approvals](docs/validation/copied-approval-qualification-2026-10-16.md) and [response-body cancellation](docs/validation/subq-body-cancellation-2026-10-16.md).
 
 | Check | Pass condition |
 |---|---|
