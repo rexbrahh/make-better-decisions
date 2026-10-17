@@ -36,6 +36,73 @@ func (body *observedBody) Close() error {
 	return err
 }
 
+func TestMalformedBatchCancelsItsSiblingWithoutPartialAnswers(t *testing.T) {
+	completed := make(chan struct{})
+	invalidClosed := make(chan struct{})
+	peerStarted := make(chan struct{})
+	peerCause := make(chan error, 1)
+	client := testClient(context.Background(), roundTripper(func(request *http.Request) (*http.Response, error) {
+		body, err := requestObject(request)
+		if err != nil {
+			return nil, err
+		}
+		batch := body.Value("questions").(*json.Object)
+		switch batch.Keys()[0] {
+		case "q00":
+			reply, err := responseFor(request, policy.SubQModel, nil, nil)
+			if err == nil {
+				reply.Body = &observedBody{ReadCloser: reply.Body, closed: completed}
+			}
+			return reply, err
+		case "q16":
+			for _, ready := range []<-chan struct{}{completed, peerStarted} {
+				select {
+				case <-ready:
+				case <-request.Context().Done():
+					return nil, request.Context().Err()
+				}
+			}
+			reply, err := responseFor(request, policy.SubQModel, nil, func(_ *json.Object, answers *json.Object) {
+				answers.Delete("q16")
+			})
+			if err == nil {
+				reply.Body = &observedBody{ReadCloser: reply.Body, closed: invalidClosed}
+			}
+			return reply, err
+		default:
+			close(peerStarted)
+			<-request.Context().Done()
+			peerCause <- request.Context().Err()
+			return nil, request.Context().Err()
+		}
+	}))
+	client.timeout = time.Second
+	metrics := json.NewObject()
+	answers, err := client.Ask(json.NewObject(), testQuestions(33), "test-key", metrics)
+	if answers != nil {
+		t.Fatalf("malformed batch returned %d partial answers", answers.Len())
+	}
+	errorReason(t, err, "malformed")
+	select {
+	case cause := <-peerCause:
+		if !errors.Is(cause, context.Canceled) {
+			t.Fatalf("sibling stopped because of %v, want cancellation after malformed response", cause)
+		}
+	default:
+		t.Fatal("Ask returned before its sibling stopped")
+	}
+	for _, closed := range []<-chan struct{}{completed, invalidClosed} {
+		select {
+		case <-closed:
+		default:
+			t.Fatal("Ask returned before a response body closed")
+		}
+	}
+	if metrics.Value("returned_model") != nil {
+		t.Fatal("incomplete review recorded a validated returned model")
+	}
+}
+
 func TestAskCancelsResponseBodyWithoutPartialAnswers(t *testing.T) {
 	for _, mode := range []string{"cancel", "deadline"} {
 		t.Run(mode, func(t *testing.T) {
