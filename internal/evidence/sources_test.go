@@ -253,6 +253,51 @@ func TestE2eHelperInTheMiddleKeepsHeadTailHashAndRedaction(t *testing.T) {
 	}
 }
 
+func TestSourceTruncationMatchesRedactedView(t *testing.T) {
+	for _, name := range []string{"jev", "subq"} {
+		t.Run(name, func(t *testing.T) {
+			dir := stateDir(t)
+			provider, err := policy.Provider(name)
+			mustDo(t, err)
+			limit := provider.Evidence.TextChars
+			expanding := "\nTOKEN=12345678\n"
+			shrinking := "\nTOKEN=" + strings.Repeat("s", 128) + "\n"
+			for _, test := range []struct {
+				name, text string
+				truncated  bool
+			}{
+				{"plain", strings.Repeat("z", limit), false},
+				{"expanding", strings.Repeat("z", limit-len(expanding)) + expanding, true},
+				{"shrinking", strings.Repeat("z", limit+1-len(shrinking)) + shrinking, false},
+				{"oversized", strings.Repeat("z", limit+1), true},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					writeFile(t, filepath.Join(dir, "source.txt"), test.text)
+					bundle := build(t, transcript.Transcript{}, nil, Options{Query: "source.txt", Cwd: &dir,
+						Contracts: []string{"source.txt"}, Profile: provider.Evidence})
+					item := firstSource(t, bundle)
+					if item.Value("sha256") != sha256Text(test.text) || item.Value("trust") != "verified_file_observation" {
+						t.Fatal("source observation identity changed")
+					}
+					if item.Value("truncated") != test.truncated {
+						t.Errorf("truncated = %v, want %v", item.Value("truncated"), test.truncated)
+					}
+					count := json.Int("0")
+					if test.truncated {
+						count = json.Int("1")
+					}
+					if got := bundle.Value("metadata").(*json.Object).Value("source_files_truncated"); got != count {
+						t.Errorf("source_files_truncated = %v, want %v", got, count)
+					}
+					if strings.Contains(item.Value("text").(string), "characters cut") != test.truncated {
+						t.Error("retained source clipping marker does not match the expected truncation")
+					}
+				})
+			}
+		})
+	}
+}
+
 // py: tests/test_sources.py::test_project_rules_precede_optional_old_paths_after_requested_helper
 func TestProjectRulesPrecedeOptionalOldPathsAfterRequestedHelper(t *testing.T) {
 	dir := stateDir(t)

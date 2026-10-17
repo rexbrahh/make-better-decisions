@@ -1966,9 +1966,9 @@ func readSource(root, rel, path string, secrets []string, query string, textChar
 	if bytes.IndexByte(data[:min(len(data), 1024)], 0) >= 0 {
 		return nil, "binary", nil
 	}
-	text := json.DecodeUTF8(data)
+	text := Redact(json.DecodeUTF8(data), secrets)
 	truncated := pystr.Len(text) > textChars
-	text = clipSource(Redact(text, secrets), query, textChars)
+	text = clipSource(text, query, textChars)
 	return json.NewObject(
 		"path", rel,
 		"sha256", sha256Hex(data),
