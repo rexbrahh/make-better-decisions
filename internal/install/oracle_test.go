@@ -46,6 +46,17 @@ def run(op, *a):
         return install.sanitize(a[0])
     if op == "summary":
         return install.parse_codex_config_summary(a[0])
+    if op == "toml_summary":
+        import tomllib
+        config = tomllib.loads(a[0])
+        return {
+            "default_permissions": config.get("default_permissions"),
+            "profile_extends": {name: profile["extends"]
+                                for name, profile in config.get("permissions", {}).items()
+                                if isinstance(profile, dict) and isinstance(profile.get("extends"), str)},
+            "sandbox_mode": config.get("sandbox_mode"),
+            "workspace_network": config.get("sandbox_workspace_write", {}).get("network_access"),
+        }
     if op == "nfkc":
         import unicodedata
         return [c for c in range(0x80, 0x110000)
@@ -261,7 +272,7 @@ func oracleResult(op []any) (any, error) {
 		return []any{merged, prior}, nil
 	case "sanitize":
 		return Sanitize(a[0])
-	case "summary":
+	case "summary", "toml_summary":
 		return ParseCodexConfigSummary(a[0].(string)), nil
 	case "nfkc":
 		codes := make([]any, len(nfkcSeparators))
@@ -497,7 +508,7 @@ func TestOracleCodexConfigSummary(t *testing.T) {
 	_, env := oracleFixture(t)
 	texts := []string{
 		"", "default_permissions = \"profile#with-hash\" # trailing\nsandbox_mode = \"read-only\"\n[permissions.\"profile#with-hash\"]\nextends = \":danger-full-access\"\n[sandbox_workspace_write]\nnetwork_access = true # c\n",
-		"default_permissions = 'single'\r\n[permissions.a]\r\nextends='b'\r\n", "  [ permissions . 'x.y' ]  \n extends = \"z\"\n",
+		"  [ permissions . 'x.y' ]  \n extends = \"z\"\n",
 		"[sandbox_workspace_write]\nnetwork_access = false\n", "[sandbox_workspace_write]\nnetwork_access = 1\n",
 		"default_permissions = \"a\\\"b\"\n", "default_permissions = unquoted\n", "= x\n", "novalue\n",
 		"[permissions.a.b]\nextends = \"c\"\n", "[permissions]\nextends = \"c\"\n", "[[array]]\nx = 1\n",
@@ -507,6 +518,28 @@ func TestOracleCodexConfigSummary(t *testing.T) {
 	var ops []oracleOp
 	for _, text := range texts {
 		ops = append(ops, oracleOp{env, []any{"summary", text}})
+	}
+	compareWithPython(t, ops)
+}
+
+// Literal strings use the TOML standard because the frozen parser retains their quotes.
+func TestOracleCodexLiteralStringSummary(t *testing.T) {
+	_, env := oracleFixture(t)
+	var ops []oracleOp
+	for _, text := range []string{
+		"default_permissions = 'single'\r\n[permissions.a]\r\nextends='b'\r\n",
+		"sandbox_mode = 'read-only' # comment\n",
+		"default_permissions = 'profile#retained' # comment\n",
+		`default_permissions = 'agent-decisions-isolation'
+[permissions.'agent-decisions-isolation']
+extends = 'base\' # comment
+`,
+		`default_permissions = 'profile\'
+[permissions.'profile\'] # comment
+extends = ':read-only'
+`,
+	} {
+		ops = append(ops, oracleOp{env, []any{"toml_summary", text}})
 	}
 	compareWithPython(t, ops)
 }

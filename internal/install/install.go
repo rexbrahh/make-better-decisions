@@ -2460,7 +2460,7 @@ func stripTomlComment(line string) string {
 		switch {
 		case escaped:
 			escaped = false
-		case quote != 0 && char == '\\':
+		case quote == '"' && char == '\\':
 			escaped = true
 		case quote != 0:
 			if char == quote {
@@ -2490,7 +2490,7 @@ func parseSection(raw string) string {
 		case escaped:
 			current = append(current, char)
 			escaped = false
-		case quote != 0 && char == '\\':
+		case quote == '"' && char == '\\':
 			current = append(current, char)
 			escaped = true
 		case quote != 0:
@@ -2530,6 +2530,9 @@ func parseSectionPart(part string) string {
 func parseScalar(value string) any {
 	if value == "true" || value == "false" {
 		return value == "true"
+	}
+	if quoted(value, '\'') {
+		return parseSectionPart(value)
 	}
 	if quoted(value, '"') {
 		if parsed, err := json.Loads(value); err == nil {

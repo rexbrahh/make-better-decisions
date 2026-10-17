@@ -504,6 +504,37 @@ network_access = true # comment
 	wantEqual(t, summary.Value("workspace_network"), true)
 }
 
+func TestCodexConfigParserPreservesLiteralStringPermissions(t *testing.T) {
+	dir := setUp(t)
+	for _, test := range []struct {
+		name, config, base string
+	}{
+		{"read_only", "sandbox_mode = 'read-only' # comment\n", ":read-only"},
+		{"full_access", "sandbox_mode = 'danger-full-access'\n", ":danger-full-access"},
+		{"custom_profile", "default_permissions = 'profile#retained' # comment\n", "profile#retained"},
+		{"installed_profile", `default_permissions = 'agent-decisions-isolation'
+[permissions.'agent-decisions-isolation']
+extends = ':read-only'
+`, ":read-only"},
+		{"literal_backslash", `default_permissions = 'agent-decisions-isolation'
+[permissions.'agent-decisions-isolation']
+extends = 'base\' # comment
+`, `base\`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value, err := CodexPermissionProfileValue(dir+"/state", dir+"/installed",
+				ParseCodexConfigSummary(test.config), dir+"/home")
+			check(t, err)
+			wantEqual(t, value.Value("extends"), test.base)
+		})
+	}
+}
+
+func TestTomlLiteralBackslashDoesNotEscapeClosingQuote(t *testing.T) {
+	wantEqual(t, stripTomlComment(`extends = 'base\' # comment`), `extends = 'base\' `)
+	wantEqual(t, parseSection(`permissions.'profile\'.child`), `permissions.profile\.child`)
+}
+
 // py: tests/test_install.py::test_codex_permission_profile_preserves_legacy_read_only_when_no_default_permissions
 func TestCodexPermissionProfilePreservesLegacyReadOnlyWhenNoDefaultPermissions(t *testing.T) {
 	dir := setUp(t)
