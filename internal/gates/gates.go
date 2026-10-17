@@ -856,12 +856,17 @@ func Decide(raw string, ctx Context, ask Ask) (Outcome, error) {
 	}
 	if len(contracts) > 0 {
 		observed := &json.Object{}
+		resolved := map[string]string{}
 		for _, item := range e.iter(e.get(ctx.Evidence, "source_files", []any{})) {
 			if is(e.get(item, "trust", nil), "verified_file_observation") {
 				path, found := e.key(e.item(item, "path"), "dict key") // another hashable key matches no contract
 				digest := e.item(item, "sha256")
 				if found {
 					observed.Set(path, digest)
+					for _, name := range evidence.SourcePaths(item.(*json.Object)) {
+						observed.Set(name, digest)
+						resolved[name] = path
+					}
 				}
 			}
 		}
@@ -887,6 +892,9 @@ func Decide(raw string, ctx Context, ask Ask) (Outcome, error) {
 		observedContracts := &json.Object{}
 		for _, path := range contracts {
 			observedContracts.Set(path, observed.Value(path))
+			if target, ok := resolved[path]; ok {
+				observedContracts.Set(target, observed.Value(path))
+			}
 		}
 		record.Set("contracts", observedContracts)
 		state.Set("contracts", observedContracts)
@@ -950,6 +958,9 @@ func decideRequest(raw string) (decision string, options *json.Object, facts []s
 		err = requestError("contracts must contain at most eight repository-relative files")
 	} else if options.Len()*len(invariants) > 256 {
 		err = requestError("a request can contain at most 256 invariant checks; split the review")
+	}
+	for i, path := range contracts {
+		contracts[i] = pathlib.Str(path)
 	}
 	return
 }

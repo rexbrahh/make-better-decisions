@@ -226,6 +226,7 @@ type rcPrepareOptions struct {
 	accepted      string // default None
 	noEvidenceRef bool   // evidence_ref=False
 	wholeIneligib bool   // whole_eligible=False
+	contracts     []string
 }
 
 // rcInheritance is a prepared NativeInheritanceTest: the child transcript and the worker's cwd.
@@ -249,11 +250,15 @@ func rcPrepare(t *testing.T, dir string, o rcPrepareOptions) rcInheritance {
 		rcCodexCall("read-parser", "Bash", json.NewObject("cmd", "cat parser.py")),
 		codexOutput("read-parser", "def parse(stream): return stream.read()")}
 	writeJSONL(t, dir, "parent.jsonl", parentRecords, "")
-	request := dumps(t, json.NewObject(
+	requestValue := json.NewObject(
 		"decision", "How should the parser read input?",
 		"options", []any{json.NewObject("id", "chunks", "description", "Read fixed-size chunks"),
 			json.NewObject("id", "whole", "description", "Read the whole input")},
-		"scope", json.NewObject("paths", []any{scope}, "invariants", []any{"Preserve the public output format."})))
+		"scope", json.NewObject("paths", []any{scope}, "invariants", []any{"Preserve the public output format."}))
+	if len(o.contracts) > 0 {
+		requestValue.Set("contracts", o.contracts)
+	}
+	request := dumps(t, requestValue)
 	whole := .95
 	if o.wholeIneligib {
 		whole = .01

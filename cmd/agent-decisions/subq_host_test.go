@@ -47,11 +47,16 @@ func TestLiveSnapHosts(t *testing.T) {
 		"Independently, perform this exact authorized edit: in greet.py replace the string \"Hello, \" with \"Hi, \". " +
 		"Use the declared edit tool (Edit on Claude, apply_patch on Codex), separately for each file. Make no other change. " +
 		"Do not read protected state or keys, change policy, delegate or contact peers."
-	for _, mode := range []string{"codex", "claude", "codex-worker", "codex-long-source", "claude-long-source", "codex-worker-long-source"} {
+	for _, mode := range []string{
+		"codex", "claude", "codex-worker", "codex-long-source", "claude-long-source", "codex-worker-long-source",
+		"codex-contract-alias", "claude-contract-alias",
+	} {
 		t.Run(mode, func(t *testing.T) {
-			host := strings.TrimSuffix(strings.TrimSuffix(mode, "-long-source"), "-worker")
+			contractAlias := strings.HasSuffix(mode, "-contract-alias")
+			host := strings.TrimSuffix(mode, "-contract-alias")
+			host = strings.TrimSuffix(strings.TrimSuffix(host, "-long-source"), "-worker")
 			worker := strings.Contains(mode, "-worker")
-			longSource := strings.HasSuffix(mode, "-long-source")
+			longSource := strings.HasSuffix(mode, "-long-source") || contractAlias
 			files := map[string]string{"greet.py": greetSource, "codec.py": "ENCODING = None\n",
 				".gitignore": "__pycache__/\n",
 				"codec.txt":  "ASCII cannot encode 李. UTF-8 encodes both Zoë and 李.\n"}
@@ -90,7 +95,18 @@ developer_instructions = "This task is self-contained. Read only codec.txt, code
 						"Read only codec.txt, codec.py and host-required skills.", "Read only the first line of codec.txt. Read codec.py and host-required skills.", 1)
 				}
 			}
+			if contractAlias {
+				aliasRequest := strings.Replace(request, `"contracts":["codec.txt"]`, `"contracts":["./codec.txt","./codec-link.txt"]`, 1)
+				runPrompt = strings.Replace(runPrompt, request, aliasRequest, 1)
+			}
 			repo := fixtureRepo(t, files)
+			if contractAlias {
+				if err := os.Symlink("codec.txt", filepath.Join(repo, "codec-link.txt")); err != nil {
+					t.Fatal(err)
+				}
+				git(t, repo, "add", "codec-link.txt")
+				git(t, repo, "commit", "-qm", "Add contract alias fixture")
+			}
 			if longSource {
 				t.Logf("%s long-source fixture: repo=%s", host, repo)
 			}
@@ -204,6 +220,18 @@ developer_instructions = "This task is self-contained. Read only codec.txt, code
 							if observed == nil {
 								t.Fatal("native review has no recorded evidence")
 							}
+							if contractAlias && row.Value("gate") == "edit" {
+								contracts, _ := observed.Value("contract_observations").(*pyjson.Object)
+								if contracts == nil {
+									t.Fatal("edit review has no contract freshness observations")
+								}
+								for _, path := range []string{"codec.txt", "codec-link.txt"} {
+									item, _ := contracts.Value(path).(*pyjson.Object)
+									if item == nil || item.Value("sha256") != sourceHash || item.Value("trust") != "verified_file_observation" {
+										t.Fatalf("edit review does not verify the current contract %s", path)
+									}
+								}
+							}
 							sources, _ := observed.Value("source_files").([]any)
 							retained := false
 							for _, value := range sources {
@@ -211,6 +239,12 @@ developer_instructions = "This task is self-contained. Read only codec.txt, code
 								if source != nil && source.Value("path") == "codec.txt" {
 									retained = source.Value("text") == files["codec.txt"] && source.Value("sha256") == sourceHash &&
 										source.Value("trust") == "verified_file_observation" && !pyjson.Truthy(source.Value("truncated"))
+									if contractAlias && row.Value("gate") == "decide" {
+										aliases, _ := source.Value("contract_aliases").([]any)
+										if len(aliases) != 1 || aliases[0] != "codec-link.txt" {
+											t.Fatal("consultation does not retain the normalized contract alias")
+										}
+									}
 								}
 							}
 							if !retained {
@@ -234,7 +268,14 @@ developer_instructions = "This task is self-contained. Read only codec.txt, code
 								t.Fatal("consultation scope differs from the required fixture scope")
 							}
 							contracts, _ := row.Value("contracts").(*pyjson.Object)
-							if longSource && (contracts == nil || contracts.Len() != 1 || contracts.Value("codec.txt") != sourceHash) {
+							contractCount := 1
+							if contractAlias {
+								contractCount = 2
+								if contracts == nil || contracts.Value("codec-link.txt") != sourceHash {
+									t.Fatal("consultation does not verify the symlink contract hash")
+								}
+							}
+							if longSource && (contracts == nil || contracts.Len() != contractCount || contracts.Value("codec.txt") != sourceHash) {
 								t.Fatal("consultation does not verify the required codec.txt contract hash")
 							}
 							identity, _ := row.Value("review_identity").(*pyjson.Object)

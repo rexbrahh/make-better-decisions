@@ -415,14 +415,14 @@ func ShortenObservations(bundle *json.Object, query string, contracts []string) 
 	cut := 0
 	protected := map[string]bool{}
 	for _, path := range contracts {
-		protected[path] = true
+		protected[pathlib.Str(path)] = true
 	}
 	observations, err := objectValue(bundle, "contract_observations", "keys")
 	if err != nil {
 		return nil, err
 	}
 	for _, path := range observations.Keys() {
-		protected[path] = true
+		protected[pathlib.Str(path)] = true
 	}
 	for _, step := range [][2]string{{"tool_calls_newest_first", "input"}, {"tool_calls_newest_first", "output"},
 		{"source_files", "text"}} {
@@ -441,7 +441,8 @@ func ShortenObservations(bundle *json.Object, query string, contracts []string) 
 			if err != nil {
 				return nil, err
 			}
-			if field == "source_files" && (protected[path] || slices.Contains(ruleFiles, pathlib.Name(pathlib.Str(path)))) {
+			if field == "source_files" && (slices.ContainsFunc(SourcePaths(item), func(path string) bool { return protected[path] }) ||
+				slices.Contains(ruleFiles, pathlib.Name(pathlib.Str(path)))) {
 				items = append(items, item)
 				continue
 			}
@@ -684,10 +685,13 @@ func Build(t transcript.Transcript, secrets []string, o Options) (*json.Object, 
 	for _, path := range o.Contracts {
 		requiredPaths[pathlib.Str(path)] = true
 	}
+	isRequired := func(item *json.Object) bool {
+		return slices.ContainsFunc(SourcePaths(item), func(path string) bool { return requiredPaths[path] })
+	}
 	if _, ok := bundle.Get("source_files"); ok {
 		required := []any{}
 		for _, item := range sourceItems {
-			if requiredPaths[item.Value("path").(string)] {
+			if isRequired(item) {
 				required = append(required, item)
 			}
 		}
@@ -699,9 +703,7 @@ func Build(t transcript.Transcript, secrets []string, o Options) (*json.Object, 
 	if usedChars, err = dumpedLen(bundle); err != nil {
 		return nil, err
 	}
-	sourceItems = slices.DeleteFunc(sourceItems, func(item *json.Object) bool {
-		return requiredPaths[item.Value("path").(string)]
-	})
+	sourceItems = slices.DeleteFunc(sourceItems, isRequired)
 
 	// Preserve cited native reads even when their cwd differs from the consultation root.
 	requested, err := pathCandidateSet([]string{o.Query}, o.Frame)
@@ -925,8 +927,7 @@ func trimToBudget(bundle *json.Object, contracts []string, query string, reserve
 		}
 		optional := -1
 		for i := len(sources) - 1; i >= 0; i-- {
-			path, _ := sources[i].Value("path").(string)
-			if !required[path] {
+			if !slices.ContainsFunc(SourcePaths(sources[i]), func(path string) bool { return required[path] }) {
 				optional = i
 				break
 			}
@@ -1237,6 +1238,7 @@ func sourceFilesWithProfile(t transcript.Transcript, query string, cwd *string, 
 		return nil, 0, 0, false, err
 	}
 	requestedPaths := map[string]bool{}
+	contractAliases := map[string][]string{}
 	rankedCandidates, omitted, scanLimited, err := rankedPathCandidates(t, query, frame+1)
 	if err != nil {
 		return nil, 0, 0, false, err
@@ -1268,6 +1270,10 @@ func sourceFilesWithProfile(t transcript.Transcript, query string, cwd *string, 
 			continue
 		}
 		rel := relativeTo(path, root)
+		if alias := pathlib.Str(raw); alias != rel && slices.Contains(contracts[:min(8, len(contracts))], raw) &&
+			!slices.Contains(contractAliases[rel], alias) {
+			contractAliases[rel] = append(contractAliases[rel], alias)
+		}
 		if _, ok := candidates.Get(rel); !ok {
 			candidates.Set(rel, path)
 		}
@@ -1304,6 +1310,22 @@ func sourceFilesWithProfile(t transcript.Transcript, query string, cwd *string, 
 		}
 		switch {
 		case item != nil:
+			if aliases := contractAliases[rel]; len(aliases) > 0 {
+				slices.Sort(aliases)
+				paths := []any{}
+				for _, alias := range aliases {
+					current, ok, err := resolveSource(root, alias)
+					if err != nil {
+						return nil, 0, 0, false, err
+					}
+					if ok && current == prioritized.Value(rel) {
+						paths = append(paths, alias)
+					}
+				}
+				if len(paths) > 0 {
+					item.Set("contract_aliases", paths)
+				}
+			}
 			item.Set("git_baseline", gitBaseline(root, rel, revision, item.Value("sha256").(string)))
 			items = append(items, item)
 		case reason == "too_large":
@@ -1313,6 +1335,23 @@ func sourceFilesWithProfile(t transcript.Transcript, query string, cwd *string, 
 		}
 	}
 	return items, omitted, tooLarge, scanLimited, nil
+}
+
+// SourcePaths returns a captured source's resolved path and its explicit contract aliases.
+// Aliases are added only after the existing source read succeeds.
+func SourcePaths(item *json.Object) []string {
+	path, ok := item.Value("path").(string)
+	if !ok {
+		return nil
+	}
+	paths := []string{path}
+	aliases, _ := item.Value("contract_aliases").([]any)
+	for _, value := range aliases {
+		if alias, ok := value.(string); ok {
+			paths = append(paths, alias)
+		}
+	}
+	return paths
 }
 
 // runGit runs `git -C root args...` as subprocess.run(..., capture_output=True, timeout=1) does, and
@@ -1438,8 +1477,8 @@ func sha256Hex(data []byte) string {
 	return hex.EncodeToString(digest[:])
 }
 
-// ContractObservations returns the current sha256 of each of the first eight distinct paths under cwd,
-// without promoting contract text to user authority.
+// ContractObservations returns current hashes with at most eight source reads. A successful alias read
+// also supplies its resolved target hash. Contract text does not grant user authority.
 //
 // py: agent_decisions/evidence.py contract_observations
 func ContractObservations(paths []string, cwd string, secrets []string) (*json.Object, error) {
@@ -1459,13 +1498,15 @@ func ContractObservationsWithProfile(paths []string, cwd string, secrets []strin
 		return nil, err
 	}
 	current := &json.Object{}
+	checked := 0
 	for _, rel := range paths {
 		if _, ok := current.Get(rel); ok {
 			continue
 		}
-		if current.Len() == maxSourceFiles {
+		if checked == maxSourceFiles {
 			break
 		}
+		checked++
 		var item *json.Object
 		path, ok, err := resolveSource(root, rel)
 		if err != nil {
@@ -1476,8 +1517,21 @@ func ContractObservationsWithProfile(paths []string, cwd string, secrets []strin
 				return nil, err
 			}
 		}
+		if item != nil && relativeTo(path, root) != pathlib.Str(rel) {
+			after, ok, err := resolveSource(root, rel)
+			if err != nil {
+				return nil, err
+			}
+			if !ok || after != path {
+				item = nil
+			}
+		}
 		if item != nil {
-			current.Set(rel, json.NewObject("sha256", item.Value("sha256"), "trust", "verified_file_observation"))
+			observed := json.NewObject("sha256", item.Value("sha256"), "trust", "verified_file_observation")
+			current.Set(rel, observed)
+			if target := relativeTo(path, root); target != pathlib.Str(rel) {
+				current.Set(target, observed)
+			}
 		} else {
 			current.Set(rel, json.NewObject("sha256", nil, "trust", "unavailable"))
 		}
