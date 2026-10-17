@@ -279,6 +279,8 @@ func Redact(text string, secrets []string) string {
 // redact is Redact, and also reports whether the _ASSIGNMENT replacement lambda ran: that call is one more
 // Python frame.
 func redact(text string, secrets []string) (string, bool) {
+	secrets = slices.Clone(secrets)
+	slices.SortStableFunc(secrets, func(a, b string) int { return len(b) - len(a) })
 	for _, secret := range secrets {
 		if pystr.Len(secret) >= 16 {
 			text = strings.ReplaceAll(text, secret, Redacted) // exact on WTF-8: no code point splits

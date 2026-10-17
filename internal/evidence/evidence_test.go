@@ -322,6 +322,45 @@ func TestRedactsKnownSecretLiteralsEverywhere(t *testing.T) {
 	}
 }
 
+func TestContainedKnownSecretsAreFullyRedacted(t *testing.T) {
+	for name, short := range map[string]string{"ascii": "synthetic-key-common-0123456789", "unicode": strings.Repeat("é", 16)} {
+		for position, long := range map[string]string{
+			"prefix": short + "-private-suffix", "suffix": "private-prefix-" + short,
+			"interior": "private-prefix-" + short + "-private-suffix",
+		} {
+			for order, keys := range map[string][]string{
+				"short_first": {short, long}, "long_first": {long, short}, "duplicates": {short, short, long, long},
+			} {
+				t.Run(name+"/"+position+"/"+order, func(t *testing.T) {
+					original := slices.Clone(keys)
+					text := "before " + long + " after " + short + " end"
+					want := "before " + Redacted + " after " + Redacted + " end"
+					if got := Redact(text, keys); got != want {
+						t.Fatalf("redacted text = %q, want %q", got, want)
+					}
+					value, err := Scrub(json.NewObject("observation", text), keys, 0)
+					mustDo(t, err)
+					if value.(*json.Object).Value("observation") != want {
+						t.Fatal("scrub retained part of a known secret")
+					}
+					if !slices.Equal(keys, original) {
+						t.Fatal("redaction changed the caller's key order")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestKnownSecretRedactionPreservesTheCodePointThreshold(t *testing.T) {
+	short := strings.Repeat("é", 15)
+	long := "x" + short
+	keys := []string{short, long}
+	if got := Redact(short+" "+long, keys); got != short+" "+Redacted {
+		t.Fatalf("redaction changed the 16-code-point threshold: %q", got)
+	}
+}
+
 // writeJSONL writes records as json.dumps lines, as tests/helpers.py write_jsonl does.
 func writeJSONL(t *testing.T, path string, records []any) string {
 	t.Helper()

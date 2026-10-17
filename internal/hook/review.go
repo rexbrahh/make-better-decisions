@@ -3,6 +3,7 @@ package hook
 import (
 	stdcontext "context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -54,6 +55,8 @@ func redactKnownIdentifiers(value *json.Object, keys []string) (*json.Object, bo
 		return nil, false, err
 	}
 	clean, next := text, 1
+	keys = slices.Clone(keys)
+	slices.SortStableFunc(keys, func(a, b string) int { return len(b) - len(a) })
 	for _, key := range keys {
 		if pystr.Len(key) < 16 {
 			continue
