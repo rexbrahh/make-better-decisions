@@ -14,7 +14,7 @@ import (
 // version is set at build time with -ldflags "-X main.version=...".
 var version = "dev"
 
-const usage = "usage: agent-decisions {hook,install,isolate,shell-prefix,version} ...\n"
+const usage = "usage: agent-decisions {hook,install,provider,isolate,shell-prefix,version} ...\n"
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
@@ -32,6 +32,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return hook.Main(rest, stdin, stdout, stderr)
 	case "install":
 		return install.Main(rest, stdout, stderr)
+	case "provider":
+		return runProvider(rest, stdin, stdout, stderr, install.Main)
 	case "isolate":
 		return isolation.MainIsolate(rest, stdin, stdout, stderr)
 	case "shell-prefix":

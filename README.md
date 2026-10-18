@@ -100,7 +100,18 @@ codex mcp list --help
 
 `agent-decisions-shell-prefix` is an execution wrapper. It is not a help-style CLI.
 
-### Optional SubQ Snap provider
+### Choose Jev or SubQ Snap
+
+After installation, run the chooser:
+
+```sh
+~/.local/share/agent-decisions/current/bin/agent-decisions provider
+```
+
+The first question offers Jev or SubQ Snap. Next, select Codex, Claude Code or both.
+The chooser displays the sanitized installer plan. Type `apply` to activate the selection.
+Blank input or EOF cancels. Invalid choices and input errors stop without activation.
+The chooser does not request an API key. Existing installer flags remain available for automation.
 
 Snap uses `SUBQ_API_KEY` or `~/.config/sops-nix/secrets/subq_api_key`. Make the key available to the host process before starting it.
 The installer stores only the provider name in signed host policy. It does not store the API key.
