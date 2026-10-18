@@ -186,6 +186,101 @@ func TestMalformedBatchCancelsItsSiblingWithoutPartialAnswers(t *testing.T) {
 	}
 }
 
+func TestAskFailureDoesNotCancelConcurrentCall(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan context.Context, 1)
+	release := make(chan struct{})
+	failedClosed := make(chan struct{})
+	independentClosed := make(chan struct{})
+	var requests atomic.Int32
+	client := testClient(ctx, roundTripper(func(request *http.Request) (*http.Response, error) {
+		requests.Add(1)
+		body, err := requestObject(request)
+		if err != nil {
+			return nil, err
+		}
+		closed := independentClosed
+		var mutate func(*json.Object, *json.Object)
+		if body.Value("state").(*json.Object).Value("failing") == true {
+			closed = failedClosed
+			mutate = func(_ *json.Object, answers *json.Object) { answers.Delete("q00") }
+		} else {
+			started <- request.Context()
+			select {
+			case <-release:
+			case <-request.Context().Done():
+				return nil, request.Context().Err()
+			}
+		}
+		reply, err := responseFor(request, policy.SubQModel, nil, mutate)
+		if err == nil {
+			reply.Body = &observedBody{ReadCloser: reply.Body, closed: closed}
+		}
+		return reply, err
+	}))
+	client.timeout = 2 * time.Second
+	type result struct {
+		answers *json.Object
+		err     error
+	}
+	done := make(chan result, 1)
+	independentMetrics := json.NewObject()
+	var workers sync.WaitGroup
+	workers.Add(1)
+	defer func() {
+		cancel()
+		workers.Wait()
+	}()
+	go func() {
+		defer workers.Done()
+		answers, err := client.Ask(json.NewObject(), testQuestions(16), "test-key", independentMetrics)
+		done <- result{answers, err}
+	}()
+	var independentContext context.Context
+	select {
+	case independentContext = <-started:
+	case <-time.After(time.Second):
+		t.Fatal("independent call did not start")
+	}
+
+	failedMetrics := json.NewObject()
+	answers, err := client.Ask(json.NewObject("failing", true), testQuestions(1), "test-key", failedMetrics)
+	if answers != nil {
+		t.Fatal("failed call returned answers")
+	}
+	errorReason(t, err, "malformed")
+	if failedMetrics.Value("returned_model") != nil {
+		t.Fatal("failed call recorded a validated model")
+	}
+	if err := independentContext.Err(); err != nil {
+		t.Fatalf("failed call canceled the independent call: %v", err)
+	}
+	select {
+	case got := <-done:
+		t.Fatalf("independent call finished before release: %v", got.err)
+	default:
+	}
+	close(release)
+	select {
+	case got := <-done:
+		if got.err != nil || got.answers == nil || got.answers.Len() != 16 {
+			t.Fatalf("independent call lost its answers: answers=%v error=%v", got.answers, got.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("independent call did not finish after release")
+	}
+	if independentMetrics.Value("returned_model") != policy.SubQModel || requests.Load() != 2 {
+		t.Fatal("concurrent calls did not retain independent outcomes without retries")
+	}
+	for _, closed := range []<-chan struct{}{failedClosed, independentClosed} {
+		select {
+		case <-closed:
+		default:
+			t.Fatal("Ask returned before its response body closed")
+		}
+	}
+}
+
 func TestAskCancelsResponseBodyWithoutPartialAnswers(t *testing.T) {
 	for _, mode := range []string{"cancel", "deadline"} {
 		t.Run(mode, func(t *testing.T) {
