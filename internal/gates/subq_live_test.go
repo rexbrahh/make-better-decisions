@@ -28,7 +28,11 @@ func TestLiveSubQGateQualification(t *testing.T) {
 		client := subq.NewClient(ctx)
 		started := time.Now()
 		out := run(func(state, questions *json.Object) (*json.Object, error) {
-			return client.Ask(state, questions, key, nil)
+			answers, err := client.Ask(state, questions, key, nil)
+			if err != nil {
+				t.Errorf("qualification review failed: %v", err)
+			}
+			return answers, err
 		})
 		t.Logf("action=%s elapsed=%s", out.Action, time.Since(started).Round(time.Millisecond))
 		if !oneOf(want...).met(out) {

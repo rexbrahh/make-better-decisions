@@ -234,6 +234,9 @@ func TestLiveSubQReviewSequence(t *testing.T) {
 		metrics := json.NewObject()
 		answers, err := subq.NewClient(context.Background()).Ask(state, questions, key, metrics)
 		t.Logf("sequence_call %d error=%v metrics=%s", calls, err, dumps(t, metrics))
+		if err != nil {
+			t.Errorf("qualification review failed: %v", err)
+		}
 		return answers, err
 	}
 	ctx := qaContext(t, []string{"Preserve names such as Zoë and 李 exactly."},
