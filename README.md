@@ -129,7 +129,9 @@ The chooser displays the sanitized installer plan. Type `apply` to activate the 
 Blank input or EOF cancels. Invalid choices and input errors stop without activation.
 The chooser does not request an API key. Existing installer flags remain available for automation.
 
-Snap uses `SUBQ_API_KEY` or `~/.config/sops-nix/secrets/subq_api_key`. Make the key available to the host process before starting it.
+Snap reads `SUBQ_API_KEY` first, then `~/.config/sops-nix/secrets/subq_api_key`.
+With no environment key, it reads the managed file on demand.
+Make an environment key available before you start the host.
 The installer stores only the provider name in signed host policy. It does not store the API key.
 
 Preview the selection, then apply it for each intended host:
@@ -357,6 +359,16 @@ Build and test with Go 1.27.2:
 ```sh
 go test ./...
 ```
+
+Snap's live checks use fixed synthetic inputs and make paid API requests. They skip by default.
+Run the direct-client checks with an environment key or the managed key file:
+
+```sh
+AGENT_DECISIONS_SUBQ_LIVE=1 go test -count=1 -timeout=4m -run '^TestLiveSubQ' ./internal/subq
+```
+
+The chooser controls the provider for installed hosts.
+See the [live credential and API qualification record](docs/validation/subq-live-credentials-2026-10-18.md) for the checked scope and limits.
 
 The oracle tests compare the Go engine with the Python engine byte for byte. They need CPython 3.15 and a checkout of the tag `python-final`:
 
