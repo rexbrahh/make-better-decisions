@@ -368,6 +368,10 @@ Build and test with Go 1.27.2:
 go test ./...
 ```
 
+Generated QA output under `probe/out` is a separate Go module, outside the root package sweep.
+Explicit Go overlays remain supported. Run standalone probes by source filename from the repository root.
+Directory package paths under `probe/out` are outside the root module.
+
 Snap's live checks use fixed synthetic inputs and make paid API requests. They skip by default.
 Run the direct-client checks with an environment key or the managed key file:
 

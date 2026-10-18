@@ -1,5 +1,7 @@
 __pycache__/
-probe/out/
+probe/out/*
+!probe/out/go.mod
+probe/out/go.mod/
 .superpowers/
 bin/agent-decisions
 dist/
