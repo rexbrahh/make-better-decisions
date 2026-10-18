@@ -49,7 +49,23 @@ codex plugin marketplace add rexbrahh/make-better-decisions
 codex plugin add agent-decisions@make-better-decisions
 ```
 
-For a local checkout, pass the checkout path as the marketplace source.
+For a first-time local installation, stage the committed source from the repository root:
+
+```sh
+mkdir -p "$HOME/.local/share"
+plugin_stage="$(mktemp -d "$HOME/.local/share/agent-decisions-marketplace.XXXXXX")"
+git archive HEAD | tar -xf - -C "$plugin_stage"
+codex plugin marketplace add "$plugin_stage"
+codex plugin add agent-decisions@make-better-decisions
+```
+
+Keep the staging directory while that marketplace is configured. The archive excludes uncommitted changes.
+This recipe requires a fresh marketplace registration. Codex rejects another source with the same marketplace name.
+Codex CLI 0.163.0 copies `.git`, ignored files and untracked files from a local checkout into its plugin cache.
+`.gitignore` does not filter that copy. The [synthetic packaging check](docs/validation/local-plugin-packaging-2026-10-18.md) verifies archive installation without those extra files.
+
+Runtime profiles do not apply to `codex plugin` commands. If a launcher adds `--profile`, invoke Codex without that injected flag.
+Rex's Nix launcher has an existing opt-out: prefix plugin commands with `CODEX_CLI_FULL_SKILLS=1`.
 
 After the native plugin loads, trust the three hooks:
 
