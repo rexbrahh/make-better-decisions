@@ -155,6 +155,70 @@ func TestMalformedAnswerAndMissingTranscriptGiveUnverifiedVerdicts(t *testing.T)
 	}
 }
 
+func TestMalformedMissingFactChoiceRemainsUnverified(t *testing.T) {
+	for _, host := range []string{"claude", "codex"} {
+		for _, check := range []string{"total", "selected probability"} {
+			t.Run(host+"/"+check, func(t *testing.T) {
+				dir, path := hookSetUp(t)
+				key := "command"
+				payload := hookPayload(path, decideCommand(t, hookRequest))
+				if host == "codex" {
+					key = "cmd"
+					payload.Set("tool_name", "exec_command")
+					payload.Set("tool_input", json.NewObject(key, decideCommand(t, hookRequest)))
+					payload.Set("transcript_path", writeJSONL(t, dir, "codex.jsonl", []*json.Object{codexUser("Which cache?")}, ""))
+				}
+				api := confident()
+				post := func(body []byte, key string, timeout time.Duration) ([]byte, error) {
+					raw, err := api.Post(body, key, timeout)
+					if err != nil {
+						return nil, err
+					}
+					response := obj(t, string(raw))
+					answer := at(t, response, "answers", "missing_fact").(*json.Object)
+					probabilities := answer.Value("probabilities").(*json.Object)
+					ids := probabilities.Keys()
+					if len(ids) < 2 {
+						t.Fatal("expected at least two missing-fact criteria")
+					}
+					for _, id := range ids {
+						probabilities.Set(id, 0.0)
+					}
+					answer.Set("choice", ids[0])
+					if check == "total" {
+						probabilities.Set(ids[0], 0.8)
+						probabilities.Set(ids[1], 0.8)
+					} else {
+						probabilities.Set(ids[0], 0.1)
+						probabilities.Set(ids[1], 0.9)
+					}
+					response.Set("private_response", "private-response-text")
+					return []byte(dumps(t, response)), nil
+				}
+				out := handle(t, "pre_tool_use", payload, host, post)
+				output := verdictOutput(t, dir, out, key)
+				assertContains(t, output, "decision unverified (jev malformed: missing_fact: choice distribution)")
+				assertNotContains(t, output, "ts-decide verdict:")
+				assertNotContains(t, output, "private-response-text")
+				assertEqual(t, len(api.Requests()), 1)
+				rows := gateRows(t, "s1", "decide")
+				if len(rows) != 1 {
+					t.Fatalf("expected one decision row, got %d", len(rows))
+				}
+				assertEqual(t, rows[0].Value("action"), "unverified")
+				assertEqual(t, rows[0].Value("receipt_id"), nil)
+				assertNotContains(t, dumps(t, rows[0]), "private-response-text")
+				calls := at(t, rows[0], "metrics", "api_calls").([]any)
+				if len(calls) != 1 {
+					t.Fatalf("expected one review metric, got %d", len(calls))
+				}
+				assertEqual(t, calls[0].(*json.Object).Value("error"), "malformed")
+				assertEqual(t, calls[0].(*json.Object).Value("error_detail"), "missing_fact: choice distribution")
+			})
+		}
+	}
+}
+
 // py: tests/test_hook.py::test_guard_denies_and_records
 func TestGuardDeniesAndRecords(t *testing.T) {
 	_, path := hookSetUp(t)

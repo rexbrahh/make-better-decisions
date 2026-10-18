@@ -272,6 +272,13 @@ Declared edit tools still require available review, including for routine correc
 
 For Jev, HTTP 400 with `max_tokens_exceeded` triggers one retry within the original three-second deadline. The retry shortens historical tool input, output, and source excerpts. Historical inputs retain omission markers and original lengths. It preserves human messages, rule files, contracts, current pending input, and completed decisions. The receipt records the exact redacted state sent to the reviewer. A failed retry still blocks execution. Other validation failures identify the question and failed check without displaying response contents.
 
+For example, `jev malformed: missing_fact: choice distribution` names `missing_fact` as the failed question.
+`choice distribution` means the probabilities fail their sum check or the selected choice lacks the highest probability.
+The diagnostic preserves the response-validation category and omits response contents.
+Missing contracts are reported separately, with the source root when available.
+Retain the original call and result when reporting either failure.
+Successful edits do not establish recovery of an explicit consultation.
+
 The retry limits optional observation text to one sixteenth of its previous length, with a 128-character minimum and a 1,000-character cap. A remaining size rejection reports aggregate context-section sizes and attempt count. It does not display their contents.
 
 The owner can select availability mode through the protected installer. Preview the signed policy before applying it:
@@ -300,6 +307,7 @@ For recovery, restore the key, service connection, readable host transcript, or 
 
 Codex CLI `command_execution` events can show a command after a hook applies `updatedInput`.
 This plugin replaces an intercepted `ts-decide` command with `printf '%s\n' <verdict>` to return the verdict through the shell.
+That shell command can exit zero while printing an unverified result. Read the displayed result before using the consultation.
 A `printf` event alone does not establish a simulated or missing consultation.
 
 1. Inspect the original native `custom_tool_call.input`. Classic `function_call` records use `arguments`. Code-mode input can contain a nested `tools.exec_command` request.
