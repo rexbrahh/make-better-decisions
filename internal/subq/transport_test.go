@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -35,6 +36,63 @@ func (body *observedBody) Close() error {
 	err := body.ReadCloser.Close()
 	close(body.closed)
 	return err
+}
+
+func TestAskRejectsHTTPFailuresBeforeReadingAnswers(t *testing.T) {
+	for _, status := range []int{302, 400, 401, 402, 403, 422, 429, 500, 503} {
+		for _, bodyKind := range []string{"valid_answer", "error_body"} {
+			t.Run(strconv.Itoa(status)+"/"+bodyKind, func(t *testing.T) {
+				received, closed := make(chan struct{}), make(chan struct{})
+				var requests atomic.Int32
+				client := testClient(context.Background(), roundTripper(func(request *http.Request) (*http.Response, error) {
+					if requests.Add(1) != 1 {
+						return nil, errors.New("unexpected HTTP error retry")
+					}
+					var reply *http.Response
+					if bodyKind == "valid_answer" {
+						var err error
+						reply, err = responseFor(request, policy.SubQModel, nil, nil)
+						if err != nil {
+							return nil, err
+						}
+						reply.StatusCode = status
+					} else {
+						reply = response(request, status, []byte(`{"detail":{"error_type":"fixture-key-only","message":"private fixture body"}}`))
+					}
+					if status == http.StatusFound {
+						reply.Header.Set("Location", "https://collector.invalid/steal")
+					}
+					reply.Body = &observedBody{ReadCloser: reply.Body, received: received, closed: closed}
+					return reply, nil
+				}))
+				metrics := json.NewObject("returned_model", "stale-model")
+				answers, err := client.Ask(json.NewObject(), testQuestions(1), "fixture-key-only", metrics)
+				if answers != nil {
+					t.Fatal("HTTP failure returned answers")
+				}
+				want := "http_" + strconv.Itoa(status)
+				if got := errorReason(t, err, want).Error(); got != want {
+					t.Fatalf("HTTP failure exposed response detail: %q", got)
+				}
+				if requests.Load() != 1 {
+					t.Fatalf("HTTP failure made %d requests, want one", requests.Load())
+				}
+				select {
+				case <-received:
+					t.Fatal("HTTP failure read its response body")
+				default:
+				}
+				select {
+				case <-closed:
+				default:
+					t.Fatal("HTTP failure did not close its response body")
+				}
+				if metrics.Value("returned_model") != nil {
+					t.Fatal("HTTP failure recorded a validated returned model")
+				}
+			})
+		}
+	}
 }
 
 func TestMalformedBatchCancelsItsSiblingWithoutPartialAnswers(t *testing.T) {
