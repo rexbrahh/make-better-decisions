@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -41,10 +42,23 @@ func TestMalformedBatchCancelsItsSiblingWithoutPartialAnswers(t *testing.T) {
 	invalidClosed := make(chan struct{})
 	peerStarted := make(chan struct{})
 	peerCause := make(chan error, 1)
+	recoveryReady := make(chan struct{})
+	var recoveryRequests atomic.Int32
 	client := testClient(context.Background(), roundTripper(func(request *http.Request) (*http.Response, error) {
 		body, err := requestObject(request)
 		if err != nil {
 			return nil, err
+		}
+		if body.Value("state").(*json.Object).Value("recovery") == true {
+			if recoveryRequests.Add(1) == 4 {
+				close(recoveryReady)
+			}
+			select {
+			case <-recoveryReady:
+				return responseFor(request, policy.SubQModel, nil, nil)
+			case <-request.Context().Done():
+				return nil, request.Context().Err()
+			}
 		}
 		batch := body.Value("questions").(*json.Object)
 		switch batch.Keys()[0] {
@@ -100,6 +114,17 @@ func TestMalformedBatchCancelsItsSiblingWithoutPartialAnswers(t *testing.T) {
 	}
 	if metrics.Value("returned_model") != nil {
 		t.Fatal("incomplete review recorded a validated returned model")
+	}
+	metrics = json.NewObject()
+	answers, err = client.Ask(json.NewObject("recovery", true), testQuestions(64), "test-key", metrics)
+	if err != nil {
+		t.Fatalf("shared client did not recover all request slots: %v", err)
+	}
+	if answers == nil || answers.Len() != 64 {
+		t.Fatal("shared client did not return every recovery answer")
+	}
+	if metrics.Value("returned_model") != policy.SubQModel {
+		t.Fatal("successful recovery did not record its validated model")
 	}
 }
 
