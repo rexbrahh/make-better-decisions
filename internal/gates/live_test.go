@@ -53,10 +53,69 @@ func (e expect) String() string {
 }
 
 func (e expect) met(o Outcome) bool {
+	if o.Action == "unverified" || hasAnyPrefix(o.Message,
+		"Required review unavailable (", "Required question review unavailable (",
+		"Required plan review unavailable (", "Required final review unavailable (") || hasAnyPrefix(o.Note,
+		"agent-decisions: edit check skipped (", "agent-decisions: question gate skipped (",
+		"agent-decisions: plan check skipped (", "agent-decisions: stop check skipped (") {
+		return false
+	}
 	if !slices.Contains(e.actions, o.Action) || e.noNote && o.Note != "" {
 		return false
 	}
 	return e.pick == "" || o.Record != nil && o.Record.Value("pick") == e.pick
+}
+
+func TestLiveExpectRejectsUnavailableReview(t *testing.T) {
+	for _, mode := range []string{"required", "availability"} {
+		t.Run(mode, func(t *testing.T) {
+			setUp(t)
+			if mode == "availability" {
+				availability(t, "codex")
+			}
+			ctx := qaContext(t, []string{"Implement persistent storage for this application."}, nil, nil, "", "")
+			for _, gate := range []struct {
+				name string
+				run  func(*testing.T, Ask) Outcome
+			}{
+				{"decision", func(t *testing.T, ask Ask) Outcome {
+					return decide(t, qaRequest(t, "Which storage engine should this application use?",
+						opts("sqlite", "SQLite", "redis", "Redis")), ctx, ask)
+				}},
+				{"edit", func(t *testing.T, ask Ask) Outcome {
+					return editGate(t, "Write", json.NewObject("file_path", "store.py", "content", "import sqlite3\n"), ctx, ask)
+				}},
+				{"question", func(t *testing.T, ask Ask) Outcome {
+					return questionGate(t, obj(t, colour), ctx, ask)
+				}},
+				{"plan", func(t *testing.T, ask Ask) Outcome {
+					text := "Use Redis for storage."
+					out, err := PlanGate(ctx, ask, &text, gateFrame)
+					if err != nil {
+						t.Fatal(err)
+					}
+					return out
+				}},
+				{"final", func(t *testing.T, ask Ask) Outcome {
+					return stopGate(t, "I selected Redis for storage.", false, ctx, ask)
+				}},
+			} {
+				t.Run(gate.name, func(t *testing.T) {
+					calls := 0
+					out := gate.run(t, func(state, questions *json.Object) (*json.Object, error) {
+						calls++
+						return nil, jevError("unreachable")
+					})
+					if calls != 1 {
+						t.Fatalf("expected one failed review, got %d", calls)
+					}
+					if oneOf(out.Action).met(out) {
+						t.Errorf("unavailable review qualified as %s: %s %s", out.Action, out.Message, out.Note)
+					}
+				})
+			}
+		})
+	}
 }
 
 // liveRun runs the cases of one script against Jev and logs a line per case, then the totals.
@@ -88,8 +147,8 @@ func newLiveRun(t *testing.T) *liveRun {
 }
 
 func (r *liveRun) check(name string, want expect, run func(t *testing.T) Outcome) {
-	r.total++
 	r.t.Run(name, func(t *testing.T) {
+		r.total++
 		started, before := time.Now(), liveCalls.Load()
 		outcome := run(t)
 		receipt := "-"
