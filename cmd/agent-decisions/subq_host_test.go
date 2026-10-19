@@ -198,7 +198,9 @@ developer_instructions = "This task is self-contained. Read only codec.txt, code
 					for _, value := range apiCalls {
 						call := value.(*pyjson.Object)
 						if call.Value("provider") != "subq" || call.Value("returned_model") != policy.SubQModel {
-							t.Fatal("native review used a different provider or unverified model")
+							t.Fatalf("native %s %v review identity check failed: provider=%v, returned_model=%v, error=%v, phase=%v",
+								host, row.Value("gate"), call.Value("provider"), call.Value("returned_model"),
+								call.Value("error"), call.Value("error_phase"))
 						}
 						if longSource {
 							if row.Value("gate") == "edit" {
