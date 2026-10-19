@@ -128,6 +128,8 @@ The first question offers Jev or SubQ Snap. Next, select Codex, Claude Code or b
 The chooser displays the sanitized installer plan. Type `apply` to activate the selection.
 Blank input or EOF cancels. Invalid choices and input errors stop without activation.
 The chooser does not request an API key. Existing installer flags remain available for automation.
+Selection changes signed policy for the chosen host, including its other sessions.
+There is no per-session provider selector or built-in payload comparison command.
 
 Snap reads `SUBQ_API_KEY` first, then `~/.config/sops-nix/secrets/subq_api_key`.
 With no environment key, it reads the managed file on demand.
@@ -203,6 +205,11 @@ A completed decision must have both records:
 
 1. A signed ledger entry.
 2. The full verdict receipt in the transcript tool output.
+
+The hook stores the signed ledger entry and verifies it during reuse.
+Retain the complete original native `ts-decide` output, including the receipt line and all trailing lines.
+A receipt ID or copied summary alone is insufficient.
+Agents must not read private ledger or verdict files. There is no public read-only ledger or receipt export command.
 
 New reusable verdicts include a signed `review_...` receipt id. The id survives execution-id changes. Legacy verdicts retain their strict execution-id check.
 
