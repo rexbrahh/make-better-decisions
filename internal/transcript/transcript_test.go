@@ -116,6 +116,92 @@ func equal(t *testing.T, got, want any) {
 	}
 }
 
+func TestAsyncReplyRejectsEchoSplitInsideUTF8Character(t *testing.T) {
+	title := strings.Repeat("a", 511) + "é" + strings.Repeat("b", 11)
+	call := ToolCall{ID: "q1", Name: "request_user_input_async", Output: "Question shown.",
+		Input: dumps(json.NewObject("questions", []any{json.NewObject("title", title)}), json.Options{})}
+	reply := json.NewObject("questionItemId", `["request_user_input_async","q1",0]`, "question", title[:512])
+	matched, err := replyAsked(reply, map[string]ToolCall{"q1": call})
+	if err != nil || matched {
+		t.Fatalf("split UTF-8 echo: matched %v, error %v; want false, nil", matched, err)
+	}
+}
+
+func TestCodexAsyncReplyHostEcho(t *testing.T) {
+	title := strings.Repeat("a", 508) + "éé" + strings.Repeat("b", 12)
+	echo := title[:512]
+	asciiTitle := strings.Repeat("a", 524)
+	multibyteTitle := strings.Repeat("é", 256) + strings.Repeat("b", 12)
+	invalidEcho := strings.Repeat("a", 509) + "\xed\xa0\x80"
+	for _, tc := range []struct {
+		name       string
+		title      any
+		echo       string
+		tool       string
+		identity   string
+		origin     string
+		unfinished bool
+		want       bool
+	}{
+		{name: "observed byte lengths", title: title, echo: echo, want: true},
+		{name: "ASCII prefix", title: asciiTitle, echo: asciiTitle[:512], want: true},
+		{name: "title below 512 code points", title: multibyteTitle, echo: multibyteTitle[:512], want: true},
+		{name: "full long title", title: title, echo: title, want: true},
+		{name: "full short title", title: "Which format applies?", echo: "Which format applies?", want: true},
+		{name: "synchronous exact title", title: title, echo: title, tool: "request_user_input", want: true},
+		{name: "Claude tool exact title", title: title, echo: title, tool: "AskUserQuestion", want: true},
+		{name: "short prefix", title: asciiTitle, echo: asciiTitle[:511]},
+		{name: "long prefix", title: asciiTitle, echo: asciiTitle[:513]},
+		{name: "empty echo", title: title},
+		{name: "nonmatching echo", title: title, echo: strings.Repeat("z", 512)},
+		{name: "no title truncation", title: echo, echo: strings.Repeat("z", 512)},
+		{name: "invalid UTF-8 prefix", title: invalidEcho + "suffix", echo: invalidEcho},
+		{name: "non-string title", title: json.Int("524"), echo: echo},
+		{name: "synchronous tool", title: title, echo: echo, tool: "request_user_input"},
+		{name: "Claude question tool", title: title, echo: echo, tool: "AskUserQuestion"},
+		{name: "no completion", title: title, echo: echo, unfinished: true},
+		{name: "wrong call", title: title, echo: echo, identity: `["request_user_input_async","other",0]`},
+		{name: "wrong tool", title: title, echo: echo, identity: `["request_user_input","q1",0]`},
+		{name: "wrong index", title: title, echo: echo, identity: `["request_user_input_async","q1",1]`},
+		{name: "negative index", title: title, echo: echo, identity: `["request_user_input_async","q1",-1]`},
+		{name: "boolean index", title: title, echo: echo, identity: `["request_user_input_async","q1",true]`},
+		{name: "malformed identity", title: title, echo: echo, identity: `not JSON`},
+		{name: "agent origin", title: title, echo: echo, origin: "agent"},
+		{name: "peer origin", title: title, echo: echo, origin: "peer"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tool := tc.tool
+			if tool == "" {
+				tool = "request_user_input_async"
+			}
+			identity := tc.identity
+			if identity == "" {
+				identity = dumps([]any{tool, "q1", json.Int("0")}, json.Options{})
+			}
+			reply := "<send_user_message_question_reply>" + dumps([]any{json.NewObject(
+				"questionItemId", identity, "question", tc.echo, "answer", "Preserve the existing format.",
+			)}, json.Options{}) + "</send_user_message_question_reply>"
+			records := []*json.Object{codexCall("q1", tool, dumps(json.NewObject(
+				"questions", []any{json.NewObject("title", tc.title)}), json.Options{}))}
+			if !tc.unfinished {
+				records = append(records, codexOutput("q1", "Question shown.", "function_call_output"))
+			}
+			message := codexUser(reply)
+			if tc.origin != "" {
+				message.Value("payload").(*json.Object).Set("origin", json.NewObject("kind", tc.origin))
+			}
+			records = append(records, message)
+			observed := mustLoad(t, writeJSONL(t, t.TempDir(), "reply.jsonl", records, ""), "codex")
+			if got := len(observed.UserMessages) == 1; got != tc.want {
+				t.Fatalf("captured answer = %v, want %v", got, tc.want)
+			}
+			if tc.want {
+				equal(t, observed.UserMessages, []string{reply})
+			}
+		})
+	}
+}
+
 // py: tests/test_transcript.py::TranscriptMemoryTest::test_codex_passes_use_the_same_snapshot_when_the_file_grows
 func TestCodexPassesUseTheSameSnapshotWhenTheFileGrows(t *testing.T) {
 	path := writeJSONL(t, t.TempDir(), "snapshot.jsonl", []*json.Object{codexUser("Original instruction.")}, "")

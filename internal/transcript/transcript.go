@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 	"syscall"
+	"unicode/utf8"
 
 	"github.com/rexbrahh/make-better-decisions/internal/policy"
 	"github.com/rexbrahh/make-better-decisions/internal/py/json"
@@ -216,7 +217,14 @@ func replyAsked(reply *json.Object, questions map[string]ToolCall) (bool, error)
 	if !ok {
 		title = question.Value("question")
 	}
-	return json.Equal(reply.Value("question"), title)
+	if matched, err := json.Equal(reply.Value("question"), title); err != nil || matched {
+		return matched, err
+	}
+	// A native async reply can echo only the first 512 UTF-8 bytes of its title.
+	fullTitle, ok := title.(string)
+	echo, _ := reply.Value("question").(string)
+	return call.Name == "request_user_input_async" && ok && len(fullTitle) > 512 &&
+		len(echo) == 512 && utf8.ValidString(echo) && strings.HasPrefix(fullTitle, echo), nil
 }
 
 // newLexer returns the shlex.shlex(command, posix=True) that IsDecide reads. Tests replace it, as the

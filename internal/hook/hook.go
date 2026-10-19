@@ -1146,15 +1146,55 @@ func savedUsers(payload *json.Object, host string, t transcript.Transcript, entr
 			break
 		}
 	}
+	var nativeKeys map[string]bool
+	completeNativeHistory := false
+	if host == "codex" && len(fresh) > 0 && len(t.QuestionReplyKeys) > 0 {
+		nativeKeys = map[string]bool{}
+		for _, key := range seen {
+			if text, ok := key.(string); ok {
+				nativeKeys[text] = true
+			}
+		}
+		var priorNative []any
+		for i := range min(len(rawKeys), len(rawUsers)) {
+			if nativeKeys[rawKeys[i].(string)] {
+				priorNative = append(priorNative, rawUsers[i])
+			}
+		}
+		// Preserve the signed words and their order before adding a historical reply.
+		completeNativeHistory, err = json.Equal(users, priorNative)
+		if err != nil {
+			return nil, err
+		}
+	}
+	reorderReply := false
 	for _, i := range fresh {
 		key, message := rawKeys[i], rawUsers[i]
+		questionReply := host == "codex" && slices.Contains(t.QuestionReplyKeys, key.(string))
+		if questionReply && !completeNativeHistory {
+			continue
+		}
 		if at := slices.Index(prompts, message); at >= 0 {
 			prompts = slices.Delete(prompts, at, at+1)
 		} else if !replyKeys[key.(string)] {
 			continue
 		}
+		if questionReply {
+			reorderReply = true
+		}
 		users = append(users, message)
 		seen = append(seen, key)
+		if nativeKeys != nil {
+			nativeKeys[key.(string)] = true
+		}
+	}
+	if reorderReply {
+		users = nil
+		for i := range min(len(rawKeys), len(rawUsers)) {
+			if nativeKeys[rawKeys[i].(string)] {
+				users = append(users, rawUsers[i])
+			}
+		}
 	}
 	same, err := json.Equal(users, messages)
 	if err != nil {

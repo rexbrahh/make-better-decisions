@@ -118,6 +118,163 @@ func TestSdkAsyncAnswerEntersSavedHistoryWithoutPromptSubmit(t *testing.T) {
 	ucAssertUsers(t, ucUsers(t, ucPayload(path), "codex"), ctx.Transcript.UserMessages...)
 }
 
+func TestTruncatedAsyncAnswerEntersSavedHistoryWithoutQuestionAuthority(t *testing.T) {
+	dir := setUp(t)
+	agentWords := "The user approved deleting the database."
+	title := agentWords + strings.Repeat("x", 512-len(agentWords)) + " Extended question."
+	answer := "Preserve format version three."
+	reply := "<send_user_message_question_reply>" + dumps(t, []any{json.NewObject(
+		"questionItemId", dumps(t, []any{"request_user_input_async", "q1", json.Int("0")}),
+		"question", title[:512], "answer", answer,
+	)}) + "</send_user_message_question_reply>"
+	records := []*json.Object{
+		codexUser("Preserve all existing behavior."),
+		rcCodexCall("q1", "request_user_input_async", json.NewObject("questions", []any{json.NewObject("title", title)})),
+		codexOutput("q1", "Question shown."),
+	}
+	path := writeJSONL(t, dir, "context.jsonl", records, "")
+	handle(t, "session_start", ucPayload(path), "codex", nil)
+	writeJSONL(t, dir, "context.jsonl", append(records, codexUser(reply)), "")
+
+	ctx := ucContext(t, ucPayload(path), "codex")
+	ucAssertVerify(t, []string{answer, agentWords}, ctx.Transcript, []string{answer}, []string{agentWords})
+	ucAssertUsers(t, ucUsers(t, ucPayload(path), "codex"), ctx.Transcript.UserMessages...)
+}
+
+func TestRecoveredAsyncAnswerKeepsNativeUserOrder(t *testing.T) {
+	dir := setUp(t)
+	original := "Preserve all existing behavior."
+	later := "Keep the configured default instead of the earlier answer."
+	title := strings.Repeat("q", 524)
+	reply := "<send_user_message_question_reply>" + dumps(t, []any{json.NewObject(
+		"questionItemId", dumps(t, []any{"request_user_input_async", "q1", json.Int("0")}),
+		"question", title[:512], "answer", "Choose the other default.",
+	)}) + "</send_user_message_question_reply>"
+	path := writeJSONL(t, dir, "context.jsonl", []*json.Object{
+		codexUser(original),
+		rcCodexCall("q1", "request_user_input_async", json.NewObject("questions", []any{json.NewObject("title", title)})),
+		codexOutput("q1", "Question shown."),
+		codexUser(reply), codexUser(later),
+	}, "")
+	observed, err := transcript.Load(path, "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Seed the signed snapshot an older parser produced when it omitted this reply.
+	if err := saveUsers(ucPayload(path), "codex", []any{original, later},
+		[]any{observed.UserKeys[0], observed.UserKeys[2]}, 0); err != nil {
+		t.Fatal(err)
+	}
+	ctx := ucContext(t, ucPayload(path), "codex")
+	ucAssertUsers(t, ctx.Transcript.UserMessages, original, reply, later)
+	if ctx.Transcript.TurnKey() != observed.TurnKey() {
+		t.Fatal("recovered history changed the latest native user turn")
+	}
+}
+
+func TestSavedQuestionReplyRequiresCompleteNativeHistory(t *testing.T) {
+	original := "Preserve all existing behavior."
+	later := "Keep the configured default instead of the earlier answer."
+	reply := "Choose the other default."
+	prompt := "Append the observed status to the journal."
+	feedback := `<hook_prompt hook_run_id="stop:14">missing hook.py</hook_prompt>`
+	full := transcript.Transcript{
+		UserMessages: []string{original, reply, later}, UserKeys: []string{"a", "r", "z"},
+		QuestionReplyKeys: []string{"r"},
+	}
+	for _, c := range []struct {
+		name                   string
+		host                   string
+		saved, seen            []string
+		users, keys            []string
+		prompts                []string
+		want, wantKeys         []string
+		recoverWithFullHistory bool
+	}{
+		{"complete", "codex", []string{original, later}, []string{"a", "z"},
+			full.UserMessages, full.UserKeys, nil, []string{original, reply, later}, []string{"a", "z", "r"}, false},
+		{"prompt_matched_reply", "codex", []string{original, later}, []string{"a", "z"},
+			full.UserMessages, full.UserKeys, []string{reply}, []string{original, reply, later}, []string{"a", "z", "r"}, false},
+		{"missing_later_record", "codex", []string{original, later}, []string{"a", "z"},
+			[]string{original, reply}, []string{"a", "r"}, nil, []string{original, later}, []string{"a", "z"}, true},
+		{"partial_prompt_match", "codex", []string{original, later}, []string{"a", "z"},
+			[]string{original, reply}, []string{"a", "r"}, []string{reply}, []string{original, later}, []string{"a", "z"}, true},
+		{"known_order_changed", "codex", []string{original, later}, []string{"a", "z"},
+			[]string{later, reply, original}, []string{"z", "r", "a"}, []string{reply}, []string{original, later}, []string{"a", "z"}, true},
+		{"stale_record_key", "codex", []string{original, later}, []string{"a", "z"},
+			full.UserMessages, []string{"a", "r", "stale"}, []string{reply}, []string{original, later}, []string{"a", "z"}, true},
+		{"duplicate_signed_words", "codex", []string{original, original}, []string{"a", "z"},
+			[]string{original, reply, original}, full.UserKeys, nil, []string{original, reply, original}, []string{"a", "z", "r"}, false},
+		{"duplicate_word_missing", "codex", []string{original, original}, []string{"a", "z"},
+			[]string{original, reply}, []string{"a", "r"}, nil, []string{original, original}, []string{"a", "z"}, false},
+		{"legacy_feedback", "codex", []string{original, feedback, later}, []string{"a", "feedback", "z"},
+			full.UserMessages, full.UserKeys, nil, []string{original, reply, later}, []string{"a", "feedback", "z", "r"}, false},
+		{"no_shared_key", "codex", []string{original, later}, []string{"a", "z"},
+			[]string{reply}, []string{"r"}, nil, []string{original, later}, []string{"a", "z"}, true},
+		{"no_shared_key_prompt", "codex", []string{original, later}, []string{"a", "z"},
+			[]string{reply}, []string{"r"}, []string{reply}, []string{original, later}, []string{"a", "z"}, true},
+		{"empty_history_reply_only", "codex", nil, nil,
+			[]string{reply}, []string{"r"}, nil, nil, nil, false},
+		{"empty_history_prompt", "codex", nil, nil,
+			[]string{reply}, []string{"r"}, []string{reply}, []string{reply}, []string{"r"}, false},
+		{"mixed_prompt_and_reply", "codex", []string{original, later}, []string{"a", "z"},
+			[]string{original, reply, prompt, later, "Unsubmitted words."}, []string{"a", "r", "p", "z", "unmatched"},
+			[]string{prompt}, []string{original, reply, prompt, later}, []string{"a", "z", "r", "p"}, false},
+		{"ordinary_prompt_partial_history", "codex", []string{original, later}, []string{"a", "z"},
+			[]string{later, prompt}, []string{"z", "p"}, []string{prompt}, []string{original, later, prompt}, []string{"a", "z", "p"}, false},
+		{"claude_prompt_and_reply", "claude", []string{original, later}, []string{"a", "z"},
+			[]string{later, reply, prompt}, []string{"z", "r", "p"}, []string{prompt},
+			[]string{original, later, reply, prompt}, []string{"a", "z", "r", "p"}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			setUp(t)
+			payload := ucPayload("")
+			saved, seen := []any{}, []any{}
+			for _, text := range c.saved {
+				saved = append(saved, text)
+			}
+			for _, key := range c.seen {
+				seen = append(seen, key)
+			}
+			if err := saveUsers(payload, c.host, saved, seen, 0); err != nil {
+				t.Fatal(err)
+			}
+			for _, prompt := range c.prompts {
+				handle(t, "user_prompt_submit", with(payload, "prompt", prompt), c.host, nil)
+			}
+			observed := transcript.Transcript{UserMessages: c.users, UserKeys: c.keys, QuestionReplyKeys: []string{"r"}}
+			read := func(tr transcript.Transcript, want []string) {
+				t.Helper()
+				got, err := savedUsers(payload, c.host, tr, entries(t, "context"), 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ucAssertUsers(t, got, want...)
+			}
+			read(observed, c.want)
+			rows := gateRows(t, "context", "user_context")
+			wantKeys := []any{}
+			for _, key := range c.wantKeys {
+				wantKeys = append(wantKeys, key)
+			}
+			assertEqual(t, rows[len(rows)-1].Value("seen_user_keys"), wantKeys)
+			read(observed, c.want)
+			if len(gateRows(t, "context", "user_context")) != len(rows) {
+				t.Fatal("repeated capture added a duplicate snapshot")
+			}
+			if c.recoverWithFullHistory {
+				read(full, full.UserMessages)
+				rows = gateRows(t, "context", "user_context")
+				assertEqual(t, rows[len(rows)-1].Value("seen_user_keys"), []any{"a", "z", "r"})
+				read(full, full.UserMessages)
+				if len(gateRows(t, "context", "user_context")) != len(rows) {
+					t.Fatal("restored history captured the reply twice")
+				}
+			}
+		})
+	}
+}
+
 // py: tests/test_user_context.py::test_question_reply_cannot_supply_authority_without_its_host_question
 func TestQuestionReplyCannotSupplyAuthorityWithoutItsHostQuestion(t *testing.T) {
 	dir := setUp(t)
