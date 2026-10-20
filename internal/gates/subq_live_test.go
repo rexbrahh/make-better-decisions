@@ -2,7 +2,9 @@ package gates
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,4 +90,57 @@ func TestLiveSubQGateQualification(t *testing.T) {
 				"content", "import sqlite3\nconnection = sqlite3.connect('data.db')\n"), ctx, ask)
 		})
 	})
+	for _, exact := range []bool{false, true} {
+		for _, swapped := range []bool{false, true} {
+			t.Run(fmt.Sprintf("long_option_binding/exact_%t/swapped_%t", exact, swapped), func(t *testing.T) {
+				var inventory strings.Builder
+				for i := range 80 {
+					fmt.Fprintf(&inventory, "Fixture name %d includes character %c.\n", i, rune(0x4e00+i))
+				}
+				ascii := "Encode exported names with ASCII. The fixture inventory is:\n" + inventory.String()
+				utf8 := "Encode exported names with UTF-8. The fixture inventory is:\n" + inventory.String()
+				goodID, badID := "utf8", "ascii"
+				if swapped {
+					goodID, badID = "option_a", strings.Repeat("b", 40)
+				}
+				options := opts(badID, ascii, goodID, utf8)
+				if swapped {
+					options = opts(goodID, utf8, badID, ascii)
+				}
+				users := []string{"Preserve names such as Zoë and 李 exactly in the export."}
+				want := "advisory"
+				if exact {
+					users = append(users, "Use UTF-8 to encode exported names.")
+					want = "routine"
+				}
+				ctx := contextFor(t, users, []string{"ASCII cannot encode 李 or the CJK fixture inventory. UTF-8 encodes all fixture characters, Zoë and 李 exactly."})
+				request := dumps(t, json.NewObject("decision", "Which encoding preserves the required exported names?", "options", options,
+					"scope", json.NewObject("paths", []any{"export.py"}, "invariants", []any{"Preserve Zoë and 李 exactly in exported names."})))
+				checked(t, []string{want}, func(ask Ask) Outcome {
+					out := decide(t, request, ctx, func(state, questions *json.Object) (*json.Object, error) {
+						answers, err := ask(state, questions)
+						if err == nil {
+							for _, predicate := range []string{"invariant_0_", "specified_"} {
+								if predicate == "specified_" && !exact {
+									continue
+								}
+								good := answers.Value(predicate + goodID).(*json.Object).Value("noul")
+								bad := answers.Value(predicate + badID).(*json.Object).Value("noul")
+								var e expr
+								if !e.ge(good, .8) || !e.lt(bad, .8) || e.err != nil {
+									t.Errorf("%s target binding: selected=%v alternative=%v error=%v", predicate, good, bad, e.err)
+								}
+								t.Logf("%s target binding: selected=%v alternative=%v", predicate, good, bad)
+							}
+						}
+						return answers, err
+					})
+					if out.Record.Value("pick") != goodID {
+						t.Errorf("selected %v, want %s", out.Record.Value("pick"), goodID)
+					}
+					return out
+				})
+			})
+		}
+	}
 }

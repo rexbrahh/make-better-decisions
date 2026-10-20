@@ -16,7 +16,7 @@ func TestReviewProviderProfiles(t *testing.T) {
 	}
 	got, err := Provider("subq")
 	if err != nil || got.Name != "subq" || got.Model != "subq-snap-preview" || got.Timeout != 10*time.Second ||
-		got.ContextProfile != "snap-2" || got.Evidence.BudgetChars != 800_000 || got.Evidence.TextChars != 160_000 {
+		got.ContextProfile != "snap-3" || got.Evidence.BudgetChars != 800_000 || got.Evidence.TextChars != 160_000 {
 		t.Fatalf("Snap provider: %+v, %v", got, err)
 	}
 	for _, name := range []string{"SUBQ", "unknown", "https://example.invalid"} {

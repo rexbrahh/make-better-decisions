@@ -452,7 +452,7 @@ func quote(text string) string {
 }
 
 // py: agent_decisions/gates.py _decide_questions
-func decideQuestions(options, scope, missingFacts *json.Object) *json.Object {
+func decideQuestions(options, scope, missingFacts *json.Object, referenceOptions bool) *json.Object {
 	pick := options.Copy()
 	pick.Set(NoneFit, "None of the listed options fits the evidence.")
 	argued := json.NewObject("decision", "The decision question")
@@ -537,6 +537,9 @@ func decideQuestions(options, scope, missingFacts *json.Object) *json.Object {
 	invariants, _ := scope.Value("invariants").([]any)
 	for _, id := range options.Keys() {
 		description := quote(options.Value(id).(string))
+		if referenceOptions {
+			description = "the operation described in `options[" + quote(id) + "]` in the shared state"
+		}
 		questions.Set("follows_pattern_"+id, noul(
 			"Assume current source shows a pattern applicable to `decision`: does this operation follow "+
 				"that observed pattern? "+description,
@@ -905,7 +908,7 @@ func Decide(raw string, ctx Context, ask Ask) (Outcome, error) {
 			return outcome, err
 		}
 	}
-	answers, err := ask(state, decideQuestions(options, scope, missingFacts))
+	answers, err := ask(state, decideQuestions(options, scope, missingFacts, reviewer(ctx).Name == "subq"))
 	if err != nil {
 		var failure *jev.JevError
 		if !errors.As(err, &failure) {
