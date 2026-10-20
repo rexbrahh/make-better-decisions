@@ -32,6 +32,7 @@ const Binary = "bin/agent-decisions"
 var sourceFiles = []string{
 	".claude-plugin/plugin.json",
 	".codex-plugin/plugin.json",
+	"THIRD_PARTY_NOTICES",
 	"bin/agent-decisions-install",
 	"bin/agent-decisions-isolate",
 	"bin/agent-decisions-shell-prefix",
@@ -120,7 +121,7 @@ func files(source string) ([]origin, error) {
 			return nil, runtimeError("runtime source file is missing: %s", relative)
 		}
 		out = append(out, origin{relative, path})
-		if relative == ".codex-plugin/plugin.json" { // bin/agent-decisions sorts here
+		if relative == "THIRD_PARTY_NOTICES" { // bin/agent-decisions sorts here
 			out = append(out, origin{Binary, binary})
 		}
 	}

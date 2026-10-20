@@ -1499,40 +1499,25 @@ func Classify(command string) (kind, request string) {
 	if request, ok := heredocRequest(strings.ReplaceAll(command, "\r\n", "\n")); ok {
 		return "decide", request
 	}
-	lines := pystr.SplitLines(pystr.Strip(command))
-	for len(lines) > 0 && (pystr.Strip(lines[0]) == "" || strings.HasPrefix(pystr.LStrip(lines[0]), "#")) {
-		lines = lines[1:]
+	if kind, request := classifyCommandTokens(command); kind == "decide" {
+		return kind, request
 	}
-	if len(lines) > 0 {
-		if header, ok := matchDataHeredoc(lines[0]); ok {
-			lexer := shlex.New(header.command, true, shlex.DefaultPunctuation)
-			lexer.WhitespaceSplit = true
-			argv, err := lexer.Tokens()
-			if err != nil {
-				argv = nil
-			}
-			head := ""
-			if len(argv) > 0 {
-				head = executionHead(argv, 0)
-			}
-			if len(argv) > 0 && !stdinShells[head] && head != "ts-decide" && !anyPunctuation(argv) {
-				// A complete quoted heredoc supplies data; shells still execute their stdin.
-				end := -1
-				for index, line := range lines[1:] {
-					if header.stripTabs {
-						line = strings.TrimLeft(line, "\t")
-					}
-					if line == header.delimiter {
-						end = index + 1
-						break
-					}
-				}
-				if end >= 0 && !anyCode(lines[end+1:]) {
-					command = header.command
-				}
-			}
+	source, detection, called := shellCommandViews(command)
+	if called {
+		return "misuse", ""
+	}
+	if kind, _ := classifyCommandTokens(source); kind != "other" {
+		return "misuse", ""
+	}
+	if detection != source {
+		if kind, _ := classifyCommandTokens(detection); kind != "other" {
+			return "misuse", ""
 		}
 	}
+	return "other", ""
+}
+
+func classifyCommandTokens(command string) (kind, request string) {
 	var tokens []string
 	quoteError := false
 	lexer := shlex.NewStream(commandInput{shlex.NewStringStream(pystr.Strip(command))}, true, punctuation)
@@ -1563,26 +1548,6 @@ func Classify(command string) (kind, request string) {
 		return "decide", tokens[1]
 	}
 	return "misuse", ""
-}
-
-// anyPunctuation reports any(arg and set(arg) <= _PUNCTUATION for arg in argv).
-func anyPunctuation(argv []string) bool {
-	for _, arg := range argv {
-		if arg != "" && isPunctuation(arg) {
-			return true
-		}
-	}
-	return false
-}
-
-// anyCode reports whether a line is neither blank nor a comment.
-func anyCode(lines []string) bool {
-	for _, line := range lines {
-		if pystr.Strip(line) != "" && !strings.HasPrefix(pystr.LStrip(line), "#") {
-			return true
-		}
-	}
-	return false
 }
 
 // brace is _BRACE; it has no lookaround or backreference, so RE2's leftmost-first match is Python's.

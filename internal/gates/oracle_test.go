@@ -159,7 +159,7 @@ type oracleCase struct {
 
 // compareWithPython runs every case through one CPython process named by AGENT_DECISIONS_PYTHON and
 // compares each reply with json.dumps of the Go reply. Python answers every case before Go runs any.
-func compareWithPython(t *testing.T, cases []oracleCase) {
+func compareWithPython(t *testing.T, cases []oracleCase, revisions ...func(oracleCase, string) string) {
 	t.Helper()
 	python := os.Getenv("AGENT_DECISIONS_PYTHON")
 	if python == "" {
@@ -189,8 +189,12 @@ func compareWithPython(t *testing.T, cases []oracleCase) {
 		if i >= len(cases) {
 			t.Fatalf("python answered more than %d requests", len(cases))
 		}
+		want := lines.Text()
+		for _, revise := range revisions {
+			want = revise(cases[i], want)
+		}
 		got := dumps(t, cases[i].run())
-		if want := lines.Text(); got != want {
+		if got != want {
 			if failures++; failures <= 20 {
 				t.Errorf("%s:\n  go     %s\n  python %s", cases[i].name, around(got, want), around(want, got))
 			}
@@ -240,8 +244,8 @@ func shown(outcome *Outcome) any {
 
 // commandCorpus combines command heads, arguments, suffixes and prefixes into shell commands with quotes,
 // heredocs, pipes, redirects, wrappers, environment assignments and interactive tools.
-func commandCorpus() []string {
-	heads := []string{"ts-decide", "/x/bin/ts-decide", "./ts-decide", "env ts-decide", "env -i A=1 ts-decide",
+func commandAxes() (heads, args, suffixes, prefixes []string) {
+	heads = []string{"ts-decide", "/x/bin/ts-decide", "./ts-decide", "env ts-decide", "env -i A=1 ts-decide",
 		"env -u A ts-decide", "env -C /tmp ts-decide", "env -- ts-decide", "env -S 'ts-decide'",
 		"env -S'bash -'", "command ts-decide", "command -p ts-decide", "command -v ts-decide", "exec ts-decide",
 		"exec -a x ts-decide", "time ts-decide", "time -p ts-decide", "xargs ts-decide", "xargs -I x ts-decide",
@@ -249,12 +253,17 @@ func commandCorpus() []string {
 		"bash -i", "sh -c 'ts-decide'", "python3", "python3 -", "python3 -u -", "python3 -mcode", "python3 -m code",
 		"node", "node -i", "node -", "ruby", "perl -", "cat", "echo ts-decide", "grep ts-decide", "pytest -q",
 		"npm test", "\"ts-decide\"", "'ts-decide'", "ts\\-decide", "ts-decid\\\ne", "$(which ts-decide)"}
-	args := []string{"", " '{}'", ` "{\"a\": 1}"`, " <<'EOF'\n{}\nEOF\n", " <<EOF\n{}\nEOF", " <<-'X'\n\t{}\n\tX\n",
+	args = []string{"", " '{}'", ` "{\"a\": 1}"`, " <<'EOF'\n{}\nEOF\n", " <<EOF\n{}\nEOF", " <<-'X'\n\t{}\n\tX\n",
 		" <<\"EOF\"\r\n{}\r\nEOF\r\n", " - <<'PY'\nprint('ts-decide')\nPY\n", " < in.py", " '<<'", " -c 'exec(input())'",
 		" \\\n'{}'", " '{}' 'unterminated", " -- '{}'", " <<<'{}'", " <<'EOF'\n{}\n", " '{\"decision\": \"café\"}'"}
-	suffixes := []string{"", " && ls", "; ls", " | tee out", " > out", "\nls", " # note", " &", " 2>&1"}
-	prefixes := []string{"", "cd /x && ", "# c\n", "(", "  ", "echo a\n", "python3 - <<'PY'\nx = 'ts-decide'\nPY\n",
+	suffixes = []string{"", " && ls", "; ls", " | tee out", " > out", "\nls", " # note", " &", " 2>&1"}
+	prefixes = []string{"", "cd /x && ", "# c\n", "(", "  ", "echo a\n", "python3 - <<'PY'\nx = 'ts-decide'\nPY\n",
 		"! ", "{ "}
+	return
+}
+
+func commandCorpus() []string {
+	heads, args, suffixes, prefixes := commandAxes()
 	var corpus []string
 	for _, head := range heads {
 		for _, arg := range args {
@@ -278,14 +287,13 @@ func TestClassificationMatchesPython(t *testing.T) {
 	var cases []oracleCase
 	for i, command := range commandCorpus() {
 		name := "#" + strconv.Itoa(i) + " " + strconv.Quote(command)
-		cases = append(cases,
-			oracleCase{"classify " + name, []any{"classify", wire(command)}, func() any {
-				kind, request := Classify(command)
-				return []any{"ok", []any{kind, request}}
-			}},
-			oracleCase{"interactive " + name, []any{"interactive", wire(command)}, func() any {
-				return result(interactive(command))
-			}})
+		cases = append(cases, oracleCase{"classify " + name, []any{"classify", wire(command)}, func() any {
+			kind, request := Classify(command)
+			return []any{"ok", []any{kind, request}}
+		}})
+		cases = append(cases, oracleCase{"interactive " + name, []any{"interactive", wire(command)}, func() any {
+			return result(interactive(command))
+		}})
 	}
 	for _, input := range []string{`{"command": "ls"}`, `{"cmd": "ls -l"}`, `{"command": ["bash", "-lc", "ts-decide '{}'"]}`,
 		`{"command": ["bash", "-c", "x"]}`, `{"command": ["sh", "-lc", "x", "y"]}`, `{"command": ["ls", "-l", "a b"]}`,
@@ -296,7 +304,70 @@ func TestClassificationMatchesPython(t *testing.T) {
 			return []any{"ok", CommandOf(obj(t, input))}
 		}})
 	}
-	compareWithPython(t, cases)
+	if len(cases) != 129511 {
+		t.Fatalf("classification corpus changed: %d comparisons", len(cases))
+	}
+	expected := shellSyntaxCorpusExpectations()
+	changed := map[string]int{}
+	compareWithPython(t, cases, func(c oracleCase, baseline string) string {
+		if c.request[0] != "classify" {
+			return baseline
+		}
+		kind := expected[c.request[1].(string)]
+		if kind == "misuse" && baseline == `["ok", ["other", ""]]` ||
+			kind == "other" && baseline == `["ok", ["misuse", ""]]` {
+			changed[kind]++
+			return dumps(t, []any{"ok", []any{kind, ""}})
+		}
+		return baseline
+	})
+	if changed["misuse"] != 4067 || changed["other"] != 476 {
+		t.Fatalf("intentional corpus revisions changed: %v", changed)
+	}
+	t.Logf("129511 full public comparisons; intentional syntax revisions: %v", changed)
+}
+
+// These expectations use literal corpus grammar, not the parser or classifier under test.
+// Only the two changed detection outcomes vary; every accepted request stays byte-identical.
+func shellSyntaxCorpusExpectations() map[string]string {
+	heads, args, suffixes, prefixes := commandAxes()
+	result := make(map[string]string)
+	consultations := map[string]bool{}
+	for _, head := range []string{"ts-decide", "/x/bin/ts-decide", "./ts-decide", "env ts-decide", "env -i A=1 ts-decide",
+		"env -u A ts-decide", "env -C /tmp ts-decide", "env -- ts-decide", "env -S 'ts-decide'",
+		"command ts-decide", "command -p ts-decide", "exec ts-decide", "exec -a x ts-decide", "time ts-decide",
+		"time -p ts-decide", "xargs ts-decide", "xargs -I x ts-decide", "FLAG=1 ts-decide", "A=1 B=2 env ts-decide",
+		"\"ts-decide\"", "'ts-decide'", "ts\\-decide", "ts-decid\\\ne"} {
+		consultations[head] = true
+	}
+	const data = " - <<'PY'\nprint('ts-decide')\nPY\n"
+	for _, head := range heads {
+		for _, arg := range args {
+			for _, suffix := range suffixes {
+				for _, prefix := range prefixes {
+					command := prefix + head + arg + suffix
+					complete := !strings.Contains(arg, "unterminated") // Shells can execute a heredoc terminated by EOF.
+					if consultations[head] && complete && prefix != "(" && prefix != "{ " &&
+						(prefix == "! " || head == "ts-decid\\\ne") {
+						result[wire(command)] = "misuse"
+					}
+					if arg == data && (prefix == "{ " || head == "command -v ts-decide" || prefix == "! " &&
+						(head == "bash" || head == "bash -s" || head == "bash -i" || head == "sh -c 'ts-decide'" || head == "env -S'bash -'")) {
+						result[wire(command)] = "misuse" // Unproven data or possible shell stdin stays visible to the raw scan.
+					}
+				}
+			}
+		}
+	}
+	for _, head := range []string{"nohup ts-decide", "sudo ts-decide", "python3", "python3 -", "python3 -u -", "python3 -mcode", "python3 -m code",
+		"node", "node -i", "node -", "ruby", "perl -", "cat", "echo ts-decide", "grep ts-decide", "pytest -q", "npm test"} {
+		for _, prefix := range []string{"", "# c\n", "  ", "! "} {
+			for _, suffix := range []string{" && ls", "; ls", " | tee out", " > out", "\nls", " &", " 2>&1"} {
+				result[wire(prefix+head+data+suffix)] = "other" // Only the quoted body is data; ordinary suffixes remain.
+			}
+		}
+	}
+	return result
 }
 
 // guardCorpus returns tool inputs that name paths in and around the private state directory.

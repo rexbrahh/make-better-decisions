@@ -95,6 +95,9 @@ func TestRuntimeBundleSurvivesCacheRemoval(t *testing.T) {
 		want[relative] = data
 	}
 	want[Binary], _ = os.ReadFile(f.binary)
+	if len(want["THIRD_PARTY_NOTICES"]) == 0 {
+		t.Fatal("runtime bundle omits the shell parser license notice")
+	}
 	if err := os.RemoveAll(filepath.Dir(f.source)); err != nil {
 		t.Fatal(err)
 	}
