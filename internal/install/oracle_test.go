@@ -160,6 +160,12 @@ func compareWithPython(t *testing.T, ops []oracleOp) {
 		expected := want[i].([]any)
 		if op.op[0] == "cli" {
 			got, expected = normalizeCLIResult(t, got), normalizeCLIResult(t, expected)
+		} else if op.op[0] == "codex_plan" || op.op[0] == "claude_plan" {
+			for _, result := range [][]any{got, expected} {
+				if result[0] == "ok" {
+					result[1] = legacyProviderPlan(t, result[1].(string))
+				}
+			}
 		}
 		if same, err := json.Equal(got, expected); err != nil || !same {
 			t.Errorf("op %d %s %v\n%s", i, op.op[0], op.op[1:], firstDifference(render(got), render(expected)))
@@ -173,13 +179,64 @@ func normalizeCLIResult(t *testing.T, outcome []any) []any {
 		return outcome
 	}
 	result := loads(t, outcome[1].(string)).([]any)
-	result[1] = legacyInstallerPresentation(result[1].(string))
+	result[1] = legacyInstallerPresentation(legacyProviderPlan(t, result[1].(string)))
 	result[2] = legacyInstallerPresentation(result[2].(string))
 	text, err := json.Dumps(result, json.Options{SortKeys: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return []any{"ok", text}
+}
+
+// The baseline has no provider field. Exact new and retained defaults are checked in review_test.go.
+func legacyProviderPlan(t *testing.T, text string) string {
+	t.Helper()
+	value, err := json.Loads(text)
+	root, ok := value.(*json.Object)
+	if err != nil || !ok {
+		return text
+	}
+	plans := []any{root}
+	if list, ok := root.Value("plans").([]any); ok {
+		plans = list
+	}
+	for _, value := range plans {
+		plan, ok := value.(*json.Object)
+		if !ok {
+			continue
+		}
+		entry, ok := plan.Value("installation_entry").(*json.Object)
+		if !ok {
+			continue
+		}
+		spec, ok := entry.Value("spec").(*json.Object)
+		if ok && (spec.Value("review_provider") == "subq" || spec.Value("review_provider") == "jev") {
+			spec.Delete("review_provider")
+		}
+	}
+	encoded, err := json.Dumps(value, json.Options{SortKeys: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
+func TestLegacyProviderComparisonKeepsUnknownSelectionsAndOtherFields(t *testing.T) {
+	for _, provider := range []string{"subq", "jev", "unknown"} {
+		plan := json.NewObject("installation_entry", json.NewObject("spec", json.NewObject(
+			"review_provider", provider, "review_mode", "required", "session_review_exceptions", []any{"retained"})),
+			"review_provider", "unrelated")
+		text, err := json.Dumps(plan, json.Options{})
+		check(t, err)
+		normalized := load(t, legacyProviderPlan(t, text)).(*json.Object)
+		wantEqual(t, normalized.Value("review_provider"), "unrelated")
+		wantEqual(t, dig(normalized, "installation_entry", "spec", "review_mode"), "required")
+		wantEqual(t, dig(normalized, "installation_entry", "spec", "session_review_exceptions"), []any{"retained"})
+		_, retained := dig(normalized, "installation_entry", "spec").(*json.Object).Get("review_provider")
+		if retained != (provider == "unknown") {
+			t.Fatalf("comparison hid an unknown provider or retained the known added field: %s", provider)
+		}
+	}
 }
 
 // The frozen baseline predates this one option; keep every existing option and error check.

@@ -16,7 +16,7 @@ func TestProviderChooserStartsWithTheModelChoice(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, stderr.String())
 	}
 	text := stdout.String()
-	if !strings.HasPrefix(text, "Choose your review model:\n1) Jev") || !strings.Contains(text, "2) SubQ Snap") {
+	if !strings.HasPrefix(text, "Choose your review model:\n1) SubQ Snap") || !strings.Contains(text, "2) Jev") {
 		t.Fatalf("missing first model choice: %q", text)
 	}
 	if strings.Contains(text, "Choose the host") || stderr.Len() != 0 {
@@ -40,12 +40,12 @@ func TestProviderChooserCancelsBeforePlanning(t *testing.T) {
 
 func TestProviderChooserAppliesTheConfirmedModelAndHost(t *testing.T) {
 	for _, test := range []struct{ name, input, host, provider string }{
-		{"jev_codex", "1\n1\napply\n", "codex", "jev"},
-		{"jev_claude", "1\n2\napply\n", "claude", "jev"},
-		{"jev_both", "1\n3\napply\n", "both", "jev"},
-		{"snap_codex", "2\n1\napply\n", "codex", "subq"},
-		{"snap_claude", "2\n2\napply\n", "claude", "subq"},
-		{"snap_both", "2\n3\napply\n", "both", "subq"},
+		{"jev_codex", "2\n1\napply\n", "codex", "jev"},
+		{"jev_claude", "2\n2\napply\n", "claude", "jev"},
+		{"jev_both", "2\n3\napply\n", "both", "jev"},
+		{"snap_codex", "1\n1\napply\n", "codex", "subq"},
+		{"snap_claude", "1\n2\napply\n", "claude", "subq"},
+		{"snap_both", "1\n3\napply\n", "both", "subq"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer

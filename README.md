@@ -4,7 +4,7 @@
 
 The goal is useful, enforceable review. The reviewer evaluates a material choice against observed evidence. Code checks receipt identity, scope, constraints, and failure policy. Exact instructions and routine operations need no invented choice.
 
-Version 2.2.0 adds optional SubQ Snap review with larger evidence and bounded question batches. TypeSafe Jev remains the default. Snap is a preview provider and needs further stability qualification before default promotion. See the [release notes](docs/releases/v2.2.0.md).
+SubQ Snap is the default reviewer for new installations. It uses larger evidence and bounded question batches. Jev remains available through the model chooser and installer. Existing installations retain their selection until the owner changes it. Snap remains a public preview model.
 
 Version 2.1.3 reports the source root used for unavailable contract files. See the [release notes](docs/releases/v2.1.3.md) and [QA record](docs/validation/v2.1.3-qa-2026-10-15.md). Earlier releases correct [PROCEED reuse](docs/releases/v2.1.2.md), [installer credential diagnostics](docs/releases/v2.1.1.md) and [installation and compatibility defects](docs/validation/v2.1.0-campaign-2026-10-15.md).
 
@@ -124,7 +124,7 @@ After installation, run the chooser:
 ~/.local/share/agent-decisions/current/bin/agent-decisions provider
 ```
 
-The first question offers Jev or SubQ Snap. Next, select Codex, Claude Code or both.
+The first question offers SubQ Snap (the default) or Jev. Next, select Codex, Claude Code or both.
 The chooser displays the sanitized installer plan. Type `apply` to activate the selection.
 Blank input or EOF cancels. Invalid choices and input errors stop without activation.
 The chooser does not request an API key. Existing installer flags remain available for automation.
@@ -144,9 +144,9 @@ bin/agent-decisions-install --host codex --review-provider subq --install-root /
 bin/agent-decisions-install --host claude --review-provider subq --install-root /path/to/installed/agent-decisions --apply
 ```
 
-Use `--review-provider jev` to restore Jev. An omitted flag preserves the existing selection.
+Use `--review-provider jev` to select Jev. An omitted flag preserves the existing selection and selects Snap for a new installation.
 An unknown signed selection blocks reviewed operations. An explicit valid installer selection repairs it.
-Tool input and environment variables cannot select the provider. Provider changes require fresh material review.
+Tool input and environment variables cannot select the provider. Provider changes require fresh material review unless the user explicitly selects the provider.
 
 | Limit | Jev | SubQ Snap |
 | --- | --- | --- |

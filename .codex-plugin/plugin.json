@@ -1,7 +1,7 @@
 {
   "name": "agent-decisions",
-  "version": "2.2.16",
-  "description": "Jev-assisted decisions and edit checks with hook-owned transcript evidence.",
+  "version": "2.2.17",
+  "description": "SubQ Snap decisions and edit checks with hook-owned evidence; Jev remains selectable.",
   "author": {"name": "Rex"},
   "repository": "https://github.com/rexbrahh/make-better-decisions",
   "skills": "./skills/",

@@ -13,9 +13,7 @@ func TestReviewProviderSelectionPreservesAnOmittedFlag(t *testing.T) {
 	entry, err := InstallationEntry("codex", dir+"/state", json.NewObject(), []any{}, nil, nil)
 	check(t, err)
 	check(t, ConfigureReviewProvider(entry, nil, nil))
-	if _, exists := entry.Value("spec").(*json.Object).Get("review_provider"); exists {
-		t.Fatal("legacy policy changed")
-	}
+	wantEqual(t, dig(entry, "spec", "review_provider"), "subq")
 	prior := json.NewObject("review_provider", "subq")
 	check(t, ConfigureReviewProvider(entry, prior, nil))
 	wantEqual(t, dig(entry, "spec", "review_provider"), "subq")
@@ -27,6 +25,41 @@ func TestReviewProviderSelectionPreservesAnOmittedFlag(t *testing.T) {
 			t.Fatalf("invalid previous selection %v accepted", bad)
 		}
 	}
+}
+
+func TestNewHostPlansDefaultToSnapAndPreserveLegacyJev(t *testing.T) {
+	dir := setUp(t)
+	for _, previous := range []*json.Object{nil, json.NewObject(), json.NewObject("host", "codex"), json.NewObject("review_provider", "jev")} {
+		codex, err := BuildCodexPlan(nil, dir+"/state", dir+"/plugin", nil, nil, dir, previous)
+		check(t, err)
+		claude, err := BuildClaudePlan(json.NewObject(), dir+"/state", dir+"/plugin", dir, nil, nil, previous)
+		check(t, err)
+		for _, plan := range []*json.Object{codex, claude} {
+			spec := dig(plan, "installation_entry", "spec").(*json.Object)
+			if previous == nil || previous.Len() == 0 {
+				wantEqual(t, spec.Value("review_provider"), "subq")
+			} else {
+				wantEqual(t, spec.Value("review_provider"), "jev")
+			}
+		}
+	}
+}
+
+func TestLegacyProviderSurvivesARebuiltInstallationPlan(t *testing.T) {
+	dir := setUp(t)
+	entry, err := InstallationEntry("codex", dir+"/state", json.NewObject(), []any{}, nil, nil)
+	check(t, err)
+	entry.Value("spec").(*json.Object).Set("protected_paths", "malformed")
+	check(t, ledger.Append(entry))
+	writeFile(t, dir+"/mcp.json", `{"servers": []}`)
+	writeFile(t, dir+"/config.toml", "")
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"--host", "codex", "--state-root", dir + "/state", "--install-root", dir + "/installed",
+		"--codex-mcp-json", dir + "/mcp.json", "--codex-config", dir + "/config.toml"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	wantEqual(t, dig(load(t, stdout.String()), "plans", 0, "installation_entry", "spec", "review_provider"), "jev")
 }
 
 func TestBothHostPlansPreserveTheReviewProvider(t *testing.T) {

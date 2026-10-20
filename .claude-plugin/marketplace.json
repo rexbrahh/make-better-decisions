@@ -1,6 +1,6 @@
 {
   "name": "make-better-decisions",
-  "description": "Jev-assisted decisions for Claude Code and Codex agents.",
+  "description": "SubQ Snap decisions for Claude Code and Codex agents, with optional Jev.",
   "owner": {"name": "Rex"},
-  "plugins": [{"name": "agent-decisions", "source": "./", "description": "Jev-assisted decisions and edit checks for Claude Code and Codex."}]
+  "plugins": [{"name": "agent-decisions", "source": "./", "description": "SubQ Snap decisions and edit checks for Claude Code and Codex, with optional Jev."}]
 }

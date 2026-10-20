@@ -42,11 +42,11 @@ func runProvider(args []string, stdin io.Reader, stdout, stderr io.Writer,
 		return 0
 	}
 
-	model, err := read("Choose your review model:\n1) Jev — compact evidence\n2) SubQ Snap — larger evidence, preview\nChoice (blank cancels): ")
+	model, err := read("Choose your review model:\n1) SubQ Snap — default, larger evidence, preview\n2) Jev — compact evidence\nChoice (blank cancels): ")
 	if err != nil || model == "" {
 		return cancel(err)
 	}
-	provider := map[string]string{"1": "jev", "2": "subq"}[model]
+	provider := map[string]string{"1": "subq", "2": "jev"}[model]
 	if provider == "" {
 		fmt.Fprintln(stderr, "Select 1 or 2.")
 		return 2

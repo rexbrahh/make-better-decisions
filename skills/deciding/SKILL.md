@@ -17,7 +17,7 @@ Approach selection checks the plan against observed constraints. New implementat
 
 The hook reviews declared edit and patch tools, filesystem write/edit tools, and Claude plan acceptance. It denies uncovered material choices on those surfaces. Ordinary shell commands, peer communication, worker dispatch, questions, and new tools use normal host controls without remote review. The local private-state guard still applies.
 
-Jev is the default reviewer. The owner can select optional SubQ Snap through signed installation policy. Agents cannot select a provider through requests or environment variables. A provider change requires fresh material review.
+SubQ Snap is the default reviewer for new installations. Existing installations retain their signed selection, including implicit legacy Jev. The owner can select Snap or Jev through signed installation policy. Agents cannot select a provider through requests or environment variables. A provider change requires fresh material review unless the user explicitly selects the provider.
 
 ## Call format
 

@@ -25,7 +25,11 @@ func ConfigureReviewProvider(entry, previousSpec *json.Object, selected *string)
 		value, exists = previousSpec.Get("review_provider")
 	}
 	if !exists {
-		return nil
+		if previousSpec != nil && previousSpec.Len() > 0 {
+			value = "jev" // Also replace a provisional new-install default in a rebuilt plan.
+		} else {
+			value = "subq"
+		}
 	}
 	name, ok := value.(string)
 	if !ok || name == "" {
