@@ -44,7 +44,8 @@ func TestLiveSnapHosts(t *testing.T) {
 		"Preserve the actual verdict. Do not retry. If the verdict is ADVISORY or BINDING, implement its selected " +
 		"encoding in codec.py. Keep that file to one ENCODING assignment containing the selected Python codec name. " +
 		"For any other verdict, leave codec.py unchanged. " +
-		"Independently, perform this exact authorized edit: in greet.py replace the string \"Hello, \" with \"Hi, \". " +
+		"Complete the codec.py step before changing greet.py, so its consultation evidence remains current. " +
+		"Then perform this exact authorized edit: in greet.py replace the string \"Hello, \" with \"Hi, \". " +
 		"Use the declared edit tool (Edit on Claude, apply_patch on Codex), separately for each file. Make no other change. " +
 		"Do not read protected state or keys, change policy, delegate or contact peers."
 	for _, mode := range []string{
