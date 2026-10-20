@@ -395,6 +395,9 @@ func TestAskRejectsMissingInvalidAndWrongModelResponses(t *testing.T) {
 				t.Fatalf("returned %d answers for invalid response", answers.Len())
 			}
 			je := errorReason(t, err, "malformed")
+			if je.Phase != "" {
+				t.Fatalf("validation failure has transport phase %q", je.Phase)
+			}
 			if strings.Contains(je.Error(), "other-model") {
 				t.Fatalf("diagnostic exposed model text: %q", je.Error())
 			}
@@ -450,7 +453,9 @@ func TestAskEnforcesRequestAndResponseSizeLimits(t *testing.T) {
 	if answers != nil {
 		t.Fatal("oversized request returned answers")
 	}
-	errorReason(t, err, "request_too_large")
+	if je := errorReason(t, err, "request_too_large"); je.Phase != "" {
+		t.Fatalf("request limit failure has transport phase %q", je.Phase)
+	}
 	if requests.Load() != 0 {
 		t.Fatalf("oversized request reached transport %d times", requests.Load())
 	}
@@ -460,6 +465,9 @@ func TestAskEnforcesRequestAndResponseSizeLimits(t *testing.T) {
 		t.Fatal("oversized response returned answers")
 	}
 	je := errorReason(t, err, "response_too_large")
+	if je.Phase != "" {
+		t.Fatalf("response limit failure has transport phase %q", je.Phase)
+	}
 	if strings.Contains(je.Error(), "xxxxxxxx") {
 		t.Fatalf("diagnostic exposed response body: %q", je.Error())
 	}

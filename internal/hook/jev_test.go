@@ -21,6 +21,10 @@ func TestReviewMetricsAllowlistFailurePhaseOutsideModelInputs(t *testing.T) {
 	}{
 		{"request", "request", "unreachable", "", true},
 		{"response body", "response_body", "unreachable", "", true},
+		{"request timeout", "request", "timeout", "", true},
+		{"response body timeout", "response_body", "timeout", "", true},
+		{"request cancellation", "request", "cancelled", "", true},
+		{"response body cancellation", "response_body", "cancelled", "", true},
 		{"legacy", "", "unreachable", "", false},
 		{"unknown", "private-error-test-key-0123456789abcdef", "unreachable", "", false},
 		{"timeout", "", "timeout", "", false},
@@ -64,37 +68,39 @@ func TestReviewMetricsAllowlistFailurePhaseOutsideModelInputs(t *testing.T) {
 }
 
 func TestFailurePhaseMetricsPreserveRequiredAndAvailabilityOutcomes(t *testing.T) {
-	for _, phase := range []string{"request", "response_body"} {
-		for _, mode := range []string{"required", "availability"} {
-			t.Run(phase+"/"+mode, func(t *testing.T) {
-				dir := setUp(t)
-				if mode == "availability" {
-					availability(t, "claude")
-				}
-				path := writeJSONL(t, dir, "transcript.jsonl", []*json.Object{human("Fix the parser.")}, "")
-				payload := json.NewObject("session_id", "phase-test", "tool_use_id", "edit", "tool_name", "Edit",
-					"tool_input", json.NewObject("file_path", filepath.Join(dir, "parser.py"), "new_string", "read_chunks()"),
-					"transcript_path", path, "cwd", dir)
-				api := &jevtest.Fake{Raises: &jev.JevError{Reason: "unreachable", Phase: phase}}
-				out := handle(t, "pre_tool_use", payload, "claude", api.Post)
-				if mode == "required" {
-					assertEqual(t, decision(t, out), "deny")
-					assertContains(t, dumps(t, out), "Required review unavailable (jev unreachable)")
-				} else {
-					assertEqual(t, out, json.NewObject("systemMessage", "agent-decisions: edit check skipped (jev unreachable); action allowed"))
-				}
-				rows := gateRows(t, "phase-test", "edit")
-				if len(rows) != 1 {
-					t.Fatalf("got %d review rows, want 1", len(rows))
-				}
-				calls := at(t, rows[0], "metrics", "api_calls").([]any)
-				if len(calls) != 1 || at(t, calls[0].(*json.Object), "error_phase") != phase {
-					t.Fatalf("phase missing from review metrics: %s", dumps(t, calls))
-				}
-				if strings.Contains(dumps(t, rows[0].Value("state")), "error_phase") {
-					t.Fatal("phase entered retained decision state")
-				}
-			})
+	for _, reason := range []string{"unreachable", "timeout", "cancelled"} {
+		for _, phase := range []string{"request", "response_body"} {
+			for _, mode := range []string{"required", "availability"} {
+				t.Run(reason+"/"+phase+"/"+mode, func(t *testing.T) {
+					dir := setUp(t)
+					if mode == "availability" {
+						availability(t, "claude")
+					}
+					path := writeJSONL(t, dir, "transcript.jsonl", []*json.Object{human("Fix the parser.")}, "")
+					payload := json.NewObject("session_id", "phase-test", "tool_use_id", "edit", "tool_name", "Edit",
+						"tool_input", json.NewObject("file_path", filepath.Join(dir, "parser.py"), "new_string", "read_chunks()"),
+						"transcript_path", path, "cwd", dir)
+					api := &jevtest.Fake{Raises: &jev.JevError{Reason: reason, Phase: phase}}
+					out := handle(t, "pre_tool_use", payload, "claude", api.Post)
+					if mode == "required" {
+						assertEqual(t, decision(t, out), "deny")
+						assertContains(t, dumps(t, out), "Required review unavailable (jev "+reason+")")
+					} else {
+						assertEqual(t, out, json.NewObject("systemMessage", "agent-decisions: edit check skipped (jev "+reason+"); action allowed"))
+					}
+					rows := gateRows(t, "phase-test", "edit")
+					if len(rows) != 1 {
+						t.Fatalf("got %d review rows, want 1", len(rows))
+					}
+					calls := at(t, rows[0], "metrics", "api_calls").([]any)
+					if len(calls) != 1 || at(t, calls[0].(*json.Object), "error_phase") != phase {
+						t.Fatalf("phase missing from review metrics: %s", dumps(t, calls))
+					}
+					if strings.Contains(dumps(t, rows[0].Value("state")), "error_phase") {
+						t.Fatal("phase entered retained decision state")
+					}
+				})
+			}
 		}
 	}
 }

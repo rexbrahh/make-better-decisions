@@ -3,6 +3,7 @@ package subq
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/rexbrahh/make-better-decisions/internal/policy"
@@ -36,6 +38,112 @@ func (body *observedBody) Close() error {
 	err := body.ReadCloser.Close()
 	close(body.closed)
 	return err
+}
+
+func TestAskTransportFailurePhases(t *testing.T) {
+	for _, phase := range []string{"request", "response_body"} {
+		t.Run(phase, func(t *testing.T) {
+			wrappedNetworkReason := "timeout"
+			if phase == "request" {
+				// http.Client's url.Error checks only its immediate error for timeout status.
+				wrappedNetworkReason = "unreachable"
+			}
+			for _, failure := range []struct {
+				name, reason string
+				err          error
+			}{
+				{"unreachable", "unreachable", errors.New("fixture-key-only private transport detail")},
+				{"cancelled", "cancelled", context.Canceled},
+				{"deadline", "timeout", context.DeadlineExceeded},
+				{"network timeout", "timeout", &net.DNSError{Err: "private transport detail", IsTimeout: true}},
+				{"wrapped cancelled", "cancelled", fmt.Errorf("private transport detail: %w", context.Canceled)},
+				{"wrapped deadline", "timeout", fmt.Errorf("private transport detail: %w", context.DeadlineExceeded)},
+				{"wrapped network timeout", wrappedNetworkReason, fmt.Errorf("private transport detail: %w", &net.DNSError{IsTimeout: true})},
+				{"joined cancellation first", "cancelled", errors.Join(context.DeadlineExceeded, context.Canceled)},
+			} {
+				t.Run(failure.name, func(t *testing.T) {
+					var requests atomic.Int32
+					closed := make(chan struct{})
+					client := testClient(context.Background(), roundTripper(func(request *http.Request) (*http.Response, error) {
+						if requests.Add(1) > 1 {
+							return responseFor(request, policy.SubQModel, nil, nil)
+						}
+						if phase == "request" {
+							return nil, failure.err
+						}
+						reply := response(request, http.StatusOK, nil)
+						reply.Body = &observedBody{ReadCloser: io.NopCloser(iotest.ErrReader(failure.err)), closed: closed}
+						return reply, nil
+					}))
+					metrics := json.NewObject("returned_model", "stale-model")
+					answers, err := client.Ask(json.NewObject(), testQuestions(1), "fixture-key-only", metrics)
+					je := errorReason(t, err, failure.reason)
+					if je.Phase != phase {
+						t.Errorf("failure phase = %q, want %q", je.Phase, phase)
+					}
+					if je.Detail != "" || je.Error() != failure.reason {
+						t.Fatalf("failure exposed transport detail: %q", je.Error())
+					}
+					if answers != nil || metrics.Value("returned_model") != nil {
+						t.Fatal("failed operation returned answers or a validated model")
+					}
+					if requests.Load() != 1 || len(client.slots) != 0 {
+						t.Fatal("failed operation retried or retained a request slot")
+					}
+					if phase == "response_body" {
+						select {
+						case <-closed:
+						default:
+							t.Fatal("failed operation did not close its response body")
+						}
+					}
+					answers, err = client.Ask(json.NewObject(), testQuestions(1), "fixture-key-only", metrics)
+					if err != nil || answers == nil || answers.Len() != 1 || metrics.Value("returned_model") != policy.SubQModel {
+						t.Fatalf("independent operation did not recover: %v", err)
+					}
+					if requests.Load() != 2 || len(client.slots) != 0 {
+						t.Fatal("recovery retried or retained a request slot")
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestAskAdmissionFailuresHaveNoTransportPhase(t *testing.T) {
+	for _, mode := range []string{"cancelled", "deadline", "slots"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var requests atomic.Int32
+			client := testClient(ctx, roundTripper(func(*http.Request) (*http.Response, error) {
+				requests.Add(1)
+				return nil, errors.New("unexpected transport call")
+			}))
+			want := "timeout"
+			switch mode {
+			case "cancelled":
+				cancel()
+				want = "cancelled"
+			case "deadline":
+				deadlineCtx, deadlineCancel := context.WithDeadline(ctx, time.Now().Add(-time.Second))
+				defer deadlineCancel()
+				client.ctx = deadlineCtx
+			case "slots":
+				for range cap(client.slots) {
+					client.slots <- struct{}{}
+				}
+				client.timeout = 20 * time.Millisecond
+			}
+			answers, err := client.Ask(json.NewObject(), testQuestions(1), "fixture-key-only", nil)
+			if je := errorReason(t, err, want); je.Phase != "" {
+				t.Fatalf("admission failure has transport phase %q", je.Phase)
+			}
+			if answers != nil || requests.Load() != 0 {
+				t.Fatal("admission failure returned answers or reached transport")
+			}
+		})
+	}
 }
 
 func TestAskRejectsHTTPFailuresBeforeReadingAnswers(t *testing.T) {
@@ -71,8 +179,8 @@ func TestAskRejectsHTTPFailuresBeforeReadingAnswers(t *testing.T) {
 					t.Fatal("HTTP failure returned answers")
 				}
 				want := "http_" + strconv.Itoa(status)
-				if got := errorReason(t, err, want).Error(); got != want {
-					t.Fatalf("HTTP failure exposed response detail: %q", got)
+				if je := errorReason(t, err, want); je.Error() != want || je.Phase != "" {
+					t.Fatalf("HTTP failure exposed response detail or a transport phase: %q, %q", je.Error(), je.Phase)
 				}
 				if requests.Load() != 1 {
 					t.Fatalf("HTTP failure made %d requests, want one", requests.Load())

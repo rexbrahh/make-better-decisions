@@ -218,7 +218,7 @@ func (c *Client) requestBatch(ctx context.Context, state, questions *pyjson.Obje
 	request.Close = true
 	response, err := c.http.Do(request)
 	if err != nil {
-		result.err = transportFailure(err)
+		result.err = transportFailure(err, "request")
 		return result
 	}
 	defer response.Body.Close()
@@ -228,7 +228,7 @@ func (c *Client) requestBatch(ctx context.Context, state, questions *pyjson.Obje
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
 	if err != nil {
-		result.err = transportFailure(err)
+		result.err = transportFailure(err, "response_body")
 		return result
 	}
 	if len(raw) > maxResponseBytes {
@@ -269,18 +269,19 @@ func contextFailure(err error) error {
 	return &jev.JevError{Reason: "unreachable"}
 }
 
-func transportFailure(err error) error {
+func transportFailure(err error, phase string) error {
+	reason := "unreachable"
 	if errors.Is(err, context.Canceled) {
-		return &jev.JevError{Reason: "cancelled"}
+		reason = "cancelled"
+	} else if errors.Is(err, context.DeadlineExceeded) {
+		reason = "timeout"
+	} else {
+		var networkError net.Error
+		if errors.As(err, &networkError) && networkError.Timeout() {
+			reason = "timeout"
+		}
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return &jev.JevError{Reason: "timeout"}
-	}
-	var networkError net.Error
-	if errors.As(err, &networkError) && networkError.Timeout() {
-		return &jev.JevError{Reason: "timeout"}
-	}
-	return &jev.JevError{Reason: "unreachable"}
+	return &jev.JevError{Reason: reason, Phase: phase}
 }
 
 func mergeMetrics(metrics *pyjson.Object, results []batchResult, batchCount int, elapsed time.Duration) error {
