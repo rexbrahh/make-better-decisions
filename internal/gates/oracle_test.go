@@ -64,7 +64,13 @@ def at_frame(frame, call):
 
 def shown(result):
     if isinstance(result, gates.Outcome):
-        return [result.action, result.message, result.record, result.note]
+        message = result.message
+        # Only the scope diagnostic adds the existing per-string limit in Go.
+        for field in ("paths", "invariants"):
+            old = f"ts-decide: invalid request: scope.{field} must contain at most 32 non-empty strings"
+            if result.action == "invalid" and message == old + "\n" + gates.USAGE:
+                message = old + " of at most 500 characters each\n" + gates.USAGE
+        return [result.action, message, result.record, result.note]
     return result
 
 def context(spec):

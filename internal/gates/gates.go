@@ -270,7 +270,7 @@ func RequestScope(raw string) (*json.Object, error) {
 			valid = valid && ok && text != "" && pystr.Len(text) <= 500
 		}
 		if !valid {
-			return nil, requestError("scope.%s must contain at most 32 non-empty strings", field)
+			return nil, requestError("scope.%s must contain at most 32 non-empty strings of at most 500 characters each", field)
 		}
 	}
 	for _, value := range e.get(scope, "paths", []any{}).([]any) {

@@ -686,6 +686,41 @@ func TestRequestPaddingIsRejectedBeforeTheApi(t *testing.T) {
 	}
 }
 
+func TestScopeStringLimitReportsCharacterLimit(t *testing.T) {
+	setUp(t)
+	for _, field := range []string{"paths", "invariants"} {
+		for _, character := range []string{"x", "é"} {
+			t.Run(field+"/"+character, func(t *testing.T) {
+				for _, length := range []int{500, 501} {
+					scope := json.NewObject(field, []any{strings.Repeat(character, length)})
+					request := withField(obj(t, progressRequest), "scope", scope)
+					got, err := RequestScope(dumps(t, request))
+					if length == 500 {
+						if err != nil {
+							t.Fatal(err)
+						}
+						assertEqual(t, got, scope)
+						continue
+					}
+					want := "scope." + field + " must contain at most 32 non-empty strings of at most 500 characters each"
+					if err == nil || err.Error() != want {
+						t.Fatalf("got %v, want %q", err, want)
+					}
+					api := fake(nil)
+					outcome := decide(t, request, makeCtx(t, ctxOptions{}), asker(api))
+					assertAction(t, outcome, "invalid")
+					if outcome.Message != "ts-decide: invalid request: "+want+"\n"+Usage {
+						t.Fatalf("got %q", outcome.Message)
+					}
+					if len(api.Requests()) != 0 {
+						t.Fatal("the API was called")
+					}
+				}
+			})
+		}
+	}
+}
+
 // py: tests/test_adversarial.py::test_long_final_cannot_hide_a_choice_in_the_omitted_middle
 func TestLongFinalCannotHideAChoiceInTheOmittedMiddle(t *testing.T) {
 	setUp(t)
